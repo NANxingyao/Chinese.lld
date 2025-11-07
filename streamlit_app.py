@@ -1,4 +1,24 @@
 import streamlit as st
+
+st.set_page_config(
+    page_title="汉语词类隶属度检测",
+    page_icon="🈷️",
+    layout="centered",
+    initial_sidebar_state="collapsed",
+    menu_items=None  # 这里可以隐藏默认菜单
+)
+
+hide_streamlit_style = """
+<style>
+/* 隐藏顶部菜单栏（Share / GitHub 等） */
+header {visibility: hidden;}
+/* 隐藏右下角“Manage app” */
+footer {visibility: hidden;}
+</style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
+import streamlit as st
 import requests
 import json
 import re
