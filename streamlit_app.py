@@ -1,5 +1,32 @@
 import streamlit as st
 
+# 页面设置
+st.set_page_config(
+    page_title="汉语词类隶属度检测判类",
+    page_icon="🈷️",
+    layout="centered",
+    initial_sidebar_state="collapsed",
+)
+
+# 隐藏顶部的 Share / GitHub / 编辑按钮 + 底部的 Manage app
+hide_streamlit_style = """
+<style>
+/* 隐藏顶部 Streamlit 菜单栏（含“Share”、“⋯”菜单、“GitHub”图标） */
+header {visibility: hidden;}
+
+/* 隐藏右下角 Streamlit Cloud 管理按钮（Manage app） */
+footer {visibility: hidden;}
+
+/* 有时 Streamlit Cloud 会用 iframe 加载管理按钮，可以一并隐藏 */
+[data-testid="stStatusWidget"] {display: none !important;}
+button[title="View app in Streamlit Community Cloud"] {display: none !important;}
+a[href*="streamlit.io/cloud"] {display: none !important;}
+</style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
+import streamlit as st
+
 st.set_page_config(
     page_title="汉语词类隶属度检测",
     page_icon="📰",
