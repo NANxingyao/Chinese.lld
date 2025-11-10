@@ -32,9 +32,9 @@ from typing import Tuple, Dict, Any
 # ===============================
 # 配置
 # ===============================
-API_KEY = "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"
-BASE_URL = "https://api.openai.com/v1"
-MODEL_NAME = "gpt-4o"  # 可换成 "gpt-5" 或 "gpt-4-turbo"
+API_KEY = "9720beea6bff408ea6c26cd5d9ecf3b8.cRNTQiKRNaTieIiz"
+BASE_URL = "https://chatglm.cn/main/alltoolsdetail?lang=zh"
+MODEL_NAME = "zhipu"  
 RULE_SETS = {
     
 }
