@@ -32,13 +32,13 @@ from typing import Tuple, Dict, Any
 # ===============================
 # 配置
 # ===============================
-API_KEY = "sk-1f346646d29947d0a5e29dbaa37476b8"
-BASE_URL = "https://api.deepseek.com"
-MODEL_NAME = "deepseek-chat"
-
+API_KEY = "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"
+BASE_URL = "https://api.openai.com/v1"
+MODEL_NAME = "gpt-4o"  # 可换成 "gpt-5" 或 "gpt-4-turbo"
 RULE_SETS = {
     
 }
+
 
 
 if not RULE_SETS:
