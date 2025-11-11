@@ -32,9 +32,9 @@ from typing import Tuple, Dict, Any
 # ===============================
 # 配置
 # ===============================
-API_KEY = "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"
-BASE_URL = "https://openai.com/"
-MODEL_NAME = "chatgpt"
+API_KEY = "sk-1f346646d29947d0a5e29dbaa37476b8"
+BASE_URL = "https://api.deepseek.com"
+MODEL_NAME = "deepseek-chat"
 RULE_SETS = {
     
 }
