@@ -368,119 +368,7 @@ def query_deepseek(prompt: str) -> str:
     except:
         return "{}"
 
-# ===============================
-# 向心度计算函数（学术版）
-# ===============================
-def compute_centripetal_degree_rigorous(df: pd.DataFrame, return_all_centers: bool = False):
-    """
-    学术化的向心度计算（严格版）
-    """
-    df_work = df.copy()
-    numeric_cols = df_work.select_dtypes(include=[np.number]).columns.tolist()
-    if len(numeric_cols) == 0:
-        raise ValueError("DataFrame 中无数值列。")
-    df_num = df_work[numeric_cols].astype(float)
 
-    max_role = df_num.idxmax(axis=1)
-    max_value = df_num.max(axis=1)
-    df_work['max_role'] = max_role
-    df_work['max_value'] = max_value
-
-    global_max = df_work['max_value'].max()
-    center_chars = df_work.index[df_work['max_value'] == global_max].tolist()
-
-    if not center_chars:
-        raise RuntimeError("未能确定中心字。")
-    if return_all_centers:
-        chosen_centers = center_chars
-    else:
-        chosen_centers = [center_chars[0]]
-
-    center_char = chosen_centers[0]
-    center_value = df_work.at[center_char, 'max_value']
-    center_role = df_work.at[center_char, 'max_role']
-
-    series_role = df_num[center_role]
-    n_total = len(series_role)
-    series_others = series_role.drop(index=center_char)
-    n_others = len(series_others)
-
-    notes = ""
-    if n_others >= 1:
-        mean_others = series_others.mean()
-        sd_others = series_others.std(ddof=1) if n_others > 1 else 0.0
-    else:
-        mean_others = float('nan')
-        sd_others = float('nan')
-
-    if (mean_others == 0) or np.isnan(mean_others):
-        ratio = None
-        notes += "其他字均值为0或不可用，Ratio 无法计算。"
-    else:
-        ratio = float(center_value / mean_others)
-
-    if sd_others == 0 or np.isnan(sd_others):
-        cohen_d = None
-        notes += " 其他字标准差为0，Cohen's d 无定义。"
-    else:
-        cohen_d = float((center_value - mean_others) / sd_others)
-
-    t_stat = None
-    p_value = None
-    if n_others >= 2 and not np.isnan(sd_others) and sd_others > 0:
-        denom = sd_others / np.sqrt(n_others)
-        t_stat = float((center_value - mean_others) / denom)
-        dfree = n_others - 1
-        try:
-            from scipy import stats
-            p_value = float(stats.t.sf(np.abs(t_stat), df=dfree) * 2)
-        except Exception:
-            p_value = None
-            notes += " 无法计算 p 值（scipy.stats 不可用）。"
-    else:
-        notes += " n_others < 2，t 检验无法进行。"
-
-    structure_judgement = "离心结构"
-    if ratio is not None and ratio > 1:
-        if cohen_d is None:
-            structure_judgement = "向心结构（但效应量不可估）"
-        else:
-            if cohen_d >= 0.5:
-                structure_judgement = "向心结构（中等或以上效应）"
-            elif cohen_d >= 0.2:
-                structure_judgement = "向心结构（小效应）"
-            else:
-                structure_judgement = "向心结构（效应极小）"
-
-    result = {
-        "结构判读": structure_judgement,
-        "中心字": chosen_centers if return_all_centers else chosen_centers[0],
-        "中心词类": center_role,
-        "中心值": float(center_value),
-        "Ratio": ratio,
-        "Cohen_d": cohen_d,
-        "t值": t_stat,
-        "p值": p_value,
-        "显著性": significance_label(p_value),
-        "样本量": n_total,
-        "备注": notes.strip()
-    }
-    return result
-
-
-def significance_label(p):
-    """返回显著性标注符号"""
-    if p is None or np.isnan(p):
-        return ""
-    if p < 0.001:
-        return "***"
-    elif p < 0.01:
-        return "**"
-    elif p < 0.05:
-        return "*"
-    else:
-        return "n.s."
-    
 # ===============================
 # 主分析函数：整合隶属度 + 结构
 # ===============================
@@ -651,42 +539,6 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str = "词�
     st.plotly_chart(fig, use_container_width=True)
 
 # ===============================
-# 雷达图可视化（高亮中心字 + 显示向心度）
-# ===============================
-def plot_radar(df: pd.DataFrame, struct_info: dict, word: str):
-    categories = list(df.columns[:-2]) if 'max_role' in df.columns else list(df.columns)
-    fig = go.Figure()
-
-    center_char = struct_info.get("中心字", "")
-    centripetal_degree = struct_info.get("向心度", 0)
-    structure_type = struct_info.get("结构", "未知")
-
-    for idx, row in df.iterrows():
-        values = [float(v) for v in row[categories]]
-        values += [values[0]]
-        theta = categories + [categories[0]]
-
-        # 高亮中心字
-        color = 'red' if idx == center_char else None
-        line_width = 3 if idx == center_char else 1
-        fill_mode = 'toself' if idx == center_char else 'none'
-
-        fig.add_trace(go.Scatterpolar(
-            r=values,
-            theta=theta,
-            fill=fill_mode,
-            name=f"{idx}（中心）" if idx == center_char else idx,
-            line=dict(width=line_width, color=color)
-        ))
-
-    fig.update_layout(
-        title=f"『{word}』字本位隶属度雷达图｜{structure_type}｜向心度={centripetal_degree}",
-        polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
-        showlegend=True
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    
-# ===============================
 # Streamlit UI（简洁居中输入 + 结果 + 折叠详细）
 # ===============================
 st.set_page_config(page_title="汉语词类隶属度检测判类", layout="wide")
@@ -748,25 +600,7 @@ if confirm:
             norm = round(max(0, total) / max_possible, 3) if max_possible != 0 else 0.0
             pos_normed[pos] = norm
 
-        # -------------------------------
-        # 新增部分：中心字与向心度计算
-        # -------------------------------
-        head_word = detect_head_word(word, pos_normed)
-        head_pos = max(pos_normed, key=pos_normed.get)
-        structure_type = determine_structure_type(head_pos, pos_normed)
-        centripetal_degree = compute_centripetal_degree(pos_normed, head_pos)
-
-        # 输出摘要
-        st.markdown("---")
-        st.subheader("判定摘要")
-        st.markdown(f"- **输入词**： `{word}`")
-        st.markdown(f"- **模型预测词类**： **{predicted_pos}**")
-        st.markdown(f"- **中心字（Head Word）**： `{head_word}`")
-        st.markdown(f"- **中心词类（Head POS）**： `{head_pos}`")
-        st.markdown(f"- **结构类型**： {structure_type}")
-        st.markdown(f"- **向心度（Centripetal Degree）**： {centripetal_degree} %")
-        st.markdown(f"- **解析摘要（模型原始响应）**： `{raw_out}`")
-
+   
         # 排名与表格
         ranked = sorted(pos_normed.items(), key=lambda x: x[1], reverse=True)
         st.subheader("隶属度排行（前10）")
