@@ -32,9 +32,9 @@ from typing import Tuple, Dict, Any
 # ===============================
 # 配置
 # ===============================
-API_KEY = "WmpRMlptTmxNRGM0TjJNMk5HUTBOR0ZtWVRsbU56TTNNakUyT0RVNU1EUQ=="
-BASE_URL = "https://www.doubao.com/"
-MODEL_NAME = "doubao"
+API_KEY = "sk-1f346646d29947d0a5e29dbaa37476b8"
+BASE_URL = "https://api.deepseek.com"
+MODEL_NAME = "deepseek-chat"
 RULE_SETS = {
     
 }
@@ -253,7 +253,7 @@ MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in R
 # ===============================
 # DeepSeek 调用函数（保留原实现）
 # ===============================
-def call_doubao_chat(messages: list, model: str = MODEL_NAME, max_tokens: int = 1024,
+def call_deepseek_chat(messages: list, model: str = MODEL_NAME, max_tokens: int = 1024,
                        temperature: float = 0.0, timeout: int = 30, **kwargs) -> Tuple[bool, dict]:
     url = BASE_URL.rstrip("/") + "/chat/completions"
     headers = {
