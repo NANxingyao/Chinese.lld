@@ -368,29 +368,6 @@ def query_deepseek(prompt: str) -> str:
     except:
         return "{}"
 
-
-# ===============================
-# 主分析函数：整合隶属度 + 结构
-# ===============================
-def analyze_structure(word: str):
-    chars = list(word)
-    results = []
-
-    for ch in chars:
-        prompt = f"请判断单字「{ch}」在现代汉语中的词类潜势，输出JSON，如{{'名词':0.5,'动词':0.1,'形容词':0.3}}。"
-        response = query_deepseek(prompt)
-        try:
-            data = json.loads(re.findall(r"\{.*\}", response)[0])
-        except:
-            data = {"名词": 0, "动词": 0, "形容词": 0, "副词": 0, "助词": 0}
-        results.append(data)
-
-    df = pd.DataFrame(results, index=chars).fillna(0)
-    df.index.name = "字"
-
-    # 自动计算结构信息
-    struct_info = compute_centripetal_degree(df)
-    return df, struct_info
     
 # ===============================
 # 本地启发式兜底（简化/可扩展）
@@ -552,32 +529,6 @@ c1, c2, c3 = st.columns([1, 2, 1])
 with c2:
     word_input = st.text_input("", placeholder="在此输入要分析的词（例如：很 / 跑 / 美丽）")
     confirm = st.button("确认")
-
-# -------------------------------
-# 辅助函数（中心字与向心度）
-# -------------------------------
-def detect_head_word(word: str, pos_scores: Dict[str, float]) -> str:
-    if len(word) == 1:
-        return word
-    head_pos = max(pos_scores, key=pos_scores.get)
-    if head_pos in ["名词", "动词"]:
-        return word[0]
-    elif head_pos in ["形容词", "副词"]:
-        return word[-1]
-    else:
-        return word[len(word)//2]
-
-def determine_structure_type(head_pos: str, pos_scores: Dict[str, float]) -> str:
-    total = sum(pos_scores.values()) or 1
-    if head_pos in ["名词", "动词"] and pos_scores[head_pos] > 0.5 * total:
-        return "向心结构"
-    else:
-        return "离心结构"
-
-def compute_centripetal_degree(scores: Dict[str, float], head_pos: str) -> float:
-    total = sum(scores.values()) or 1
-    head_score = scores.get(head_pos, 0)
-    return round((head_score / total) * 100, 2)
 
 # -------------------------------
 # 主逻辑
