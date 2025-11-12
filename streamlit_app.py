@@ -685,6 +685,51 @@ def plot_radar(df: pd.DataFrame, struct_info: dict, word: str):
         showlegend=True
     )
     st.plotly_chart(fig, use_container_width=True)
+    
+# ===============================
+# 参考资料
+# ===============================
+import fitz  # PyMuPDF，用来提取 PDF 文本
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.vectorstores import FAISS
+
+# 上传 “汉语词类划分手册” 的 PDF
+uploaded_ref = st.file_uploader("📘 上传参考书 ‘汉语词类划分手册’ PDF", type=["pdf"])
+reference_text = ""
+db = None
+
+if uploaded_ref is not None:
+    with st.spinner("正在提取参考书文本…"):
+        with fitz.open(stream=uploaded_ref.read(), filetype="pdf") as pdf:
+            pages = [p.get_text() for p in pdf]
+        reference_text = "\n".join(pages)
+    st.success(f"提取完毕，文本长度 {len(reference_text)} 字符")
+
+    # 拆分文本
+    splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    chunks = splitter.split_text(reference_text)
+
+    # 创建 embedding 数据库
+    embeddings = OpenAIEmbeddings(api_key=API_KEY)
+    db = FAISS.from_texts(chunks, embeddings)
+    st.info("已构建参考书知识库。")
+
+# 使用参考资料回答问题
+if db is not None:
+    query = st.text_input("请输入你基于参考书要提问的问题：")
+    if query:
+        docs = db.similarity_search(query, k=3)
+        context = "\n".join([d.page_content for d in docs])
+        prompt = f"参考书内容：\n{context}\n\n问题：{query}\n请结合参考书内容严谨回答。"
+        ok, resp = call_deepseek_chat([{"role":"user","content":prompt}], temperature=0.0)
+        if ok:
+            answer = extract_text_from_response(resp)
+            st.subheader("回答")
+            st.write(answer)
+        else:
+            st.error("调用模型失败：%s" % resp.get("error"))
+
 
 
 # ===============================
