@@ -32,9 +32,9 @@ from typing import Tuple, Dict, Any
 # ===============================
 # 配置
 # ===============================
-API_KEY = "sk-1f346646d29947d0a5e29dbaa37476b8"
-BASE_URL = "https://api.deepseek.com"
-MODEL_NAME = "deepseek-chat"
+API_KEY = "222afa3f-5f27-403e-bf46-ced2a356ceee"
+BASE_URL = "https://www.doubao.com/"
+MODEL_NAME = "doubao"
 RULE_SETS = {
     
 }
