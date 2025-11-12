@@ -40,7 +40,6 @@ RULE_SETS = {
 }
 
 
-
 if not RULE_SETS:
     RULE_SETS = {
     # 1.1 名词
@@ -359,16 +358,6 @@ def map_to_allowed_score(rule: dict, raw_val) -> int:
         return mismatch if mismatch != 0 else 0
     return mismatch if mismatch != 0 else 0
 
-def query_deepseek(prompt: str) -> str:
-    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
-    payload = {"model": MODEL_NAME, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2}
-    resp = requests.post(f"{BASE_URL}/v1/chat/completions", headers=headers, data=json.dumps(payload))
-    try:
-        return resp.json()['choices'][0]['message']['content']
-    except:
-        return "{}"
-
-    
 # ===============================
 # 本地启发式兜底（简化/可扩展）
 # ===============================
@@ -419,7 +408,7 @@ def ask_model_for_pos_and_scores(word: str, max_retries: int = 1) -> Tuple[Dict[
     rules_text = "\n".join(rules_summary_lines)
 
     system_msg = (
-        "你是语言学研究专家。输入一个中文词语，检索定义好的所有规则，请你分析判断该词最可能的词类，同时判断该词的词汇结构，确定是向心结构还是离心结构，根据定义好的规则计算该词的隶属度分值，同时计算该词的向心度，要确保分析的学术严谨性，科学性，计算值的准确性："
+        "你是语言学研究助手。输入一个中文词语，请你判断该词最可能的词类（用以下词类集合中的一个："
         + ", ".join(list(RULE_SETS.keys()))
         + ")，并严格返回 JSON。"
         " JSON 格式必须为："
@@ -524,15 +513,13 @@ st.markdown("<h1 style='text-align: center;'>汉语词类隶属度检测判类</
 st.markdown("<p style='text-align: center; color: grey;'>输入单个词 → 模型自动判类并返回各词类规则得分与隶属度（标准化 0~1）</p>", unsafe_allow_html=True)
 st.write("")
 
-# 居中输入框
+# 居中输入框（通过 columns 调整）
 c1, c2, c3 = st.columns([1, 2, 1])
 with c2:
     word_input = st.text_input("", placeholder="在此输入要分析的词（例如：很 / 跑 / 美丽）")
     confirm = st.button("确认")
 
-# -------------------------------
-# 主逻辑
-# -------------------------------
+# 当按下确认时，进行模型调用与展示
 if confirm:
     word = (word_input or "").strip()
     if not word:
@@ -541,35 +528,42 @@ if confirm:
         with st.spinner("模型打分判类中……"):
             scores_all, raw_out, predicted_pos = ask_model_for_pos_and_scores(word)
 
-        # 计算各词类隶属度
+        # 计算每个词类总分与归一化隶属度（0~1）
         pos_totals = {}
         pos_normed = {}
         for pos, score_map in scores_all.items():
             total = sum(score_map.values())
             pos_totals[pos] = total
             max_possible = MAX_SCORES.get(pos, sum(abs(x) for x in score_map.values()) or 1)
+            # 归一化（0~1），用 max(0,total)/max_possible 避免负值
             norm = round(max(0, total) / max_possible, 3) if max_possible != 0 else 0.0
             pos_normed[pos] = norm
 
-   
-        # 排名与表格
+        # 输出顶部摘要
+        st.markdown("---")
+        st.subheader("判定摘要")
+        st.markdown(f"- **输入词**： `{word}`")
+        st.markdown(f"- **模型预测词类**： **{predicted_pos}**")
+        st.markdown(f"- **解析策略 / 原始响应摘要**： `{raw_out}`")
+
+        # 排名与表格（只显示前 10）
         ranked = sorted(pos_normed.items(), key=lambda x: x[1], reverse=True)
         st.subheader("隶属度排行（前10）")
         for i, (p, s) in enumerate(ranked[:10]):
             st.write(f"{i+1}. **{p}** — 隶属度：{s}")
 
-        # 雷达图
-        st.subheader("词类隶属度与向心度雷达图（标准化 0~1）")
+        # 雷达图（全量显示当前 RULE_SETS 中的词类）
+        st.subheader("词类隶属度雷达图（标准化 0~1）")
+        # 为了图示美观，将 pos_normed 的顺序固定为字典顺序或按得分排序——这里按得分排序
         radar_scores = {p: pos_normed[p] for p, _ in ranked}
         plot_radar_chart_streamlit(radar_scores, title=f"“{word}” 的词类隶属度分布")
-        st.markdown(f"**注：** 雷达图中各维度为词类隶属度，圆心外圈代表向心度（{centripetal_degree}%）")
 
-        # 表格
+        # 显示归一化表格
         st.subheader("各词类隶属度（标准化 0~1）")
         df_norm = pd.DataFrame([{"词类": p, "隶属度": pos_normed[p]} for p in pos_normed]).set_index("词类")
         st.dataframe(df_norm, use_container_width=True)
 
-        # 折叠详细规则判断
+        # 折叠详细规则判断（默认收起）
         with st.expander("展开：查看各词类的规则明细与得分（详细）"):
             for pos, rules in RULE_SETS.items():
                 st.markdown(f"**{pos}**（隶属度：{pos_normed.get(pos, 0)}）")
@@ -586,7 +580,8 @@ if confirm:
                     st.write("（该词类当前无规则条目）")
                 st.markdown("---")
 
-        # 原始响应
+        # 可选：显示原始模型输出
         with st.expander("查看原始模型文本 / 响应"):
             st.code(raw_out if raw_out else "(无)")
+
 
