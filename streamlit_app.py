@@ -253,7 +253,7 @@ MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in R
 # ===============================
 # DeepSeek 调用函数（保留原实现）
 # ===============================
-def call_deepseek_chat(messages: list, model: str = MODEL_NAME, max_tokens: int = 1024,
+def call_doubao_chat(messages: list, model: str = MODEL_NAME, max_tokens: int = 1024,
                        temperature: float = 0.0, timeout: int = 30, **kwargs) -> Tuple[bool, dict]:
     url = BASE_URL.rstrip("/") + "/chat/completions"
     headers = {
