@@ -32,13 +32,21 @@ from typing import Tuple, Dict, Any
 # ===============================
 # 配置
 # ===============================
-API_KEY = "sk-1f346646d29947d0a5e29dbaa37476b8"
-BASE_URL = "https://api.deepseek.com"
-MODEL_NAME = "deepseek-chat"
-RULE_SETS = {
-    
+{
+  "ResponseMetadata": {
+    "RequestId": "20251112180917B3D271B39909440C4B9B",
+    "Action": "CreateKeyPair",
+    "Version": "2020-04-01",
+    "Service": "ecs",
+    "Region": "cn-beijing"
+  },
+  "Result": {
+    "KeyPairName": "Chineselsd",
+    "PrivateKey": "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEAr6+BcB+wKr9jfxiq/MnGuJQfbML2DmwXPgDEywrKcmM8gsXM\nkyzm1sBP2u6bzPylLJTX3IBCWbXjVKVxAsn3CW/ARcRAIlbp/GzIc+azaZ2W2Y3W\nVn7RdJ2JObWJ99zIzP/bhQvzSm4bI0Z9+XCDm1M7UW0BKs0dbZJzhnd8AN9wetKH\nQb3LxJ5y/VDpyNfipZwRbaRu3FUYqUqCxvTqgd28O3JjuGuBn9/ZIqRj/u5G9286\nty8acZI+cQQOlM2Ybti6B69Pw/Gx0vqJVK/wJOEJFyj20uOxRIjxhc3NwCn41c9W\nh3Z6DpFN90JMG/+xpHHqFDElRw/NfHuhrR1YBQIDAQABAoIBAEnlen5c9c6lPgaB\nq7o0bP/KXgVzY+fhE02jKSN2YH0IvLUM2eW150rBDVW7M5FfW2KLINjAoif1168M\n/6H6rYwskyVFTOykvjrMzuvhR+nOvVq4zEUJhrSUZtn9QBEfrt57aCxoQGc4NPX7\nepVm/BRjR/oR7YHBUPV7ulf+/gunPPRF9vPbvxctODhTQBw9V7ATHbeTfoiEsXAf\nkNTbn5YerrbPT2AtYE5U98hu3r5OrOz7Hqlp0tpRJxafAcOWAUW7JiF6tTua2Omh\nTvX0FvhTjMFeCWs7yk5pSx8xcmP8Hgwnd7TT9yPk5QqUEIVPbQl0N6LgWoLpOaOH\nXlXES4ECgYEA6guLSOrEVISDfw8yNyl5aIYwC9ibqyqdeBuvzv3Y0vGPvZqdGOdX\nsvDzhopL0NY1Q7iCMTGY56nTPq2ieqqfsKpWKOQ4RHwzYGqPogzvP987CxJYDcPU\n9baz73bIORHz4yS9QZOSk8ANl1rVZg5gP5ayj6LMtmRoUZ0sVYNgx1ECgYEAwCp9\n4CxXcH/nGdfWJSuynbvXZdL8Cl3dWb4zvWvdsv1wz/nf86fRg4ADUNFOICPvpQ/v\nLS2eG7XllPxTsyGpK56ULQ7gryI5WEHR0HXOM5onSqnfUPKg8sWAOU+FzFnToDFJ\n6leT7AdXEn/i1LFUwgFBHfBEyhaubOBb7ceuQHUCgYEA1jqC39ekpgg1pRPvzvYz\nny1UxUMcGm0DfnE5V6qb0VozTEY+DhGUAML05e2owBuS3c4Bva28XDDin7inxMhx\nK3B/NSbRKj7VeCeSGa7lP/3BOb0sxEzAnbkCsupzE2oPZ5a1dVTzEjL1PdlzA9uc\n1hfGkhteboUxx6KqdguvhkECgYEAgjEHoQZJo1V0TAT396z4UXc/AqSDz74yRiff\nw/i9dhPRB4aiHODYyH/FP07e4FWYebsm7vPWB64fweWGC3nFtGC2wSQwQ1crhMjr\nDpGRx1IsRqB6RMxtEK2QJsPiwUUmZISgMF1vQVzjuAvesP0HkHzrEg6DfGsLd4Y1\nog5D1zUCgYBtf9S3PMhxqNVvHwTBz2IERH9zbYkOHpUzEfRGCwZ5wn2gtWTOUsVP\nEnH1kNn9/R5lrd2lVG3myrddO3pkN5PdFxB1ZUD0LA1TZaSlPTAlqKEhiCjzkc6m\ngrIANeLUudz9GLBWWw+YmX9nE31p9+5fUFvQ/juE8HTpI0vw9P3Olw==\n-----END RSA PRIVATE KEY-----\n",
+    "FingerPrint": "ae4ac33041f1fa793b5e9dab76a9c5ab",
+    "KeyPairId": "kp-ye8yf0v43c38dejmxr8k"
+  }
 }
-
 
 if not RULE_SETS:
     RULE_SETS = {
