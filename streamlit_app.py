@@ -32,7 +32,7 @@ from typing import Tuple, Dict, Any
 # ===============================
 # 配置
 # ===============================
-API_KEY = "222afa3f-5f27-403e-bf46-ced2a356ceee"
+API_KEY = "WmpRMlptTmxNRGM0TjJNMk5HUTBOR0ZtWVRsbU56TTNNakUyT0RVNU1EUQ=="
 BASE_URL = "https://www.doubao.com/"
 MODEL_NAME = "doubao"
 RULE_SETS = {
