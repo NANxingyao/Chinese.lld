@@ -630,7 +630,12 @@ if confirm:
         st.warning("请输入一个词语后确认。")
     else:
         with st.spinner("模型打分判类中……"):
-            scores_all, raw_out, predicted_pos = ask_model_for_pos_and_scores(word)
+          provider = "openai"         # 或你在 MODEL_CONFIGS 中定义的提供商
+model = "gpt-3.5-turbo"     # 你使用的模型名
+api_key = st.secrets["OPENAI_API_KEY"]  # 或你的 api_key
+
+scores_all, raw_out, predicted_pos = ask_model_for_pos_and_scores(word, provider, model, api_key)
+
         # 计算每个词类总分与归一化隶属度（0~1）
         pos_totals = {}
         pos_normed = {}
