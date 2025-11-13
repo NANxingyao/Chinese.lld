@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from typing import Tuple, Dict, Any
-st.set_page_config(page_title="汉语词类隶属度检测判类", layout="wide")
 
 # ===============================
 # 模型与 API Key 配置区
@@ -542,6 +541,8 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
 # ===============================
 
 # ======== 模型选择部分（侧边栏） ========
+# 初始化页面配置（必须在最前）
+st.set_page_config(page_title="汉语词类隶属度检测判类", layout="wide")
 st.sidebar.header("模型配置")
 MODEL_OPTIONS = {
     "DeepSeek Chat": {
@@ -570,14 +571,19 @@ st.sidebar.markdown(f"**API 地址：** `{selected_model['api_url']}`")
 st.sidebar.markdown("⚙️ 请在系统环境变量中设置对应的 API Key：")
 st.sidebar.code(selected_model["api_key_name"], language="bash")
 
+# 获取环境变量 API Key
 API_URL = selected_model["api_url"]
 API_KEY_ENV_NAME = selected_model["api_key_name"]
 API_KEY = os.getenv(API_KEY_ENV_NAME, "")
+
 if not API_KEY:
     st.sidebar.warning(f"未检测到 {API_KEY_ENV_NAME}，请在系统环境变量中设置对应 Key。")
 
 # ======== 主体部分 ========
-# 居中输入框
+st.markdown("<h1 style='text-align: center;'>汉语词类隶属度检测判类</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: grey;'>输入单个词 → 模型自动判类并返回各词类规则得分与隶属度（标准化 0~1）</p>", unsafe_allow_html=True)
+st.write("")
+
 c1, c2, c3 = st.columns([1, 2, 1])
 with c2:
     word_input = st.text_input("", placeholder="在此输入要分析的词（例如：很 / 跑 / 美丽）")
