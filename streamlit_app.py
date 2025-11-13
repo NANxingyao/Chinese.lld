@@ -532,7 +532,7 @@ if not API_KEY or API_KEY in ["", "sk-your-moonshot-key"]:
     """)
 
 # ======== 主体部分 ========
-st.markdown("<h1 style='text-align: center;'>汉语词类隶属度检测判类</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center;'>📊汉语词类隶属度检测判类</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center; color: grey;'>输入单个词 → 模型自动判类并返回各词类规则得分与隶属度（标准化 0~1）</p>", unsafe_allow_html=True)
 st.write("")
 
