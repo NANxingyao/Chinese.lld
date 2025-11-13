@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from typing import Tuple, Dict, Any
+st.set_page_config(page_title="汉语词类隶属度检测判类", layout="wide")
 
 # ===============================
 # 模型与 API Key 配置区
@@ -538,7 +539,6 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
 # ===============================
 # Streamlit UI（简洁居中输入 + 模型选择 + 结果）
 # ===============================
-st.set_page_config(page_title="汉语词类隶属度检测判类", layout="wide")
 
 # ======== 模型选择部分（侧边栏） ========
 st.sidebar.header("模型配置")
@@ -566,14 +566,11 @@ selected_model = MODEL_OPTIONS[model_choice]
 
 st.sidebar.markdown(f"**当前模型：** {model_choice}")
 st.sidebar.markdown(f"**API 地址：** `{selected_model['api_url']}`")
-st.sidebar.markdown("⚙️ 请在你的系统环境变量中设置对应的 API Key：")
+st.sidebar.markdown("⚙️ 请在系统环境变量中设置对应的 API Key：")
 st.sidebar.code(selected_model["api_key_name"], language="bash")
 
-# 将所选模型配置赋给全局变量
 API_URL = selected_model["api_url"]
 API_KEY_ENV_NAME = selected_model["api_key_name"]
-
-import os
 API_KEY = os.getenv(API_KEY_ENV_NAME, "")
 if not API_KEY:
     st.sidebar.warning(f"未检测到 {API_KEY_ENV_NAME}，请在系统环境变量中设置对应 Key。")
