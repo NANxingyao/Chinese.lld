@@ -153,40 +153,6 @@ MODEL_CONFIGS = {
     }
 }
 
-
-# ===============================
-# 通用 LLM 调用函数
-# ===============================
-def call_llm_api(messages: list,
-                 provider: str,
-                 model: str,
-                 api_key: str,
-                 max_tokens: int = 1024,
-                 temperature: float = 0.0,
-                 timeout: int = 30,
-                 **kwargs) -> Tuple[bool, dict]:
-
-    if provider not in MODEL_CONFIGS:
-        return False, {"error": f"未知的模型提供商: {provider}"}
-
-    cfg = MODEL_CONFIGS[provider]
-    url = cfg["base_url"].rstrip("/") + cfg["endpoint"]
-    headers = cfg["headers"](api_key)
-    payload = cfg["payload"](model, messages, max_tokens=max_tokens, temperature=temperature, **kwargs)
-
-    try:
-        r = requests.post(url, headers=headers, json=payload, timeout=timeout)
-        r.raise_for_status()
-        return True, r.json()
-    except Exception as e:
-        text = ""
-        try:
-            text = r.text
-        except:
-            pass
-        return False, {"error": str(e), "resp_text": text}
-
-
 # ===============================
 # 规则定义（此处示例，可自行扩展）
 # ===============================
