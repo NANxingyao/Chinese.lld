@@ -348,6 +348,95 @@ def call_llm_api(messages: list, provider: str, model: str, api_key: str,
         return True, scores_all, predicted_pos
     except Exception as e:
         return False, {"error": str(e)}, ""
+# ===============================
+# 安全的 LLM 调用函数
+# ===============================
+def call_llm_api(messages: list, provider: str, model: str, api_key: str,
+                 max_tokens: int = 1024, temperature: float = 0.0, timeout: int = 30) -> Tuple[bool, dict, str]:
+    """
+    调用指定 LLM API 获取响应。
+    返回: (成功标志, 响应 dict, 错误信息)
+    """
+    if not api_key:
+        return False, {"error": "API Key 为空"}, "API Key 未提供"
+
+    if provider not in MODEL_CONFIGS:
+        return False, {"error": f"未知模型提供商 {provider}"}, "未知模型"
+
+    cfg = MODEL_CONFIGS[provider]
+    url = cfg["base_url"].rstrip("/") + cfg.get("endpoint", "/chat/completions")
+    headers = cfg["headers"](api_key)
+    payload = cfg["payload"](model, messages, max_tokens=max_tokens, temperature=temperature)
+
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        r.raise_for_status()
+        resp_json = r.json()
+        return True, resp_json, ""
+    except Exception as e:
+        return False, {"error": str(e)}, str(e)
+
+
+# ===============================
+# 安全的词类判定函数
+# ===============================
+def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str]:
+    """
+    根据输入词调用 LLM 获取词类隶属度评分，返回:
+        - scores_all: 每个词类的规则得分字典
+        - raw_text: 模型原始输出
+        - predicted_pos: 模型预测的最可能词类
+    """
+    if not word:
+        return {}, "", "未知"
+
+    rules_summary_lines = []
+    for pos, rules in RULE_SETS.items():
+        rules_summary_lines.append(f"{pos}:")
+        for r in rules:
+            rules_summary_lines.append(f"  - {r['name']}: {r['desc']} (match={r['match_score']}, mismatch={r['mismatch_score']})")
+    rules_text = "\n".join(rules_summary_lines)
+
+    system_msg = (
+        "你是语言学研究助手。输入一个中文词语，请你判断该词最可能的词类，并返回 JSON："
+        '{"predicted_pos":"<词类名>", "scores": {"<词类名>": {"<规则名>": <值>, ...}, ...}, "explanation":"说明"}。'
+    )
+    user_prompt = f"词语：『{word}』\n请基于下列规则判定并评分：\n\n{rules_text}\n\n仅返回严格 JSON。"
+
+    ok, resp_json, err_msg = call_llm_api(
+        messages=[{"role": "system", "content": system_msg},
+                  {"role": "user", "content": user_prompt}],
+        provider=provider,
+        model=model,
+        api_key=api_key
+    )
+
+    if not ok or not resp_json:
+        # 调用失败或返回为空
+        return {}, f"调用失败或返回异常: {err_msg}", "未知"
+
+    # 尝试解析原始文本
+    raw_text = extract_text_from_response(resp_json)
+    parsed_json, _ = extract_json_from_text(raw_text)
+    if not parsed_json:
+        return {}, raw_text, "未知"
+
+    # 解析得分
+    scores_out = {}
+    predicted_pos = parsed_json.get("predicted_pos", "未知")
+    raw_scores = parsed_json.get("scores", {})
+
+    for pos, rules in RULE_SETS.items():
+        scores_out[pos] = {r["name"]: 0 for r in rules}
+        raw_for_pos = raw_scores.get(pos, {})
+        if isinstance(raw_for_pos, dict):
+            for k, v in raw_for_pos.items():
+                nk = normalize_key(k, rules)
+                if nk:
+                    rule_def = next(r for r in rules if r["name"] == nk)
+                    scores_out[pos][nk] = map_to_allowed_score(rule_def, v)
+
+    return scores_out, raw_text, predicted_pos
 
 # ===============================
 # ask_model_for_pos_and_scores
