@@ -1,47 +1,194 @@
 import streamlit as st
-
-st.set_page_config(
-    page_title="汉语词类隶属度检测",
-    page_icon="📰",
-    layout="centered",
-    initial_sidebar_state="collapsed",
-    menu_items=None  # 这里可以隐藏默认菜单
-)
-
-hide_streamlit_style = """
-<style>
-/* 隐藏顶部菜单栏（Share / GitHub 等） */
-header {visibility: hidden;}
-/* 隐藏右下角“Manage app” */
-footer {visibility: hidden;}
-</style>
-"""
-st.markdown(hide_streamlit_style, unsafe_allow_html=True)
-
-import streamlit as st
 import requests
 import json
 import re
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import re, json, requests, pandas as pd, numpy as np
 from typing import Tuple, Dict, Any
 
+# ===============================
+# 模型与 API Key 配置区
+# ===============================
+MODEL_CONFIGS = {
+    "DeepSeek": {
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-chat",
+        "api_key": "sk-1f346646d29947d0a5e29dbaa37476b8"   
+    },
+    "OpenAI": {
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-4o-mini",
+        "api_key": "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"
+    },
+    "Moonshot": {
+        "base_url": "https://api.moonshot.cn/v1",
+        "model": "moonshot-v1-8k",
+        "api_key": "sk-moonshot-xxxx"
+    },
+    "GLM（智谱）": {
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "model": "glm-4",
+        "api_key": "9720beea6bff408ea6c26cd5d9ecf3b8.cRNTQiKRNaTieIiz"
+    },
+    "通义千问": {
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "model": "qwen-turbo",
+        "api_key": "sk-qwen-xxxx"
+    },
+    "豆包": {
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "model": "ep-20241106172028-vhdew",
+        "api_key": "WmpRMlptTmxNRGM0TjJNMk5HUTBOR0ZtWVRsbU56TTNNakUyT0RVNU1EUQ=="
+    },
+}
 
 # ===============================
-# 配置
+# 通用模型配置（支持多模型自由切换）
 # ===============================
-API_KEY = "sk-1f346646d29947d0a5e29dbaa37476b8"
-BASE_URL = "https://api.deepseek.com"
+import requests
+import streamlit as st
+from typing import Tuple
+
+# 默认配置
+MODEL_PROVIDER = "deepseek"   # 初始默认模型，可选: deepseek, openai, moonshot, glm, qwen, doubao
 MODEL_NAME = "deepseek-chat"
-RULE_SETS = {
-    
+API_KEY = "sk-1f346646d29947d0a5e29dbaa37476b8"
+
+# 模型调用配置模板
+MODEL_CONFIGS = {
+    "deepseek": {
+        "base_url": "https://api.deepseek.com/v1",
+        "endpoint": "/chat/completions",
+        "model": "deepseek-chat",
+        "headers": lambda key: {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json"
+        },
+        "payload": lambda model, messages, **kw: {
+            "model": model,
+            "messages": messages,
+            "max_tokens": kw.get("max_tokens", 1024),
+            "temperature": kw.get("temperature", 0.0),
+            "stream": False
+        }
+    },
+    "openai": {
+        "base_url": "https://api.openai.com/v1",
+        "endpoint": "/chat/completions",
+        "model": "gpt-4o-mini",
+        "headers": lambda key: {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json"
+        },
+        "payload": lambda model, messages, **kw: {
+            "model": model,
+            "messages": messages,
+            "max_tokens": kw.get("max_tokens", 1024),
+            "temperature": kw.get("temperature", 0.0),
+            "stream": False
+        }
+    },
+    "moonshot": {
+        "base_url": "https://api.moonshot.cn/v1",
+        "endpoint": "/chat/completions",
+        "model": "moonshot-v1-32k",
+        "headers": lambda key: {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json"
+        },
+        "payload": lambda model, messages, **kw: {
+            "model": model,
+            "messages": messages,
+            "temperature": kw.get("temperature", 0.0),
+            "stream": False
+        }
+    },
+    "glm": {
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "endpoint": "/chat/completions",
+        "model": "glm-4",
+        "headers": lambda key: {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json"
+        },
+        "payload": lambda model, messages, **kw: {
+            "model": model,
+            "messages": messages,
+            "temperature": kw.get("temperature", 0.0),
+            "stream": False
+        }
+    },
+    "qwen": {
+        "base_url": "https://dashscope.aliyuncs.com/api/v1",
+        "endpoint": "/services/aigc/text-generation/generation",
+        "model": "qwen-plus",
+        "headers": lambda key: {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json"
+        },
+        "payload": lambda model, messages, **kw: {
+            "model": model,
+            "input": {"messages": messages},
+            "parameters": {"temperature": kw.get("temperature", 0.0)}
+        }
+    },
+    "doubao": {
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "endpoint": "/chat/completions",
+        "model": "doubao-pro-32k",  # 或 doubao-lite、doubao-1.5-pro 等
+        "headers": lambda key: {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json"
+        },
+        "payload": lambda model, messages, **kw: {
+            "model": model,
+            "messages": messages,
+            "temperature": kw.get("temperature", 0.0),
+            "max_output_tokens": kw.get("max_tokens", 1024),
+            "stream": False
+        }
+    }
 }
 
 
-if not RULE_SETS:
-    RULE_SETS = {
+# ===============================
+# 通用 LLM 调用函数
+# ===============================
+def call_llm_api(messages: list,
+                 provider: str,
+                 model: str,
+                 api_key: str,
+                 max_tokens: int = 1024,
+                 temperature: float = 0.0,
+                 timeout: int = 30,
+                 **kwargs) -> Tuple[bool, dict]:
+
+    if provider not in MODEL_CONFIGS:
+        return False, {"error": f"未知的模型提供商: {provider}"}
+
+    cfg = MODEL_CONFIGS[provider]
+    url = cfg["base_url"].rstrip("/") + cfg["endpoint"]
+    headers = cfg["headers"](api_key)
+    payload = cfg["payload"](model, messages, max_tokens=max_tokens, temperature=temperature, **kwargs)
+
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        r.raise_for_status()
+        return True, r.json()
+    except Exception as e:
+        text = ""
+        try:
+            text = r.text
+        except:
+            pass
+        return False, {"error": str(e), "resp_text": text}
+
+
+# ===============================
+# 规则定义（此处示例，可自行扩展）
+# ===============================
+RULE_SETS = {
     # 1.1 名词
     "名词": [
         {"name": "N1_可受数量词修饰", "desc": "可以受数量词修饰", "match_score": 10, "mismatch_score": 0},
@@ -193,7 +340,7 @@ if not RULE_SETS:
         {"name": "ON4_可直接或带'地'作状语", "desc": "可以直接或后带'地'作状语修饰动词", "match_score": 20, "mismatch_score": 0},
         {"name": "ON5_不能充当主/宾/谓/补等", "desc": "不能充当主语、宾语、谓语和补语等句法成分", "match_score": 20, "mismatch_score": -20},
     ],
-    # 3.1 体代词
+    # 3.1 体代词（代词与数量词部分示例）
     "体代词": [
         {"name": "PR1_可作典型主宾语", "desc": "可以做典型的主语或宾语", "match_score": 20, "mismatch_score": -20},
         {"name": "PR2_可做定语或跟'的'构'的'字结构", "desc": "可以做定语或跟助词'的'构成'的'字结构", "match_score": 10, "mismatch_score": -10},
@@ -203,7 +350,7 @@ if not RULE_SETS:
         {"name": "PR6_不能做补语或状语", "desc": "不能做补语，也不能作状语", "match_score": 10, "mismatch_score": -10},
         {"name": "PR7_不能后附单音方位词构处所", "desc": "不能后附单音方位词构处所", "match_score": 20, "mismatch_score": -20},
     ],
-    # 3.2 谓代词
+    # 3.2 谓代词（示例）
     "谓代词": [
         {"name": "WP1_可作典型主宾语", "desc": "可以做典型的主语或宾语", "match_score": 20, "mismatch_score": -20},
         {"name": "WP2_可作状语直接修饰动/形", "desc": "可以作状语直接修饰动词或形容词", "match_score": 20, "mismatch_score": -20},
@@ -212,7 +359,7 @@ if not RULE_SETS:
         {"name": "WP5_可做谓语或谓词核心", "desc": "可以做谓语或谓词核心", "match_score": 10, "mismatch_score": -10},
         {"name": "WP6_不能带宾语和补语", "desc": "不能带宾语和补语", "match_score": 10, "mismatch_score": -10},
     ],
-    # 3.3 代词
+    # 3.3 代词（通用代词条目示例）
     "代词": [
         {"name": "DPR1_可作典型主宾语", "desc": "可做典型主语或宾语", "match_score": 20, "mismatch_score": -20},
         {"name": "DPR2_不能受数量/形容/的修饰", "desc": "不能受数量词、形容词和'的'字结构修饰", "match_score": 20, "mismatch_score": -20},
@@ -220,7 +367,7 @@ if not RULE_SETS:
         {"name": "DPR4_不能带宾语和补语", "desc": "不能带宾语和补语", "match_score": 20, "mismatch_score": 0},
         {"name": "DPR5_可受'不/也'等副词修饰（针对谓代）或不能后附方位（针对体代）", "desc": "混合规则，按具体代词类型判定", "match_score": 20, "mismatch_score": -20},
     ],
-    # 3.4 系数词、位数词、合成数词等：示例性规则
+    # 3.4 系数词、位数词、合成数词等：示例性规则（你可以继续补全）
     "系数词": [
         {"name": "NUM_CO1_黏着词不能单独回答", "desc": "系数词是黏着词不能单独回答", "match_score": 20, "mismatch_score": -20},
         {"name": "NUM_CO2_可在量词前构数量词组", "desc": "可以用在量词前，一起构成数量词组", "match_score": 20, "mismatch_score": -20},
@@ -247,38 +394,12 @@ if not RULE_SETS:
     # "未列出词类": [ ... ],
 }
 
-# 计算每个词类的最大可能分（用于隶属度归一化）
 MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in RULE_SETS.items()}
 
-# ===============================
-# DeepSeek 调用函数（保留原实现）
-# ===============================
-def call_deepseek_chat(messages: list, model: str = MODEL_NAME, max_tokens: int = 1024,
-                       temperature: float = 0.0, timeout: int = 30, **kwargs) -> Tuple[bool, dict]:
-    url = BASE_URL.rstrip("/") + "/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "stream": False
-    }
-    try:
-        r = requests.post(url, headers=headers, json=payload, timeout=timeout)
-        r.raise_for_status()
-        return True, r.json()
-    except Exception as e:
-        text = ""
-        try:
-            text = r.text
-        except:
-            pass
-        return False, {"error": str(e), "resp_text": text}
 
+# ===============================
+# 工具函数（解析模型响应等）
+# ===============================
 def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
     if not isinstance(resp_json, dict):
         return ""
@@ -289,21 +410,21 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
             msg = first.get("message")
             if isinstance(msg, dict) and "content" in msg:
                 return msg["content"]
-            for k in ("content","text","message"):
+            for k in ("content", "text", "message"):
                 if k in first and isinstance(first[k], str):
                     return first[k]
     except:
         pass
     return json.dumps(resp_json, ensure_ascii=False)
 
-def extract_json_from_text(text: str) -> Tuple[dict,str]:
+
+def extract_json_from_text(text: str) -> Tuple[dict, str]:
     if not text:
-        return None,""
+        return None, ""
     s = text.strip()
     try:
         return json.loads(s), s
     except:
-        # 尝试用正则提取最外层花括号
         m = re.search(r"(\{[\s\S]*\})", s)
         if not m:
             return None, s
@@ -312,31 +433,24 @@ def extract_json_from_text(text: str) -> Tuple[dict,str]:
         c = re.sub(r"'(\s*[^']+?\s*)'\s*:", r'"\1":', c)
         c = re.sub(r":\s*'([^']*?)'", r': "\1"', c)
         c = re.sub(r",\s*([}\]])", r"\1", c)
-        c = re.sub(r"\bTrue\b","true",c)
-        c = re.sub(r"\bFalse\b","false",c)
-        c = re.sub(r"\bNone\b","null",c)
+        c = re.sub(r"\bTrue\b", "true", c)
+        c = re.sub(r"\bFalse\b", "false", c)
+        c = re.sub(r"\bNone\b", "null", c)
         try:
             return json.loads(c), c
         except:
-            return None,s
+            return None, s
+
 
 def normalize_key(k: str, pos_rules: list) -> str:
-    """把模型返回的键名标准化为规则中定义的 name（简单匹配）"""
     if not isinstance(k, str):
         return None
     kk = re.sub(r'\s+', '', k).upper()
     for r in pos_rules:
-        if r["name"].upper() == kk or re.sub(r'\s+','',r["name"]).upper()==kk:
+        if r["name"].upper() == kk or re.sub(r'\s+', '', r["name"]).upper() == kk:
             return r["name"]
-    # 允许模型返回短名（如 N1, V3 等）
-    m = re.match(r'([A-Za-z\u4e00-\u9fff]+)(\d+)', k)
-    if m:
-        base = m.group(1)
-        idx = m.group(2)
-        for r in pos_rules:
-            if r["name"].upper().startswith(base.upper()) and idx in r["name"]:
-                return r["name"]
     return None
+
 
 def map_to_allowed_score(rule: dict, raw_val) -> int:
     match = rule["match_score"]
@@ -347,59 +461,22 @@ def map_to_allowed_score(rule: dict, raw_val) -> int:
     if isinstance(raw_val, bool):
         return match if raw_val else mismatch
     if isinstance(raw_val, str):
-        s = raw_val.strip()
-        if re.search(r"(-?\d+)", s):
-            return map_to_allowed_score(rule, int(re.search(r"(-?\d+)", s).group(1)))
-        low = s.lower()
-        if low in ("yes","y","true","是","√","符合","yes"): return match
-        if low in ("no","n","false","否","×","不符合","no"): return mismatch
-        if any(x in low for x in ["能","可以","可","是","可作","可受"]): return match
-        if any(x in low for x in ["不能","不","否","没有","不可以","不可"]): return mismatch
-        return mismatch if mismatch != 0 else 0
-    return mismatch if mismatch != 0 else 0
+        s = raw_val.strip().lower()
+        if s in ("yes", "y", "true", "是", "√", "符合"):
+            return match
+        if s in ("no", "n", "false", "否", "×", "不符合"):
+            return mismatch
+    return mismatch
+
 
 # ===============================
-# 本地启发式兜底（简化/可扩展）
+# 主逻辑：请求模型进行词类判定
 # ===============================
-_NOUN_EXAMPLES = {"人","学生","老师","厂长","学科","人员","权力","木头","中国","历史","教育","塑料","工资","被窝","群众","质量","饭盒","桌子","椅子","教授","思想"}
-_VERB_EXAMPLES = {"跑","吃","学习","工作","买","卖","走","调整","增加","下放","联系","鼓励","知道","说","做","写"}
-_ADVERB_EXAMPLES = {"很","非常","尤其","特别","已经","马上","立刻"}
-_FUNCTION_WORD_EX = {"的","了","在","和","也","不","没有","把","被"}
+def ask_model_for_pos_and_scores(word: str,
+                                 provider: str,
+                                 model: str,
+                                 api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str]:
 
-def heuristic_scores_for_pos(word: str, pos: str) -> Dict[str, int]:
-    """
-    简单启发式：针对常见词类给出一个可用的兜底评分向量。
-    """
-    rules = RULE_SETS.get(pos, [])
-    res = {}
-    w = word.strip()
-    is_short = len(w) <= 2
-    for r in rules:
-        name = r["name"]
-        if pos == "名词":
-            cond = (w in _NOUN_EXAMPLES) or (is_short and w not in _VERB_EXAMPLES and w not in _ADVERB_EXAMPLES and w not in _FUNCTION_WORD_EX)
-            res[name] = r["match_score"] if cond else r["mismatch_score"]
-        elif pos == "动词":
-            cond = (w in _VERB_EXAMPLES) or (w.endswith("化") or w.endswith("做") or w.endswith("动"))
-            res[name] = r["match_score"] if cond else r["mismatch_score"]
-        elif pos == "副词":
-            cond = (w in _ADVERB_EXAMPLES) or (w.endswith("地") or w.endswith("然"))
-            res[name] = r["match_score"] if cond else r["mismatch_score"]
-        elif pos in ("介词","助词","连词","语气词"):
-            cond = w in _FUNCTION_WORD_EX or len(w) <= 2
-            res[name] = r["match_score"] if cond else r["mismatch_score"]
-        else:
-            cond = is_short
-            res[name] = r["match_score"] if cond else r["mismatch_score"]
-    return res
-
-# ===============================
-# LLM 调用：请求模型返回 predicted_pos 与所有词类规则得分
-# 期望 JSON：
-# { "predicted_pos": "名词", "scores": {"名词": {"N1_...": 10, ...}, "动词": {...}}, "explanation": "..." }
-# ===============================
-def ask_model_for_pos_and_scores(word: str, max_retries: int = 1) -> Tuple[Dict[str, Dict[str,int]], str, str]:
-    # 构建规则说明文本（简化版）
     rules_summary_lines = []
     for pos, rules in RULE_SETS.items():
         rules_summary_lines.append(f"{pos}:")
@@ -408,117 +485,110 @@ def ask_model_for_pos_and_scores(word: str, max_retries: int = 1) -> Tuple[Dict[
     rules_text = "\n".join(rules_summary_lines)
 
     system_msg = (
-        "你是语言学研究助手。输入一个中文词语，请你判断该词最可能的词类（用以下词类集合中的一个："
-        + ", ".join(list(RULE_SETS.keys()))
-        + ")，并严格返回 JSON。"
-        " JSON 格式必须为："
-        '{"predicted_pos":"<词类名>", "scores": {"<词类名>": {"<规则名>": <值>, ...}, ...}, "explanation":"可选说明"}。'
-        " 值应为整数（最好等于规则定义的 match_score 或 mismatch_score，或能映射到它们）。不要返回任何额外的文字，除了 JSON。"
+        "你是语言学研究助手。输入一个中文词语，请你判断该词最可能的词类，并返回 JSON："
+        '{"predicted_pos":"<词类名>", "scores": {"<词类名>": {"<规则名>": <值>, ...}, ...}, "explanation":"说明"}。'
     )
-    user_prompt = f"词语：『{word}』\n请基于下列规则（每条规则后给出符合/不符合/不确定及相应的数值）来判定并评分：\n\n{rules_text}\n\n只返回严格的 JSON。"
+    user_prompt = f"词语：『{word}』\n请基于下列规则判定并评分：\n\n{rules_text}\n\n仅返回严格 JSON。"
 
-    ok, resp = call_deepseek_chat([{"role":"system","content":system_msg},{"role":"user","content":user_prompt}], temperature=0.0)
-    raw_text = ""
-    parsed_json = None
-    if ok:
-        raw_text = extract_text_from_response(resp)
-        parsed_json, parsed_text = extract_json_from_text(raw_text)
-    if parsed_json and isinstance(parsed_json, dict):
-        scores_out = {}
-        predicted_pos = parsed_json.get("predicted_pos")
-        if not predicted_pos:
-            predicted_pos = parsed_json.get("pos") or parsed_json.get("pred_pos") or None
+    ok, resp = call_llm_api(
+        [{"role": "system", "content": system_msg},
+         {"role": "user", "content": user_prompt}],
+        provider=provider, model=model, api_key=api_key
+    )
 
-        for pos in RULE_SETS.keys():
-            scores_out[pos] = {r["name"]: 0 for r in RULE_SETS[pos]}
+    raw_text = extract_text_from_response(resp) if ok else str(resp)
+    parsed_json, _ = extract_json_from_text(raw_text)
+    if not parsed_json:
+        return {}, raw_text, "未知"
 
-        raw_scores = parsed_json.get("scores", {})
-        for pos, rules in RULE_SETS.items():
-            raw_for_pos = raw_scores.get(pos, {})
-            if not isinstance(raw_for_pos, dict):
-                continue
+    scores_out = {}
+    predicted_pos = parsed_json.get("predicted_pos", "未知")
+    raw_scores = parsed_json.get("scores", {})
+
+    for pos, rules in RULE_SETS.items():
+        scores_out[pos] = {r["name"]: 0 for r in rules}
+        raw_for_pos = raw_scores.get(pos, {})
+        if isinstance(raw_for_pos, dict):
             for k, v in raw_for_pos.items():
                 nk = normalize_key(k, rules)
                 if nk:
-                    rule_def = next(filter(lambda rr: rr["name"]==nk, rules))
-                    mapped = map_to_allowed_score(rule_def, v)
-                    scores_out[pos][nk] = mapped
-        nonzero = sum(1 for pos in scores_out for val in scores_out[pos].values() if val != 0)
-        if nonzero < 1:
-            parsed_json = None
-        else:
-            if not predicted_pos:
-                totals = {pos: sum(abs(v) for v in vals.values()) for pos, vals in scores_out.items()}
-                predicted_pos = max(totals.items(), key=lambda x: x[1])[0]
-            return scores_out, raw_text, predicted_pos
+                    rule_def = next(r for r in rules if r["name"] == nk)
+                    scores_out[pos][nk] = map_to_allowed_score(rule_def, v)
+    return scores_out, raw_text, predicted_pos
 
-    # 兜底：启发式
-    scores_out = {}
-    for pos in RULE_SETS.keys():
-        scores_out[pos] = heuristic_scores_for_pos(word, pos)
-    totals = {pos: sum(v for v in vals.values()) for pos, vals in scores_out.items()}
-    predicted_pos = max(totals.items(), key=lambda x: x[1])[0]
-    return scores_out, "(heuristic fallback)", predicted_pos
 
 # ===============================
-# 工具：增补/更新规则集合（便于后续扩展）
+# 可视化函数
 # ===============================
-def add_new_rule_set(pos_name: str, rules: list):
-    RULE_SETS[pos_name] = rules
-    MAX_SCORES[pos_name] = sum(abs(r["match_score"]) for r in rules)
-
-def update_rule_set(pos_name: str, rules: list):
-    RULE_SETS[pos_name] = rules
-    MAX_SCORES[pos_name] = sum(abs(r["match_score"]) for r in rules)
-
-# ===============================
-# 可视化：Plotly 雷达图（标准化 0~1）
-# ===============================
-def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str = "词类隶属度雷达图"):
+def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
     categories = list(scores_norm.keys())
     values = [float(scores_norm[c]) for c in categories]
-    # 闭合环
     categories += [categories[0]]
     values += [values[0]]
 
     fig = go.Figure(
-        data=[
-            go.Scatterpolar(
-                r=values,
-                theta=categories,
-                fill="toself",
-                name="隶属度",
-            )
-        ]
+        data=[go.Scatterpolar(r=values, theta=categories, fill="toself", name="隶属度")]
     )
     fig.update_layout(
-        polar=dict(
-            radialaxis=dict(
-                visible=True,
-                range=[0, 1],
-                tickvals=[0, 0.25, 0.5, 0.75, 1.0]
-            )
-        ),
-        showlegend=False,
-        title=dict(text=title, x=0.5)
+        polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
+        showlegend=False, title=dict(text=title, x=0.5)
     )
     st.plotly_chart(fig, use_container_width=True)
 
 # ===============================
-# Streamlit UI（简洁居中输入 + 结果 + 折叠详细）
+# Streamlit UI（简洁居中输入 + 模型选择 + 结果）
 # ===============================
 st.set_page_config(page_title="汉语词类隶属度检测判类", layout="wide")
-# 顶部居中标题
+
+# ======== 模型选择部分（侧边栏） ========
+st.sidebar.header("模型配置")
+MODEL_OPTIONS = {
+    "DeepSeek Chat": {
+        "api_url": "https://api.deepseek.com/v1/chat/completions",
+        "api_key_name": "DEEPSEEK_API_KEY"
+    },
+    "OpenAI GPT-4o": {
+        "api_url": "https://api.openai.com/v1/chat/completions",
+        "api_key_name": "OPENAI_API_KEY"
+    },
+    "Moonshot（Kimi）": {
+        "api_url": "https://api.moonshot.cn/v1/chat/completions",
+        "api_key_name": "MOONSHOT_API_KEY"
+    },
+    "Doubao（豆包）": {
+        "api_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+        "api_key_name": "DOUBAO_API_KEY"
+    }
+}
+
+model_choice = st.sidebar.selectbox("选择模型", list(MODEL_OPTIONS.keys()))
+selected_model = MODEL_OPTIONS[model_choice]
+
+st.sidebar.markdown(f"**当前模型：** {model_choice}")
+st.sidebar.markdown(f"**API 地址：** `{selected_model['api_url']}`")
+st.sidebar.markdown("⚙️ 请在你的系统环境变量中设置对应的 API Key：")
+st.sidebar.code(selected_model["api_key_name"], language="bash")
+
+# 将所选模型配置赋给全局变量
+API_URL = selected_model["api_url"]
+API_KEY_ENV_NAME = selected_model["api_key_name"]
+
+import os
+API_KEY = os.getenv(API_KEY_ENV_NAME, "")
+if not API_KEY:
+    st.sidebar.warning(f"未检测到 {API_KEY_ENV_NAME}，请在系统环境变量中设置对应 Key。")
+
+# ======== 主体部分 ========
+# 顶部标题
 st.markdown("<h1 style='text-align: center;'>汉语词类隶属度检测判类</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center; color: grey;'>输入单个词 → 模型自动判类并返回各词类规则得分与隶属度（标准化 0~1）</p>", unsafe_allow_html=True)
 st.write("")
 
-# 居中输入框（通过 columns 调整）
+# 居中输入框
 c1, c2, c3 = st.columns([1, 2, 1])
 with c2:
     word_input = st.text_input("", placeholder="在此输入要分析的词（例如：很 / 跑 / 美丽）")
     confirm = st.button("确认")
-
 # 当按下确认时，进行模型调用与展示
 if confirm:
     word = (word_input or "").strip()
@@ -583,5 +653,6 @@ if confirm:
         # 可选：显示原始模型输出
         with st.expander("查看原始模型文本 / 响应"):
             st.code(raw_out if raw_out else "(无)")
+
 
 
