@@ -32,8 +32,31 @@ MODEL_CONFIGS = {
             "temperature": kw.get("temperature", 0.0),
             "stream": False
         }
+    },
+    "moonshot": {
+        "base_url": "https://api.moonshot.cn/v1",
+        "endpoint": "/chat/completions",
+        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        "payload": lambda model, messages, **kw: {
+            "model": model,
+            "messages": messages,
+            "max_tokens": kw.get("max_tokens", 1024),
+            "temperature": kw.get("temperature", 0.0),
+            "stream": False
+        }
+    },
+    "doubao": {
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "endpoint": "/chat/completions",
+        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        "payload": lambda model, messages, **kw: {
+            "model": model,
+            "messages": messages,
+            "max_tokens": kw.get("max_tokens", 1024),
+            "temperature": kw.get("temperature", 0.0),
+            "stream": False
+        }
     }
-    # 其他模型可按需添加
 }
 
 
@@ -347,38 +370,6 @@ def map_to_allowed_score(rule: dict, raw_val) -> int:
     return mismatch
 
 # ===============================
-# 调用模型接口
-# ===============================
-def call_llm_api(messages: list, provider: str, model: str, api_key: str,
-                 max_tokens: int = 1024, temperature: float = 0.0, timeout: int = 30) -> Tuple[bool, dict, str]:
-    cfg_map = {
-        "deepseek": {"base_url":"https://api.deepseek.com/v1", "endpoint":"/chat/completions"},
-        "openai": {"base_url":"https://api.openai.com/v1", "endpoint":"/chat/completions"},
-        "moonshot": {"base_url":"https://api.moonshot.cn/v1", "endpoint":"/chat/completions"},
-        "doubao": {"base_url":"https://ark.cn-beijing.volces.com/api/v3", "endpoint":"/chat/completions"},
-    }
-    cfg = cfg_map.get(provider)
-    if not cfg:
-        return False, {"error": f"未知提供商 {provider}"}, ""
-    url = cfg["base_url"].rstrip("/") + cfg["endpoint"]
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    payload = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature, "stream": False}
-    try:
-        r = requests.post(url, headers=headers, json=payload, timeout=timeout)
-        r.raise_for_status()
-        result = r.json()
-        raw_text = extract_text_from_response(result)
-        try:
-            scores_all = json.loads(raw_text)
-        except:
-            import re
-            m = re.search(r"\{.*\}", raw_text, re.S)
-            scores_all = json.loads(m.group(0)) if m else {}
-        predicted_pos = max(scores_all, key=scores_all.get) if scores_all else "未知"
-        return True, scores_all, predicted_pos
-    except Exception as e:
-        return False, {"error": str(e)}, ""
-# ===============================
 # 安全的 LLM 调用函数
 # ===============================
 def call_llm_api(messages: list, provider: str, model: str, api_key: str,
@@ -390,8 +381,8 @@ def call_llm_api(messages: list, provider: str, model: str, api_key: str,
     if not api_key:
         return False, {"error": "API Key 为空"}, "API Key 未提供"
 
-   if provider not in MODEL_OPTIONS:
-       raise ValueError(f"未知 provider: {provider}")
+    if provider not in MODEL_CONFIGS:
+        return False, {"error": f"未知提供商 {provider}"}, f"未知提供商 {provider}"
 
     cfg = MODEL_CONFIGS[provider]
     url = cfg["base_url"].rstrip("/") + cfg.get("endpoint", "/chat/completions")
@@ -405,7 +396,6 @@ def call_llm_api(messages: list, provider: str, model: str, api_key: str,
         return True, resp_json, ""
     except Exception as e:
         return False, {"error": str(e)}, str(e)
-
 
 # ===============================
 # 安全的词类判定函数
@@ -469,44 +459,6 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     return scores_out, raw_text, predicted_pos
 
 # ===============================
-# ask_model_for_pos_and_scores
-# ===============================
-def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str,int]], str, str]:
-    rules_summary_lines = []
-    for pos, rules in RULE_SETS.items():
-        rules_summary_lines.append(f"{pos}:")
-        for r in rules:
-            rules_summary_lines.append(f"  - {r['name']}: {r['desc']} (match={r['match_score']}, mismatch={r['mismatch_score']})")
-    rules_text = "\n".join(rules_summary_lines)
-
-    system_msg = ("你是语言学研究专家，拥有中外语言学界的所有知识。在输入一个中文词语后，请检索全网的相关知识，严格按照定义的规则，请判断最可能的词类并返回 JSON："
-                  '{"predicted_pos":"<词类名>", "scores": {"<词类名>": {"<规则名>": <值>, ...}, ...}, "explanation":"说明"}。')
-    user_prompt = f"词语：『{word}』\n请基于规则判定并评分：\n{rules_text}\n仅返回严格 JSON。"
-
-    ok, resp = call_llm_api([{"role":"system","content":system_msg},
-                             {"role":"user","content":user_prompt}],
-                            provider=provider, model=model, api_key=api_key)
-    raw_text = extract_text_from_response(resp) if ok else str(resp)
-    parsed_json, _ = extract_json_from_text(raw_text)
-    if not parsed_json:
-        return {}, raw_text, "未知"
-
-    scores_out = {}
-    predicted_pos = parsed_json.get("predicted_pos", "未知")
-    raw_scores = parsed_json.get("scores", {})
-
-    for pos, rules in RULE_SETS.items():
-        scores_out[pos] = {r["name"]: 0 for r in rules}
-        raw_for_pos = raw_scores.get(pos, {})
-        if isinstance(raw_for_pos, dict):
-            for k, v in raw_for_pos.items():
-                nk = normalize_key(k, rules)
-                if nk:
-                    rule_def = next(r for r in rules if r["name"] == nk)
-                    scores_out[pos][nk] = map_to_allowed_score(rule_def, v)
-    return scores_out, raw_text, predicted_pos
-
-# ===============================
 # 雷达图
 # ===============================
 def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
@@ -535,32 +487,20 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
 # ===============================
 
 # ======== 模型选择部分（侧边栏） ========
-MODEL_OPTIONS = {
-    "DeepSeek Chat": {"api_url": "https://api.deepseek.com/v1/chat/completions"},
-    "OpenAI GPT-4o": {"api_url": "https://api.openai.com/v1/chat/completions"},
-    "Moonshot（Kimi）": {"api_url": "https://api.moonshot.cn/v1/chat/completions"},
-    "Doubao（豆包）": {"api_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions"}
-}
-
-MODEL_API_KEYS = {
-    "DeepSeek Chat": "sk-1f346646d29947d0a5e29dbaa37476b8",
-    "OpenAI GPT-4o": "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",
-    "Moonshot（Kimi）": "sk-your-moonshot-key",
-    "Doubao（豆包）": "WmpRMlptTmxNRGM0TjJNMk5HUTBOR0ZtWVRsbU56TTNNakUyT0RVNU1EUQ=="
-}
-
 # 由侧边栏选择模型
 model_choice = st.sidebar.selectbox("选择模型", list(MODEL_OPTIONS.keys()))
 selected_model = MODEL_OPTIONS[model_choice]
 
 st.sidebar.markdown(f"**当前模型：** {model_choice}")
 st.sidebar.markdown(f"**API 地址：** `{selected_model['api_url']}`")
+st.sidebar.markdown(f"**模型名称：** `{selected_model['model']}`")
 
-# 直接取 Key（不再用环境变量）
-API_URL = selected_model["api_url"]
-API_KEY = MODEL_API_KEYS.get(model_choice, "")
+# 获取选中模型的配置
+API_KEY = selected_model["api_key"]
+PROVIDER = selected_model["provider"]
+MODEL_NAME = selected_model["model"]
 
-if not API_KEY:
+if not API_KEY or API_KEY == "sk-your-moonshot-key":
     st.sidebar.error(f"⚠️ 尚未为模型 {model_choice} 配置 API Key，请在代码中填写。")
 
 # ======== 主体部分 ========
@@ -578,18 +518,17 @@ if confirm:
     if not word:
         st.warning("请输入一个词语后确认。")
     else:
-        if not API_KEY:
+        if not API_KEY or API_KEY == "sk-your-moonshot-key":
             st.error("未找到有效 API Key，请检查配置。")
             scores_all, raw_out, predicted_pos = {}, "", "无"
         else:
             with st.spinner("模型打分判类中……"):
-                provider = "openai"  # 或根据 model_choice 动态选择
-                model = "gpt-3.5-turbo"
                 try:
-                    scores_all, raw_out, predicted_pos = ask_model_for_pos_and_scores(word, provider, model, API_KEY)
+                    scores_all, raw_out, predicted_pos = ask_model_for_pos_and_scores(
+                        word, PROVIDER, MODEL_NAME, API_KEY)
                 except Exception as e:
                     st.error(f"模型调用出错：{e}")
-                    scores_all, raw_out, predicted_pos = {}, "", "错误"
+                    scores_out, raw_out, predicted_pos = {}, str(e), "错误"
 
         # 仅在 scores_all 有内容时才遍历
         if scores_all:
@@ -614,7 +553,7 @@ if confirm:
         st.subheader("判定摘要")
         st.markdown(f"- **输入词**： `{word}`")
         st.markdown(f"- **模型预测词类**： **{predicted_pos}**")
-        st.markdown(f"- **解析策略 / 原始响应摘要**： `{raw_out}`")
+        st.markdown(f"- **解析策略 / 原始响应摘要**： `{raw_out[:100]}...`")
 
         # 排名与表格（只显示前 10）
         ranked = sorted(pos_normed.items(), key=lambda x: x[1], reverse=True)
