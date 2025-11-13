@@ -63,6 +63,8 @@ MODEL_CONFIGS = {
 # ===============================
 # 模型配置与 API Key（从环境变量获取）
 # ===============================
+import os
+
 MODEL_OPTIONS = {
     "DeepSeek Chat": {
         "provider": "deepseek",
@@ -89,6 +91,7 @@ MODEL_OPTIONS = {
         "api_key": os.getenv("DOUBAO_API_KEY", "TlRNd01qaGhPR1EwWWpBek5HRm1NbUZsWkRjNVptTXdOV00zTnpKaVlUZw==")
     }
 }
+
 
 # ===============================
 # 词类规则示例
