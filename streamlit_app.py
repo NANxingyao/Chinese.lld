@@ -391,7 +391,7 @@ def call_llm_api(messages: list, provider: str, model: str, api_key: str,
         return False, {"error": "API Key 为空"}, "API Key 未提供"
 
    if provider not in MODEL_OPTIONS:
-    raise ValueError(f"未知 provider: {provider}")
+       raise ValueError(f"未知 provider: {provider}")
 
     cfg = MODEL_CONFIGS[provider]
     url = cfg["base_url"].rstrip("/") + cfg.get("endpoint", "/chat/completions")
