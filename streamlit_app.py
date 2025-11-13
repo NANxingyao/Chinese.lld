@@ -541,42 +541,29 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
 # ===============================
 
 # ======== 模型选择部分（侧边栏） ========
-# 初始化页面配置（必须在最前）
-st.set_page_config(page_title="汉语词类隶属度检测判类", layout="wide")
-st.sidebar.header("模型配置")
-MODEL_OPTIONS = {
-    "DeepSeek Chat": {
-        "api_url": "https://api.deepseek.com/v1/chat/completions",
-        "api_key_name": "DEEPSEEK_API_KEY"
-    },
-    "OpenAI GPT-4o": {
-        "api_url": "https://api.openai.com/v1/chat/completions",
-        "api_key_name": "OPENAI_API_KEY"
-    },
-    "Moonshot（Kimi）": {
-        "api_url": "https://api.moonshot.cn/v1/chat/completions",
-        "api_key_name": "MOONSHOT_API_KEY"
-    },
-    "Doubao（豆包）": {
-        "api_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-        "api_key_name": "DOUBAO_API_KEY"
-    }
+# ===============================
+# 固定写入 API Key（无需环境变量）
+# ===============================
+MODEL_API_KEYS = {
+    "DeepSeek Chat": "sk-1f346646d29947d0a5e29dbaa37476b8",
+    "OpenAI GPT-4o": "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",
+    "Moonshot（Kimi）": "sk-your-moonshot-key",
+    "Doubao（豆包）": "WmpRMlptTmxNRGM0TjJNMk5HUTBOR0ZtWVRsbU56TTNNakUyT0RVNU1EUQ=="
 }
 
+# 由侧边栏选择模型
 model_choice = st.sidebar.selectbox("选择模型", list(MODEL_OPTIONS.keys()))
 selected_model = MODEL_OPTIONS[model_choice]
 
 st.sidebar.markdown(f"**当前模型：** {model_choice}")
-st.sidebar.code(selected_model["api_key_name"], language="bash")
+st.sidebar.markdown(f"**API 地址：** `{selected_model['api_url']}`")
 
-# 获取环境变量 API Key
+# 直接取 Key（不再用环境变量）
 API_URL = selected_model["api_url"]
-API_KEY = MODEL_CONFIG[selected_model]["key"]
-BASE_URL = MODEL_CONFIG[selected_model]["api"]
-
+API_KEY = MODEL_API_KEYS.get(model_choice, "")
 
 if not API_KEY:
-    st.sidebar.warning(f"未检测到 {API_KEY_ENV_NAME}，请在系统环境变量中设置对应 Key。")
+    st.sidebar.error(f"⚠️ 尚未为模型 {model_choice} 配置 API Key，请在代码中填写。")
 
 # ======== 主体部分 ========
 st.markdown("<h1 style='text-align: center;'>汉语词类隶属度检测判类</h1>", unsafe_allow_html=True)
