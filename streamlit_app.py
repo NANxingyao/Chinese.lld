@@ -589,4 +589,3 @@ if confirm:
             plot_radar_chart_streamlit(radar_scores, title=f"“{word}” 的词类隶属度分布")
         else:
             st.info("未获得有效评分结果。请检查 API Key 或网络连接。")
-接。")
