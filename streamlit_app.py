@@ -7,6 +7,9 @@ import pandas as pd
 import plotly.graph_objects as go
 from typing import Tuple, Dict, Any
 
+# 兼容旧函数使用
+MODEL_CONFIGS = MODEL_OPTIONS
+
 # ===============================
 # 模型配置与 API Key（可直接修改或使用环境变量 / st.secrets）
 # ===============================
