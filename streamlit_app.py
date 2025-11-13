@@ -78,7 +78,7 @@ MODEL_OPTIONS = {
         "provider": "openai",
         "model": "gpt-4o-mini",
         "api_url": "https://api.openai.com/v1/chat/completions",
-        "api_key": os.getenv("OPENAI_API_KEY", "")
+        "api_key": os.getenv("OPENAI_API_KEY", "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")
     },
     "Moonshot（Kimi）": {
         "provider": "moonshot",
@@ -90,7 +90,7 @@ MODEL_OPTIONS = {
         "provider": "doubao",
         "model": "doubao-pro-32k",
         "api_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-        "api_key": os.getenv("DOUBAO_API_KEY", "")
+        "api_key": os.getenv("DOUBAO_API_KEY", "WmpRMlptTmxNRGM0TjJNMk5HUTBOR0ZtWVRsbU56TTNNakUyT0RVNU1EUQ==")
     }
 }
 
@@ -508,7 +508,6 @@ model_choice = st.sidebar.selectbox("选择模型", list(MODEL_OPTIONS.keys()))
 selected_model = MODEL_OPTIONS[model_choice]
 
 st.sidebar.markdown(f"**当前模型：** {model_choice}")
-st.sidebar.markdown(f"**API 地址：** `{selected_model['api_url']}`")
 st.sidebar.markdown(f"**模型名称：** `{selected_model['model']}`")
 
 # 获取选中模型的配置
