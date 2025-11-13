@@ -1,3 +1,7 @@
+"""
+汉语词类隶属度检测判类 - 使用环境变量配置API密钥
+"""
+
 import streamlit as st
 import requests
 import json
@@ -61,32 +65,32 @@ MODEL_CONFIGS = {
 
 
 # ===============================
-# 模型配置与 API Key（可直接修改或使用环境变量 / st.secrets）
+# 模型配置与 API Key（从环境变量获取）
 # ===============================
 MODEL_OPTIONS = {
     "DeepSeek Chat": {
         "provider": "deepseek",
         "model": "deepseek-chat",
         "api_url": "https://api.deepseek.com/v1/chat/completions",
-        "api_key": "sk-1f346646d29947d0a5e29dbaa37476b8"
+        "api_key": os.getenv("DEEPSEEK_API_KEY", "sk-1f346646d29947d0a5e29dbaa37476b8")
     },
     "OpenAI GPT-4o": {
         "provider": "openai",
         "model": "gpt-4o-mini",
         "api_url": "https://api.openai.com/v1/chat/completions",
-        "api_key": "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"
+        "api_key": os.getenv("OPENAI_API_KEY", "")
     },
     "Moonshot（Kimi）": {
         "provider": "moonshot",
         "model": "moonshot-v1-32k",
         "api_url": "https://api.moonshot.cn/v1/chat/completions",
-        "api_key": "sk-your-moonshot-key"
+        "api_key": os.getenv("MOONSHOT_API_KEY", "sk-your-moonshot-key")
     },
     "Doubao（豆包）": {
         "provider": "doubao",
         "model": "doubao-pro-32k",
         "api_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-        "api_key": "WmpRMlptTmxNRGM0TjJNMk5HUTBOR0ZtWVRsbU56TTNNakUyT0RVNU1EUQ=="
+        "api_key": os.getenv("DOUBAO_API_KEY", "")
     }
 }
 
@@ -114,7 +118,7 @@ RULE_SETS = {
         {"name": "T5_不能带宾语和补语", "desc": "不能带宾语和补语（不能作述语）", "match_score": 10, "mismatch_score": -10},
         {"name": "T6_可作时间中心语/作定语", "desc": "一般可以做中心语受其他时间词修饰，或作定语修饰时间词", "match_score": 10, "mismatch_score": 0},
         {"name": "T7_一般不能受名词修饰", "desc": "一般不能作中心语受名词直接修饰，也不能作定语直接修饰名词", "match_score": 10, "mismatch_score": 0},
-        {"name": "T8_可后附'的'作定语但通常不作主宾", "desc": "可以后附助词'的'构成定语，但一般不能作主语和宾语", "match_score": 10, "mismatch_score": -10},
+        {"name": "T8_可后附'的'作定语但通常不作主宾", "desc": "可以后附助词'的'作定语，但一般不能作主语和宾语", "match_score": 10, "mismatch_score": -10},
         {"name": "T9_可用'什么时候'提问/可用'这个时候'指代", "desc": "可以用'什么时候'提问或'这个时候/那个时候'指代", "match_score": 10, "mismatch_score": 0},
     ],
     # 1.3 方位词
@@ -390,12 +394,24 @@ def call_llm_api(messages: list, provider: str, model: str, api_key: str,
     payload = cfg["payload"](model, messages, max_tokens=max_tokens, temperature=temperature)
 
     try:
+        st.info(f"正在调用 {provider} API...")
+        st.info(f"URL: {url}")
+        st.info(f"模型: {model}")
+        
         r = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        
+        st.info(f"响应状态码: {r.status_code}")
+        
+        if r.status_code != 200:
+            return False, {"error": f"HTTP错误 {r.status_code}", "content": r.text}, f"HTTP错误 {r.status_code}: {r.text[:200]}"
+            
         r.raise_for_status()
         resp_json = r.json()
         return True, resp_json, ""
     except Exception as e:
-        return False, {"error": str(e)}, str(e)
+        error_msg = str(e)
+        st.error(f"API调用错误: {error_msg}")
+        return False, {"error": error_msg}, error_msg
 
 # ===============================
 # 安全的词类判定函数
@@ -492,6 +508,7 @@ model_choice = st.sidebar.selectbox("选择模型", list(MODEL_OPTIONS.keys()))
 selected_model = MODEL_OPTIONS[model_choice]
 
 st.sidebar.markdown(f"**当前模型：** {model_choice}")
+st.sidebar.markdown(f"**API 地址：** `{selected_model['api_url']}`")
 st.sidebar.markdown(f"**模型名称：** `{selected_model['model']}`")
 
 # 获取选中模型的配置
@@ -499,8 +516,25 @@ API_KEY = selected_model["api_key"]
 PROVIDER = selected_model["provider"]
 MODEL_NAME = selected_model["model"]
 
-if not API_KEY or API_KEY == "sk-your-moonshot-key":
-    st.sidebar.error(f"⚠️ 尚未为模型 {model_choice} 配置 API Key，请在代码中填写。")
+# 检查API密钥
+if not API_KEY or API_KEY in ["", "sk-your-moonshot-key"]:
+    st.sidebar.error(f"⚠️ 尚未为模型 {model_choice} 配置 API Key")
+    st.sidebar.markdown("""
+    **请设置环境变量：**
+    - OpenAI: `OPENAI_API_KEY`
+    - 豆包: `DOUBAO_API_KEY`
+    - DeepSeek: `DEEPSEEK_API_KEY`
+    - Moonshot: `MOONSHOT_API_KEY`
+    
+    **设置方法：**
+    ```bash
+    # Linux/Mac
+    export OPENAI_API_KEY="你的密钥"
+    
+    # Windows
+    set OPENAI_API_KEY=你的密钥
+    ```
+    """)
 
 # ======== 主体部分 ========
 st.markdown("<h1 style='text-align: center;'>汉语词类隶属度检测判类</h1>", unsafe_allow_html=True)
@@ -517,7 +551,7 @@ if confirm:
     if not word:
         st.warning("请输入一个词语后确认。")
     else:
-        if not API_KEY or API_KEY == "sk-your-moonshot-key":
+        if not API_KEY or API_KEY in ["", "sk-your-moonshot-key"]:
             st.error("未找到有效 API Key，请检查配置。")
             scores_all, raw_out, predicted_pos = {}, "", "无"
         else:
@@ -527,6 +561,8 @@ if confirm:
                         word, PROVIDER, MODEL_NAME, API_KEY)
                 except Exception as e:
                     st.error(f"模型调用出错：{e}")
+                    import traceback
+                    traceback.print_exc()
                     scores_out, raw_out, predicted_pos = {}, str(e), "错误"
 
         # 仅在 scores_all 有内容时才遍历
@@ -536,6 +572,7 @@ if confirm:
             st.text_area("原始输出", raw_out, height=200)
         else:
             st.info("未获得有效评分结果。请检查 API Key 或网络连接。")
+            st.text_area("错误信息", raw_out, height=200)
     
         # 计算每个词类总分与归一化隶属度（0~1）
         pos_totals = {}
@@ -599,23 +636,25 @@ if confirm:
         else:
             st.warning("没有可用的隶属度数据来显示表格。")
 
-        # 折叠详细规则判断（默认收起）
-        with st.expander("展开：查看各词类的规则明细与得分（详细）"):
-            for pos, rules in RULE_SETS.items():
-                st.markdown(f"**{pos}**（隶属度：{pos_normed.get(pos, 0)}）")
-                rows = []
-                scores_for_pos = scores_all.get(pos, {r["name"]: 0 for r in rules})
-                for r in rules:
-                    nm = r["name"]
-                    sc = scores_for_pos.get(nm, 0)
-                    decision = "是" if sc == r["match_score"] else ("否" if sc == r["mismatch_score"] else "")
-                    rows.append({"规则": nm, "描述": r["desc"], "得分": sc, "判定": decision})
-                if rows:
-                    st.table(pd.DataFrame(rows))
-                else:
-                    st.write("（该词类当前无规则条目）")
-                st.markdown("---")
-
-        # 可选：显示原始模型输出
-        with st.expander("查看原始模型文本 / 响应"):
-            st.code(raw_out if raw_out else "(无)")
+# 添加API测试按钮
+st.sidebar.markdown("---")
+if st.sidebar.button("测试API连接"):
+    st.sidebar.info("正在测试API连接...")
+    
+    test_messages = [
+        {"role": "user", "content": "测试API连接，请返回'测试成功'"}
+    ]
+    
+    ok, resp, err = call_llm_api(
+        messages=test_messages,
+        provider=PROVIDER,
+        model=MODEL_NAME,
+        api_key=API_KEY,
+        max_tokens=20
+    )
+    
+    if ok:
+        st.sidebar.success("✅ API连接成功！")
+        st.sidebar.json(resp)
+    else:
+        st.sidebar.error(f"❌ API连接失败: {err}")
