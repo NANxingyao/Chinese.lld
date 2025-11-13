@@ -492,7 +492,6 @@ model_choice = st.sidebar.selectbox("选择模型", list(MODEL_OPTIONS.keys()))
 selected_model = MODEL_OPTIONS[model_choice]
 
 st.sidebar.markdown(f"**当前模型：** {model_choice}")
-st.sidebar.markdown(f"**API 地址：** `{selected_model['api_url']}`")
 st.sidebar.markdown(f"**模型名称：** `{selected_model['model']}`")
 
 # 获取选中模型的配置
