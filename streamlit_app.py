@@ -567,8 +567,6 @@ model_choice = st.sidebar.selectbox("选择模型", list(MODEL_OPTIONS.keys()))
 selected_model = MODEL_OPTIONS[model_choice]
 
 st.sidebar.markdown(f"**当前模型：** {model_choice}")
-st.sidebar.markdown(f"**API 地址：** `{selected_model['api_url']}`")
-st.sidebar.markdown("⚙️ 请在系统环境变量中设置对应的 API Key：")
 st.sidebar.code(selected_model["api_key_name"], language="bash")
 
 # 获取环境变量 API Key
