@@ -630,14 +630,20 @@ if confirm:
     if not word:
         st.warning("请输入一个词语后确认。")
     else:
-        with st.spinner("模型打分判类中……"):
-            provider = "openai"  # 或你在 MODEL_CONFIGS 中定义的提供商
-            model = "gpt-3.5-turbo"  # 你使用的模型名
-            api_key = st.secrets["OPENAI_API_KEY"]  # 或你的 api_key
+        # 读取 API Key
+        import os
+        api_key = st.secrets.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            st.error("未找到 OpenAI API Key，请在 .streamlit/secrets.toml 或环境变量中设置 OPENAI_API_KEY")
+        else:
+            with st.spinner("模型打分判类中……"):
+                provider = "openai"         # 或你在 MODEL_CONFIGS 中定义的提供商
+                model = "gpt-3.5-turbo"     # 你使用的模型名
 
-            # 调用模型
-            scores_all, raw_out, predicted_pos = ask_model_for_pos_and_scores(word, provider, model, api_key)
+                # 调用模型
+                scores_all, raw_out, predicted_pos = ask_model_for_pos_and_scores(word, provider, model, api_key)
 
+              
         # 计算每个词类总分与归一化隶属度（0~1）
         pos_totals = {}
         pos_normed = {}
