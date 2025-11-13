@@ -7,9 +7,6 @@ import pandas as pd
 import plotly.graph_objects as go
 from typing import Tuple, Dict, Any
 
-# 兼容旧函数使用
-MODEL_CONFIGS = MODEL_OPTIONS
-
 # ===============================
 # 模型配置与 API Key（可直接修改或使用环境变量 / st.secrets）
 # ===============================
@@ -363,8 +360,8 @@ def call_llm_api(messages: list, provider: str, model: str, api_key: str,
     if not api_key:
         return False, {"error": "API Key 为空"}, "API Key 未提供"
 
-    if provider not in MODEL_CONFIGS:
-        return False, {"error": f"未知模型提供商 {provider}"}, "未知模型"
+   if provider not in MODEL_OPTIONS:
+    raise ValueError(f"未知 provider: {provider}")
 
     cfg = MODEL_CONFIGS[provider]
     url = cfg["base_url"].rstrip("/") + cfg.get("endpoint", "/chat/completions")
