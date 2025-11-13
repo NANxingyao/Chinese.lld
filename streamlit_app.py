@@ -577,11 +577,6 @@ if not API_KEY:
     st.sidebar.warning(f"未检测到 {API_KEY_ENV_NAME}，请在系统环境变量中设置对应 Key。")
 
 # ======== 主体部分 ========
-# 顶部标题
-st.markdown("<h1 style='text-align: center;'>汉语词类隶属度检测判类</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: grey;'>输入单个词 → 模型自动判类并返回各词类规则得分与隶属度（标准化 0~1）</p>", unsafe_allow_html=True)
-st.write("")
-
 # 居中输入框
 c1, c2, c3 = st.columns([1, 2, 1])
 with c2:
