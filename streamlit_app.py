@@ -654,7 +654,6 @@ if confirm:
     else:
         with st.spinner("模型打分判类中……"):
             scores_all, raw_out, predicted_pos = ask_model_for_pos_and_scores(word)
-
         # 计算每个词类总分与归一化隶属度（0~1）
         pos_totals = {}
         pos_normed = {}
