@@ -441,7 +441,7 @@ def map_to_allowed_score(rule: dict, raw_val) -> int:
 # 主逻辑：请求模型进行词类判定
 # ===============================
 # ===============================
-# 通用 LLM 调用函数
+# 调用 LLM 接口
 # ===============================
 def call_llm_api(messages: list,
                  provider: str,
@@ -450,10 +450,10 @@ def call_llm_api(messages: list,
                  max_tokens: int = 1024,
                  temperature: float = 0.0,
                  timeout: int = 30,
-                 **kwargs) -> Tuple[bool, dict]:
+                 **kwargs) -> Tuple[bool, dict, str]:
 
     if provider not in MODEL_CONFIGS:
-        return False, {"error": f"未知的模型提供商: {provider}"}
+        return False, {"error": f"未知的模型提供商: {provider}"}, ""
 
     cfg = MODEL_CONFIGS[provider]
     url = cfg["base_url"].rstrip("/") + cfg["endpoint"]
@@ -463,20 +463,9 @@ def call_llm_api(messages: list,
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=timeout)
         r.raise_for_status()
-        return True, r.json()
-    except Exception as e:
-        text = ""
-        try:
-            text = r.text
-        except:
-            pass
-        return False, {"error": str(e), "resp_text": text}
+        result = r.json()
 
-    try:
-        response = requests.post(API_URL, headers=headers, data=json.dumps(data), timeout=60)
-        result = response.json()
-
-        # 兼容不同模型的返回字段
+        # 提取原始文本
         if "choices" in result:
             raw_text = result["choices"][0]["message"]["content"]
         elif "output" in result:
@@ -484,27 +473,43 @@ def call_llm_api(messages: list,
         else:
             raw_text = str(result)
 
-        # 尝试解析出得分
+        # 尝试解析 JSON 得分
         try:
-            score_json = json.loads(raw_text)
+            scores_all = json.loads(raw_text)
         except:
-            # 简单容错：从文本中提取伪JSON
             import re
             m = re.search(r"\{.*\}", raw_text, re.S)
-            score_json = json.loads(m.group(0)) if m else {}
+            scores_all = json.loads(m.group(0)) if m else {}
 
         # 提取最高分词类
-        if score_json:
-            predicted_pos = max(score_json, key=score_json.get)
-        else:
-            predicted_pos = "未知"
+        predicted_pos = max(scores_all, key=scores_all.get) if scores_all else "未知"
 
-        return score_json, raw_text, predicted_pos
+        return True, scores_all, predicted_pos
 
     except Exception as e:
-        st.error(f"模型调用出错：{e}")
-        return {}, "", "错误"
+        return False, {"error": str(e)}, ""
 
+# ===============================
+# 获取词类和分数
+# ===============================
+def ask_model_for_pos_and_scores(word: str,
+                                 provider: str,
+                                 model: str,
+                                 api_key: str) -> Tuple[Dict[str, int], str, str]:
+
+    prompt = f"请为汉字 '{word}' 生成词类隶属度评分，输出 JSON 格式，例如: {{'名词': 80, '动词': 20}}"
+
+    success, scores_all, predicted_pos = call_llm_api(
+        messages=[{"role": "user", "content": prompt}],
+        provider=provider,
+        model=model,
+        api_key=api_key
+    )
+
+    # 将原始输出保存为文本
+    raw_out = json.dumps(scores_all, ensure_ascii=False) if success else ""
+
+    return scores_all, raw_out, predicted_pos
 def ask_model_for_pos_and_scores(word: str,
                                  provider: str,
                                  model: str,
