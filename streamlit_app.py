@@ -6,6 +6,7 @@ import os
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import requests, json
 from typing import Tuple, Dict, Any
 
 # ===============================
@@ -473,6 +474,65 @@ def map_to_allowed_score(rule: dict, raw_val) -> int:
 # ===============================
 # 主逻辑：请求模型进行词类判定
 # ===============================
+def ask_model_for_pos_and_scores(word: str):
+    """
+    调用所选模型 API，返回：
+    - scores_all: 各词类的规则得分
+    - raw_out: 模型原始输出
+    - predicted_pos: 模型预测的主词类
+    """
+
+    prompt = f"""请判断汉语词语“{word}”的词类，并基于规则给出各主要词类（名词、动词、形容词、副词、助词、连词、介词、量词、代词、数词等）的隶属度评分（0-1），格式如下：
+{{"名词": 0.2, "动词": 0.8, "形容词": 0.3, "副词": 0.6, ...}}。同时说明理由。
+"""
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {API_KEY}"
+    }
+
+    data = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": "你是一个汉语语法学家，精通词类划分与语义角色分析。"},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.2
+    }
+
+    try:
+        response = requests.post(API_URL, headers=headers, data=json.dumps(data), timeout=60)
+        result = response.json()
+
+        # 兼容不同模型的返回字段
+        if "choices" in result:
+            raw_text = result["choices"][0]["message"]["content"]
+        elif "output" in result:
+            raw_text = result["output"]
+        else:
+            raw_text = str(result)
+
+        # 尝试解析出得分
+        try:
+            score_json = json.loads(raw_text)
+        except:
+            # 简单容错：从文本中提取伪JSON
+            import re
+            m = re.search(r"\{.*\}", raw_text, re.S)
+            score_json = json.loads(m.group(0)) if m else {}
+
+        # 提取最高分词类
+        if score_json:
+            predicted_pos = max(score_json, key=score_json.get)
+        else:
+            predicted_pos = "未知"
+
+        return score_json, raw_text, predicted_pos
+
+    except Exception as e:
+        st.error(f"模型调用出错：{e}")
+        return {}, "", "错误"
+
 def ask_model_for_pos_and_scores(word: str,
                                  provider: str,
                                  model: str,
