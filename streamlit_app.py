@@ -275,7 +275,7 @@ RULE_SETS = {
         {"name": "DPR4_不能带宾语和补语", "desc": "不能带宾语和补语", "match_score": 20, "mismatch_score": 0},
         {"name": "DPR5_可受'不/也'等副词修饰（针对谓代）或不能后附方位（针对体代）", "desc": "混合规则，按具体代词类型判定", "match_score": 20, "mismatch_score": -20},
     ],
-    # 3.4 系数词、位数词、合成数词等：示例性规则（你可以继续补全）
+    # 3.4 系数词、位数词、合成数词等：
     "系数词": [
         {"name": "NUM_CO1_黏着词不能单独回答", "desc": "系数词是黏着词不能单独回答", "match_score": 20, "mismatch_score": -20},
         {"name": "NUM_CO2_可在量词前构数量词组", "desc": "可以用在量词前，一起构成数量词组", "match_score": 20, "mismatch_score": -20},
@@ -587,7 +587,6 @@ if confirm:
         st.subheader("判定摘要")
         st.markdown(f"- **输入词**： `{word}`")
         st.markdown(f"- **模型预测词类**： **{predicted_pos}**")
-        st.markdown(f"- **解析策略 / 原始响应摘要**： `{raw_out[:100]}...`")
 
         # 排名与表格（只显示前 10）
         ranked = []
@@ -653,6 +652,5 @@ if st.sidebar.button("测试大模型连接"):
     
     if ok:
         st.sidebar.success("✅ 大模型连接成功！")
-        st.sidebar.json(resp)
     else:
         st.sidebar.error(f"❌ 大模型连接失败: {err}")
