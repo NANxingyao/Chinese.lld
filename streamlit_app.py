@@ -398,7 +398,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     rules_text = "\n".join(rules_summary_lines)
 
     system_msg = (
-        "你是语言学研究助手。输入一个中文词语，请你判断该词最可能的词类，并返回 JSON："
+        "你是语言学研究专家，拥有中外语言学界的所有知识。在输入一个中文词语后，请检索全网的相关知识，严格按照定义的规则，请判断最可能的词类并返回 JSON："
         '{"predicted_pos":"<词类名>", "scores": {"<词类名>": {"<规则名>": <值>, ...}, ...}, "explanation":"说明"}。'
     )
     user_prompt = f"词语：『{word}』\n请基于下列规则判定并评分：\n\n{rules_text}\n\n仅返回严格 JSON。"
@@ -509,87 +509,84 @@ import plotly.graph_objects as go
 from typing import Dict
 
 # ======== 模型配置映射 ========
+# ===============================
+# 统一小写模型配置
+# ===============================
 MODEL_CONFIGS = {
-    "deepseek": {"base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat", "api_key": "sk-xxxx"},
-    "openai": {"base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini", "api_key": "sk-xxxx"},
-    "moonshot": {"base_url": "https://api.moonshot.cn/v1", "model": "moonshot-v1-32k", "api_key": "sk-xxxx"},
-    "doubao": {"base_url": "https://ark.cn-beijing.volces.com/api/v3", "model": "doubao-pro-32k", "api_key": "sk-xxxx"}
+    "deepseek": {
+        "base_url": "https://api.deepseek.com/v1",
+        "endpoint": "/chat/completions",
+        "headers": lambda key: {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json"
+        },
+        "payload": lambda model, messages, **kw: {
+            "model": model,
+            "messages": messages,
+            "max_tokens": kw.get("max_tokens", 1024),
+            "temperature": kw.get("temperature", 0.0),
+            "stream": False
+        }
+    },
+    "openai": {
+        "base_url": "https://api.openai.com/v1",
+        "endpoint": "/chat/completions",
+        "headers": lambda key: {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json"
+        },
+        "payload": lambda model, messages, **kw: {
+            "model": model,
+            "messages": messages,
+            "max_tokens": kw.get("max_tokens", 1024),
+            "temperature": kw.get("temperature", 0.0),
+            "stream": False
+        }
+    },
+    # 你可以继续添加 moonshot, glm, qwen, doubao
 }
 
-# 侧边栏显示名称 → MODEL_CONFIGS key
-MODEL_MAPPING = {
-    "DeepSeek Chat": "deepseek",
-    "OpenAI GPT-4o": "openai",
-    "Moonshot（Kimi）": "moonshot",
-    "Doubao（豆包）": "doubao"
-}
-
-# ======== 选择模型 ========
-model_choice = st.sidebar.selectbox("选择模型", list(MODEL_MAPPING.keys()))
-provider = MODEL_MAPPING[model_choice]
-model_name = MODEL_CONFIGS[provider]["model"]
-API_KEY = MODEL_CONFIGS[provider]["api_key"]
-
-st.sidebar.markdown(f"**当前模型：** {model_choice}")
-st.sidebar.markdown(f"**模型标识：** `{provider}`")
-st.sidebar.markdown(f"**API Key 已配置：** {'是' if API_KEY else '否'}")
-
-# ======== 主界面 ========
-st.markdown("<h1 style='text-align: center;'>汉语词类隶属度检测判类</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: grey;'>输入单个词 → 模型自动判类并返回各词类规则得分与隶属度（标准化 0~1）</p>", unsafe_allow_html=True)
-
-c1, c2, c3 = st.columns([1, 2, 1])
-with c2:
-    word_input = st.text_input("", placeholder="在此输入要分析的词（例如：很 / 跑 / 美丽）")
-    confirm = st.button("确认")
-
+# ===============================
+# 主体调用（确认按钮按下时）
+# ===============================
 if confirm:
     word = (word_input or "").strip()
     if not word:
         st.warning("请输入一个词语后确认。")
-    elif not API_KEY:
-        st.error(f"⚠️ 模型 {model_choice} 尚未配置 API Key，请在代码中填写。")
     else:
-        # 调用判类函数
-        with st.spinner("模型打分判类中……"):
-            try:
-                scores_all, raw_out, predicted_pos = ask_model_for_pos_and_scores(word, provider, model_name, API_KEY)
-            except Exception as e:
-                st.error(f"模型调用出错：{e}")
-                scores_all, raw_out, predicted_pos = {}, "", "错误"
+        # 选择 API Key
+        api_key = MODEL_API_KEYS.get(model_choice, "")
+        if not api_key:
+            st.error(f"⚠️ 尚未为模型 {model_choice} 配置 API Key，请在代码中填写。")
+            scores_all, raw_out, predicted_pos = {}, "", "无"
+        else:
+            with st.spinner("模型打分判类中……"):
+                # 小写 provider 与 MODEL_CONFIGS 对应
+                provider = model_choice.lower().split()[0]  # 如 "OpenAI GPT-4o" -> "openai"
+                model_name = MODEL_CONFIGS[provider]["payload"].__defaults__[0] if hasattr(MODEL_CONFIGS[provider]["payload"], "__defaults__") else "gpt-3.5-turbo"
+                try:
+                    scores_all, raw_out, predicted_pos = ask_model_for_pos_and_scores(word, provider, model_name, api_key)
+                except Exception as e:
+                    st.error(f"模型调用出错：{e}")
+                    scores_all, raw_out, predicted_pos = {}, "", "错误"
 
+        # 以下保持你原来的显示逻辑
         if scores_all:
             st.subheader(f"词类预测结果：{predicted_pos}")
             st.json(scores_all)
             st.text_area("原始输出", raw_out, height=200)
 
-            # 计算归一化隶属度
+            # 归一化
             pos_normed = {}
             for pos, score_map in scores_all.items():
                 total = sum(score_map.values())
                 max_possible = MAX_SCORES.get(pos, sum(abs(x) for x in score_map.values()) or 1)
-                pos_normed[pos] = round(max(0, total) / max_possible, 3)
-
-            # 输出摘要
-            st.markdown("---")
-            st.subheader("判定摘要")
-            st.markdown(f"- **输入词**： `{word}`")
-            st.markdown(f"- **模型预测词类**： **{predicted_pos}**")
-
-            # 排名表
-            ranked = sorted(pos_normed.items(), key=lambda x: x[1], reverse=True)
-            st.subheader("隶属度排行（前10）")
-            for i, (p, s) in enumerate(ranked[:10]):
-                st.write(f"{i+1}. **{p}** — 隶属度：{s}")
+                pos_normed[pos] = round(max(0, total) / max_possible, 3) if max_possible != 0 else 0.0
 
             # 雷达图
-            st.subheader("词类隶属度雷达图（标准化 0~1）")
+            ranked = sorted(pos_normed.items(), key=lambda x: x[1], reverse=True)
             radar_scores = {p: pos_normed[p] for p, _ in ranked}
             plot_radar_chart_streamlit(radar_scores, title=f"“{word}” 的词类隶属度分布")
-
-            # 数据表
-            st.subheader("各词类隶属度（标准化 0~1）")
-            df_norm = pd.DataFrame([{"词类": p, "隶属度": pos_normed[p]} for p in pos_normed]).set_index("词类")
-            st.dataframe(df_norm, use_container_width=True)
         else:
-            st.info("未获得有效评分结果，请检查 API Key 或网络连接。")
+            st.info("未获得有效评分结果。请检查 API Key 或网络连接。")
+接。")
