@@ -637,11 +637,11 @@ if confirm:
 
 # 添加API测试按钮
 st.sidebar.markdown("---")
-if st.sidebar.button("测试API连接"):
-    st.sidebar.info("正在测试API连接...")
+if st.sidebar.button("测试大模型连接"):
+    st.sidebar.info("正在测试大模型连接...")
     
     test_messages = [
-        {"role": "user", "content": "测试API连接，请返回'测试成功'"}
+        {"role": "user", "content": "测试大模型连接，请返回'测试成功'"}
     ]
     
     ok, resp, err = call_llm_api(
@@ -653,7 +653,7 @@ if st.sidebar.button("测试API连接"):
     )
     
     if ok:
-        st.sidebar.success("✅ API连接成功！")
+        st.sidebar.success("✅ 大模型连接成功！")
         st.sidebar.json(resp)
     else:
-        st.sidebar.error(f"❌ API连接失败: {err}")
+        st.sidebar.error(f"❌ 大模型连接失败: {err}")
