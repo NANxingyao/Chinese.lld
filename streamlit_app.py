@@ -393,13 +393,8 @@ def call_llm_api(messages: list, provider: str, model: str, api_key: str,
     payload = cfg["payload"](model, messages, max_tokens=max_tokens, temperature=temperature)
 
     try:
-        st.info(f"正在调用 {provider} API...")
-        st.info(f"URL: {url}")
-        st.info(f"模型: {model}")
-        
+
         r = requests.post(url, headers=headers, json=payload, timeout=timeout)
-        
-        st.info(f"响应状态码: {r.status_code}")
         
         if r.status_code != 200:
             return False, {"error": f"HTTP错误 {r.status_code}", "content": r.text}, f"HTTP错误 {r.status_code}: {r.text[:200]}"
