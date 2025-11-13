@@ -571,8 +571,9 @@ st.sidebar.code(selected_model["api_key_name"], language="bash")
 
 # 获取环境变量 API Key
 API_URL = selected_model["api_url"]
-API_KEY_ENV_NAME = selected_model["api_key_name"]
-API_KEY = os.getenv(API_KEY_ENV_NAME, "")
+API_KEY = MODEL_CONFIG[selected_model]["key"]
+BASE_URL = MODEL_CONFIG[selected_model]["api"]
+
 
 if not API_KEY:
     st.sidebar.warning(f"未检测到 {API_KEY_ENV_NAME}，请在系统环境变量中设置对应 Key。")
