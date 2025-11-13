@@ -541,9 +541,21 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
 # ===============================
 
 # ======== 模型选择部分（侧边栏） ========
-# ===============================
-# 固定写入 API Key（无需环境变量）
-# ===============================
+MODEL_OPTIONS = {
+    "DeepSeek Chat": {
+        "api_url": "https://api.deepseek.com/v1/chat/completions"
+    },
+    "OpenAI GPT-4o": {
+        "api_url": "https://api.openai.com/v1/chat/completions"
+    },
+    "Moonshot（Kimi）": {
+        "api_url": "https://api.moonshot.cn/v1/chat/completions"
+    },
+    "Doubao（豆包）": {
+        "api_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+    }
+}
+
 MODEL_API_KEYS = {
     "DeepSeek Chat": "sk-1f346646d29947d0a5e29dbaa37476b8",
     "OpenAI GPT-4o": "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",
