@@ -7,6 +7,36 @@ import pandas as pd
 import plotly.graph_objects as go
 from typing import Tuple, Dict, Any
 
+# 用于兼容 call_llm_api 旧函数
+MODEL_CONFIGS = {
+    "deepseek": {
+        "base_url": "https://api.deepseek.com/v1",
+        "endpoint": "/chat/completions",
+        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        "payload": lambda model, messages, **kw: {
+            "model": model,
+            "messages": messages,
+            "max_tokens": kw.get("max_tokens", 1024),
+            "temperature": kw.get("temperature", 0.0),
+            "stream": False
+        }
+    },
+    "openai": {
+        "base_url": "https://api.openai.com/v1",
+        "endpoint": "/chat/completions",
+        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        "payload": lambda model, messages, **kw: {
+            "model": model,
+            "messages": messages,
+            "max_tokens": kw.get("max_tokens", 1024),
+            "temperature": kw.get("temperature", 0.0),
+            "stream": False
+        }
+    }
+    # 其他模型可按需添加
+}
+
+
 # ===============================
 # 模型配置与 API Key（可直接修改或使用环境变量 / st.secrets）
 # ===============================
