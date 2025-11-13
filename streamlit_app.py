@@ -503,18 +503,42 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
 # ===============================
 # Streamlit UI
 # ===============================
-st.set_page_config(page_title="汉语词类隶属度检测", layout="centered")
+import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
+from typing import Dict
 
-st.markdown("<h1 style='text-align:center;'>汉语词类隶属度检测判类</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align:center;color:grey;'>输入单个词 → 模型自动判类并返回各词类规则得分与隶属度（0~1）</p>", unsafe_allow_html=True)
+# ======== 模型配置映射 ========
+MODEL_CONFIGS = {
+    "deepseek": {"base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat", "api_key": "sk-xxxx"},
+    "openai": {"base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini", "api_key": "sk-xxxx"},
+    "moonshot": {"base_url": "https://api.moonshot.cn/v1", "model": "moonshot-v1-32k", "api_key": "sk-xxxx"},
+    "doubao": {"base_url": "https://ark.cn-beijing.volces.com/api/v3", "model": "doubao-pro-32k", "api_key": "sk-xxxx"}
+}
 
-model_choice = st.sidebar.selectbox("选择模型", list(MODEL_OPTIONS.keys()))
-selected_model = MODEL_OPTIONS[model_choice]
-API_KEY = selected_model.get("api_key") or os.environ.get("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY")
-provider = selected_model["provider"]
-model_name = selected_model["model"]
+# 侧边栏显示名称 → MODEL_CONFIGS key
+MODEL_MAPPING = {
+    "DeepSeek Chat": "deepseek",
+    "OpenAI GPT-4o": "openai",
+    "Moonshot（Kimi）": "moonshot",
+    "Doubao（豆包）": "doubao"
+}
 
-c1, c2, c3 = st.columns([1,2,1])
+# ======== 选择模型 ========
+model_choice = st.sidebar.selectbox("选择模型", list(MODEL_MAPPING.keys()))
+provider = MODEL_MAPPING[model_choice]
+model_name = MODEL_CONFIGS[provider]["model"]
+API_KEY = MODEL_CONFIGS[provider]["api_key"]
+
+st.sidebar.markdown(f"**当前模型：** {model_choice}")
+st.sidebar.markdown(f"**模型标识：** `{provider}`")
+st.sidebar.markdown(f"**API Key 已配置：** {'是' if API_KEY else '否'}")
+
+# ======== 主界面 ========
+st.markdown("<h1 style='text-align: center;'>汉语词类隶属度检测判类</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: grey;'>输入单个词 → 模型自动判类并返回各词类规则得分与隶属度（标准化 0~1）</p>", unsafe_allow_html=True)
+
+c1, c2, c3 = st.columns([1, 2, 1])
 with c2:
     word_input = st.text_input("", placeholder="在此输入要分析的词（例如：很 / 跑 / 美丽）")
     confirm = st.button("确认")
@@ -523,60 +547,51 @@ if confirm:
     word = (word_input or "").strip()
     if not word:
         st.warning("请输入一个词语后确认。")
+    elif not API_KEY:
+        st.error(f"⚠️ 模型 {model_choice} 尚未配置 API Key，请在代码中填写。")
     else:
-        if not API_KEY:
-            st.error("未找到 API Key，请在代码、环境变量或 .streamlit/secrets.toml 中配置。")
-            scores_all, raw_out, predicted_pos = {}, "", "无"
-        else:
-            with st.spinner("模型打分判类中……"):
+        # 调用判类函数
+        from your_module import ask_model_for_pos_and_scores, RULE_SETS, MAX_SCORES, plot_radar_chart_streamlit
+        
+        with st.spinner("模型打分判类中……"):
+            try:
                 scores_all, raw_out, predicted_pos = ask_model_for_pos_and_scores(word, provider, model_name, API_KEY)
+            except Exception as e:
+                st.error(f"模型调用出错：{e}")
+                scores_all, raw_out, predicted_pos = {}, "", "错误"
 
-        if not scores_all:
-            st.info("未获得有效评分结果。请检查 API Key 或网络连接。")
-            scores_all = {}
+        if scores_all:
+            st.subheader(f"词类预测结果：{predicted_pos}")
+            st.json(scores_all)
+            st.text_area("原始输出", raw_out, height=200)
 
-        # 计算归一化隶属度
-        pos_normed = {}
-        for pos, score_map in scores_all.items():
-            total = sum(score_map.values())
-            max_possible = MAX_SCORES.get(pos, sum(abs(x) for x in score_map.values()) or 1)
-            pos_normed[pos] = round(max(0, total)/max_possible, 3) if max_possible else 0.0
+            # 计算归一化隶属度
+            pos_normed = {}
+            for pos, score_map in scores_all.items():
+                total = sum(score_map.values())
+                max_possible = MAX_SCORES.get(pos, sum(abs(x) for x in score_map.values()) or 1)
+                pos_normed[pos] = round(max(0, total) / max_possible, 3)
 
-        # 输出摘要
-        st.subheader(f"词类预测结果：{predicted_pos}")
-        st.json(scores_all)
-        st.text_area("原始输出", raw_out, height=200)
+            # 输出摘要
+            st.markdown("---")
+            st.subheader("判定摘要")
+            st.markdown(f"- **输入词**： `{word}`")
+            st.markdown(f"- **模型预测词类**： **{predicted_pos}**")
 
-        # 排行前10
-        ranked = sorted(pos_normed.items(), key=lambda x:x[1], reverse=True)
-        st.subheader("隶属度排行（前10）")
-        for i, (p,s) in enumerate(ranked[:10]):
-            st.write(f"{i+1}. **{p}** — 隶属度：{s}")
+            # 排名表
+            ranked = sorted(pos_normed.items(), key=lambda x: x[1], reverse=True)
+            st.subheader("隶属度排行（前10）")
+            for i, (p, s) in enumerate(ranked[:10]):
+                st.write(f"{i+1}. **{p}** — 隶属度：{s}")
 
-        radar_scores = {p: pos_normed[p] for p,_ in ranked}
-        st.subheader("词类隶属度雷达图（0~1）")
-        plot_radar_chart_streamlit(radar_scores, f"“{word}” 的词类隶属度分布")
+            # 雷达图
+            st.subheader("词类隶属度雷达图（标准化 0~1）")
+            radar_scores = {p: pos_normed[p] for p, _ in ranked}
+            plot_radar_chart_streamlit(radar_scores, title=f"“{word}” 的词类隶属度分布")
 
-        # 各词类归一化表格
-        st.subheader("各词类隶属度（标准化 0~1）")
-        df_norm = pd.DataFrame([{"词类":p,"隶属度":pos_normed[p]} for p in pos_normed]).set_index("词类")
-        st.dataframe(df_norm,use_container_width=True)
-
-        # 详细规则
-        with st.expander("展开：查看各词类规则明细与得分"):
-            for pos, rules in RULE_SETS.items():
-                st.markdown(f"**{pos}**（隶属度：{pos_normed.get(pos,0)}）")
-                rows = []
-                scores_for_pos = scores_all.get(pos, {r["name"]:0 for r in rules})
-                for r in rules:
-                    nm = r["name"]
-                    sc = scores_for_pos.get(nm,0)
-                    decision = "是" if sc==r["match_score"] else ("否" if sc==r["mismatch_score"] else "")
-                    rows.append({"规则":nm,"描述":r["desc"],"得分":sc,"判定":decision})
-                if rows:
-                    st.table(pd.DataFrame(rows))
-                else:
-                    st.write("（该词类当前无规则条目）")
-
-        with st.expander("查看原始模型文本 / 响应"):
-            st.code(raw_out if raw_out else "(无)")
+            # 数据表
+            st.subheader("各词类隶属度（标准化 0~1）")
+            df_norm = pd.DataFrame([{"词类": p, "隶属度": pos_normed[p]} for p in pos_normed]).set_index("词类")
+            st.dataframe(df_norm, use_container_width=True)
+        else:
+            st.info("未获得有效评分结果，请检查 API Key 或网络连接。")
