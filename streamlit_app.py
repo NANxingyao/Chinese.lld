@@ -440,31 +440,37 @@ def map_to_allowed_score(rule: dict, raw_val) -> int:
 # ===============================
 # 主逻辑：请求模型进行词类判定
 # ===============================
-def ask_model_for_pos_and_scores(word: str):
-    """
-    调用所选模型 API，返回：
-    - scores_all: 各词类的规则得分
-    - raw_out: 模型原始输出
-    - predicted_pos: 模型预测的主词类
-    """
+# ===============================
+# 通用 LLM 调用函数
+# ===============================
+def call_llm_api(messages: list,
+                 provider: str,
+                 model: str,
+                 api_key: str,
+                 max_tokens: int = 1024,
+                 temperature: float = 0.0,
+                 timeout: int = 30,
+                 **kwargs) -> Tuple[bool, dict]:
 
-    prompt = f"""请判断汉语词语“{word}”的词类，并基于规则给出各主要词类（名词、动词、形容词、副词、助词、连词、介词、量词、代词、数词等）的隶属度评分（0-1），格式如下：
-{{"名词": 0.2, "动词": 0.8, "形容词": 0.3, "副词": 0.6, ...}}。同时说明理由。
-"""
+    if provider not in MODEL_CONFIGS:
+        return False, {"error": f"未知的模型提供商: {provider}"}
 
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {API_KEY}"
-    }
+    cfg = MODEL_CONFIGS[provider]
+    url = cfg["base_url"].rstrip("/") + cfg["endpoint"]
+    headers = cfg["headers"](api_key)
+    payload = cfg["payload"](model, messages, max_tokens=max_tokens, temperature=temperature, **kwargs)
 
-    data = {
-        "model": "deepseek-chat",
-        "messages": [
-            {"role": "system", "content": "你是一个汉语语法学家，精通词类划分与语义角色分析。"},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.2
-    }
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        r.raise_for_status()
+        return True, r.json()
+    except Exception as e:
+        text = ""
+        try:
+            text = r.text
+        except:
+            pass
+        return False, {"error": str(e), "resp_text": text}
 
     try:
         response = requests.post(API_URL, headers=headers, data=json.dumps(data), timeout=60)
