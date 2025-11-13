@@ -551,8 +551,6 @@ if confirm:
         st.error(f"⚠️ 模型 {model_choice} 尚未配置 API Key，请在代码中填写。")
     else:
         # 调用判类函数
-        from your_module import ask_model_for_pos_and_scores, RULE_SETS, MAX_SCORES, plot_radar_chart_streamlit
-        
         with st.spinner("模型打分判类中……"):
             try:
                 scores_all, raw_out, predicted_pos = ask_model_for_pos_and_scores(word, provider, model_name, API_KEY)
