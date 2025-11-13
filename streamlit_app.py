@@ -7,6 +7,28 @@ import pandas as pd
 import plotly.graph_objects as go
 from typing import Tuple, Dict, Any
 
+# ===============================
+# 页面配置
+# ===============================
+st.set_page_config(
+    page_title="汉语词类隶属度检测",  # 页面标题
+    page_icon="📰",                  # 页面图标
+    layout="centered",               # 布局居中
+    initial_sidebar_state="collapsed",  # 初始折叠侧边栏
+    menu_items=None                  # 隐藏默认菜单
+)
+
+# 自定义CSS样式，隐藏Streamlit默认的顶部和底部元素
+hide_streamlit_style = """
+<style>
+/* 隐藏顶部菜单栏（Share / GitHub 等） */
+header {visibility: hidden;}
+/* 隐藏右下角“Manage app” */
+footer {visibility: hidden;}
+</style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
 # 用于兼容 call_llm_api 旧函数
 MODEL_CONFIGS = {
     "deepseek": {
