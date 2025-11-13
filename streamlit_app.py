@@ -624,26 +624,34 @@ with c2:
     word_input = st.text_input("", placeholder="在此输入要分析的词（例如：很 / 跑 / 美丽）")
     confirm = st.button("确认")
 
-# 当按下确认时，进行模型调用与展示
 if confirm:
     word = (word_input or "").strip()
     if not word:
         st.warning("请输入一个词语后确认。")
     else:
-        # 读取 API Key
         import os
         api_key = st.secrets.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
         if not api_key:
             st.error("未找到 OpenAI API Key，请在 .streamlit/secrets.toml 或环境变量中设置 OPENAI_API_KEY")
+            scores_all, raw_out, predicted_pos = {}, "", "无"
         else:
             with st.spinner("模型打分判类中……"):
-                provider = "openai"         # 或你在 MODEL_CONFIGS 中定义的提供商
-                model = "gpt-3.5-turbo"     # 你使用的模型名
+                provider = "openai"
+                model = "gpt-3.5-turbo"
+                try:
+                    scores_all, raw_out, predicted_pos = ask_model_for_pos_and_scores(word, provider, model, api_key)
+                except Exception as e:
+                    st.error(f"模型调用出错：{e}")
+                    scores_all, raw_out, predicted_pos = {}, "", "错误"
 
-                # 调用模型
-                scores_all, raw_out, predicted_pos = ask_model_for_pos_and_scores(word, provider, model, api_key)
-
-              
+        # 仅在 scores_all 有内容时才遍历
+        if scores_all:
+            st.subheader(f"词类预测结果：{predicted_pos}")
+            st.json(scores_all)
+            st.text_area("原始输出", raw_out, height=200)
+        else:
+            st.info("未获得有效评分结果。请检查 API Key 或网络连接。")
+    
         # 计算每个词类总分与归一化隶属度（0~1）
         pos_totals = {}
         pos_normed = {}
