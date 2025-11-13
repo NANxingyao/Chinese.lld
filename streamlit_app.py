@@ -1,7 +1,3 @@
-"""
-汉语词类隶属度检测判类 - 使用环境变量配置API密钥
-"""
-
 import streamlit as st
 import requests
 import json
@@ -84,7 +80,7 @@ MODEL_OPTIONS = {
         "provider": "moonshot",
         "model": "moonshot-v1-32k",
         "api_url": "https://api.moonshot.cn/v1/chat/completions",
-        "api_key": os.getenv("MOONSHOT_API_KEY", "sk-your-moonshot-key")
+        "api_key": os.getenv("MOONSHOT_API_KEY", "sk-l5FvRWegjM5DEk4AU71YPQ1QgvFPTHZIJOmq6qdssPY4sNtE")
     },
     "Doubao（豆包）": {
         "provider": "doubao",
