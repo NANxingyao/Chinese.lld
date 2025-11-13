@@ -86,7 +86,7 @@ MODEL_OPTIONS = {
         "provider": "doubao",
         "model": "doubao-pro-32k",
         "api_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-        "api_key": os.getenv("DOUBAO_API_KEY", "WmpRMlptTmxNRGM0TjJNMk5HUTBOR0ZtWVRsbU56TTNNakUyT0RVNU1EUQ==")
+        "api_key": os.getenv("DOUBAO_API_KEY", "TlRNd01qaGhPR1EwWWpBek5HRm1NbUZsWkRjNVptTXdOV00zTnpKaVlUZw==")
     }
 }
 
