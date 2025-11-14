@@ -556,19 +556,19 @@ if not API_KEY or API_KEY in ["", "sk-your-moonshot-key"]:
     st.sidebar.error(f"⚠️ 尚未为模型 {model_choice} 配置 API Key")
     st.sidebar.markdown("""
     **请设置环境变量：**
-    - OpenAI: `OPENAI_API_KEY`
-    - 豆包: `DOUBAO_API_KEY`
-    - DeepSeek: `DEEPSEEK_API_KEY`
-    - Moonshot: `MOONSHOT_API_KEY`
+    - OpenAI：`OPENAI_API_KEY`
+    - DeepSeek：`DEEPSEEK_API_KEY`
+    - Moonshot（Kimi）：`MOONSHOT_API_KEY`
+    - 豆包：`DOUBAO_API_KEY`
+    - 通义千问（Qwen）：`QWEN_API_KEY`
     
     **设置方法：**
     ```bash
-    # Linux/Mac
-    export OPENAI_API_KEY="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
-"
-    
+    # Linux / Mac
+    export QWEN_API_KEY="你的通义千问Key"
+
     # Windows
-    set OPENAI_API_KEY=你的密钥
+    set QWEN_API_KEY=你的密钥
     ```
     """)
 
@@ -594,7 +594,8 @@ if confirm:
             with st.spinner("模型打分判类中……"):
                 try:
                     scores_all, raw_out, predicted_pos = ask_model_for_pos_and_scores(
-                        word, PROVIDER, MODEL_NAME, API_KEY)
+                        word, PROVIDER, MODEL_NAME, API_KEY
+                    )
                 except Exception as e:
                     st.error(f"模型调用出错：{e}")
                     import traceback
