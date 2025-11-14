@@ -1,3 +1,4 @@
+#元素最齐全版本
 import streamlit as st
 import requests
 import json
@@ -141,37 +142,6 @@ MODEL_OPTIONS = {
         "model": "qwen-max",
         "api_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
         "api_key": os.getenv("QWEN_API_KEY", "sk-b3f7a1153e6f4a44804a296038aa86c5"),
-    },
-}
-MODEL_OPTIONS = {
-    "DeepSeek Chat": {
-        "provider": "deepseek",
-        "model": "deepseek-chat",
-        "env": "DEEPSEEK_API_KEY",   # 必须添加
-    },
-
-    "OpenAI GPT-4.1 Mini": {
-        "provider": "openai",
-        "model": "gpt-4.1-mini",
-        "env": "OPENAI_API_KEY",     # 必须添加
-    },
-
-    "Moonshot V1 8K": {
-        "provider": "moonshot",
-        "model": "moonshot-v1-8k",
-        "env": "MOONSHOT_API_KEY",   # 必须添加
-    },
-
-    "Doubao Lite": {
-        "provider": "doubao",
-        "model": "ep-20240620153346-v7o8p",
-        "env": "DOUBAO_API_KEY",     # 必须添加
-    },
-
-    "Qwen Turbo": {
-        "provider": "qwen",
-        "model": "qwen-turbo",
-        "env": "QWEN_API_KEY",       # 必须添加
     },
 }
 
@@ -580,30 +550,17 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
 # ===============================
 
 # ======== 模型选择部分（侧边栏） ========
-
-st.sidebar.header("模型选择")
-
-# 从 MODEL_OPTIONS 中选择模型
-model_choice = st.sidebar.selectbox("请选择模型", list(MODEL_OPTIONS.keys()))
+# 由侧边栏选择模型
+model_choice = st.sidebar.selectbox("选择模型", list(MODEL_OPTIONS.keys()))
 selected_model = MODEL_OPTIONS[model_choice]
 
 st.sidebar.markdown(f"**当前模型：** {model_choice}")
 st.sidebar.markdown(f"**模型名称：** `{selected_model['model']}`")
 
-# ========== 关键修复点 ==========  
-# 原来的 selected_model["api_key"] 不存在！  
-# 改为根据 provider 自动查找对应的环境变量
-
-provider = selected_model["provider"]
-model_name = selected_model["model"]
-env_name = selected_model["env"]  # 你需要在 MODEL_OPTIONS 里增加这个字段
-
-API_KEY = os.getenv(env_name, "")
-
-if not API_KEY:
-    st.sidebar.error(f"⚠ 未检测到环境变量：{env_name}")
-else:
-    st.sidebar.success(f"🔑 已加载 API Key（来自环境变量 {env_name}）")
+# 获取选中模型的配置
+API_KEY = selected_model["api_key"]
+PROVIDER = selected_model["provider"]
+MODEL_NAME = selected_model["model"]
 
 # 检查API密钥
 if not API_KEY or API_KEY in ["", "sk-your-moonshot-key"]:
@@ -659,7 +616,8 @@ if confirm:
         # 仅在 scores_all 有内容时才遍历
         if scores_all:
             st.subheader(f"词类预测结果：{predicted_pos}")
-            
+            st.json(scores_all)
+            st.text_area("原始输出", raw_out, height=200)
         else:
             st.info("未获得有效评分结果。请检查 API Key 或网络连接。")
             st.text_area("错误信息", raw_out, height=200)
@@ -763,4 +721,3 @@ if st.sidebar.button("测试大模型连接"):
         st.sidebar.success("✅ 大模型连接成功！")
     else:
         st.sidebar.error(f"❌ 大模型连接失败: {err}")
-
