@@ -681,6 +681,23 @@ if confirm:
                 st.warning("无法创建有效的隶属度表格。数据格式可能存在问题。")
         else:
             st.warning("没有可用的隶属度数据来显示表格。")
+            
+             # 折叠详细规则判断（默认收起）
+        with st.expander("展开：查看各词类的规则明细与得分（详细）"):
+            for pos, rules in RULE_SETS.items():
+                st.markdown(f"**{pos}**（隶属度：{pos_normed.get(pos, 0)}）")
+                rows = []
+                scores_for_pos = scores_all.get(pos, {r["name"]: 0 for r in rules})
+                for r in rules:
+                    nm = r["name"]
+                    sc = scores_for_pos.get(nm, 0)
+                    decision = "是" if sc == r["match_score"] else ("否" if sc == r["mismatch_score"] else "")
+                    rows.append({"规则": nm, "描述": r["desc"], "得分": sc, "判定": decision})
+                if rows:
+                    st.table(pd.DataFrame(rows))
+                else:
+                    st.write("（该词类当前无规则条目）")
+                st.markdown("---")
 
 # 添加API测试按钮
 st.sidebar.markdown("---")
