@@ -70,18 +70,21 @@ MODEL_CONFIGS = {
         },
     },
 
-    "doubao": {
-        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-        "endpoint": "/chat/completions",
-        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        "payload": lambda model, messages, **kw: {
-            "model": model,
-            "messages": messages,
-            "max_tokens": kw.get("max_tokens", 1024),
-            "temperature": kw.get("temperature", 0.0),
-            "stream": False,
-        },
+   "doubao": {
+    "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+    "endpoint": "/chat/completions",
+    "headers": lambda key: {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
     },
+    "payload": lambda model, messages, **kw: {
+        "model": model,
+        "messages": messages,
+        "max_tokens": kw.get("max_tokens", 1024),
+        "temperature": kw.get("temperature", 0.0),
+        "stream": False,
+    },
+},
 
     "qwen": {
         "base_url": "https://dashscope.aliyuncs.com/api/v1",
