@@ -718,3 +718,4 @@ if st.sidebar.button("测试大模型连接"):
         st.sidebar.success("✅ 大模型连接成功！")
     else:
         st.sidebar.error(f"❌ 大模型连接失败: {err}")
+
