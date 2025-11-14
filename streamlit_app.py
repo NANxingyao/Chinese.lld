@@ -130,7 +130,7 @@ MODEL_OPTIONS = {
         "provider": "doubao",
         "model": "doubao-pro-32k",
         "api_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-        "api_key": os.getenv("DOUBAO_API_KEY", "TlRNd01qaGhPR1EwWWpBek5HRm1NbUZsWkRjNVptTXdOV00zTnpKaVlUZw=="),
+        "api_key": os.getenv("DOUBAO_API_KEY", "222afa3f-5f27-403e-bf46-ced2a356ceee"),
     },
 
     "Qwen（通义千问）": {
