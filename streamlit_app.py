@@ -282,45 +282,6 @@ RULE_SETS = {
 # 计算最大可能分数
 MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in RULE_SETS.items()}
 
-# ===============================
-# 本地模拟数据
-# ===============================
-def get_mock_response(word: str) -> dict:
-    """获取模拟响应"""
-    if word in MOCK_DATA:
-        return MOCK_DATA[word]
-    
-    # 默认预测规则
-    predicted_pos = "名词"  # 默认
-    
-    if word.endswith(("很", "不", "都", "也", "就", "只")):
-        predicted_pos = "副词"
-    elif word.endswith(("子", "儿", "头", "们")):
-        predicted_pos = "名词"
-    elif word.endswith(("着", "了", "过")):
-        predicted_pos = "动词"
-    elif word in ("美丽", "漂亮", "高兴", "难过", "伟大"):
-        predicted_pos = "形容词"
-    else:
-        # 随机选择，但更倾向于名词和动词
-        predicted_pos = random.choices(["名词", "动词", "形容词", "副词"], weights=[0.4, 0.3, 0.2, 0.1])[0]
-    
-    # 生成相应的规则得分
-    scores = {}
-    for pos in RULE_SETS.keys():
-        scores[pos] = {}
-        for rule in RULE_SETS[pos]:
-            # 如果是预测的词类，匹配更多规则
-            if pos == predicted_pos:
-                scores[pos][rule["name"]] = random.random() > 0.3  # 70%概率匹配
-            else:
-                scores[pos][rule["name"]] = random.random() > 0.7  # 30%概率匹配
-    
-    return {
-        "predicted_pos": predicted_pos,
-        "scores": scores,
-        "explanation": f"'{word}' 被预测为{predicted_pos}"
-    }
 
 # ===============================
 # 核心工具函数
