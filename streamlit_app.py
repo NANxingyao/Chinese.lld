@@ -481,38 +481,6 @@ def map_to_allowed_score(rule: dict, raw_val) -> int:
 # ===============================
 # 安全的 LLM 调用函数
 # ===============================
-def extract_content(provider: str, resp: dict) -> str:
-    """
-    根据不同 LLM 提供商的返回结构，提取最终 content 文本。
-    """
-
-    # ---- DeepSeek / OpenAI / Moonshot / Doubao ----
-    # 这些统一都是 chat.completions 格式
-    if provider in ["deepseek", "openai", "moonshot", "doubao"]:
-        try:
-            return resp["choices"][0]["message"]["content"]
-        except Exception:
-            return f"[解析错误] 无法从 resp['choices'][0]['message']['content'] 中提取内容：{resp}"
-
-    # ---- Qwen 通义千问 ----
-    # 返回格式如下：
-    # {
-    #   "output": {
-    #       "text": "<result text>"
-    #   }
-    # }
-    if provider == "qwen":
-        # 兼容老/新版返回结构
-        if "output" in resp and "text" in resp["output"]:
-            return resp["output"]["text"]
-        # 兼容新版 response
-        if "output_text" in resp:
-            return resp["output_text"]
-        return f"[解析错误] 未找到 Qwen 的 output.text：{resp}"
-
-    # ---- 未知 provider ----
-    return f"[错误] 不支持的 provider：{provider}"
-
 
 # ===============================
 # 安全的词类判定函数
