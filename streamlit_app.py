@@ -429,37 +429,38 @@ def map_to_allowed_score(rule: dict, raw_val) -> int:
 # ===============================
 # 安全的 LLM 调用函数
 # ===============================
-def call_llm_api(messages: list, provider: str, model: str, api_key: str,
-                 max_tokens: int = 1024, temperature: float = 0.0, timeout: int = 30) -> Tuple[bool, dict, str]:
+def extract_content(provider: str, resp: dict) -> str:
     """
-    调用指定 LLM API 获取响应。
-    返回: (成功标志, 响应 dict, 错误信息)
+    根据不同 LLM 提供商的返回结构，提取最终 content 文本。
     """
-    if not api_key:
-        return False, {"error": "API Key 为空"}, "API Key 未提供"
 
-    if provider not in MODEL_CONFIGS:
-        return False, {"error": f"未知提供商 {provider}"}, f"未知提供商 {provider}"
+    # ---- DeepSeek / OpenAI / Moonshot / Doubao ----
+    # 这些统一都是 chat.completions 格式
+    if provider in ["deepseek", "openai", "moonshot", "doubao"]:
+        try:
+            return resp["choices"][0]["message"]["content"]
+        except Exception:
+            return f"[解析错误] 无法从 resp['choices'][0]['message']['content'] 中提取内容：{resp}"
 
-    cfg = MODEL_CONFIGS[provider]
-    url = cfg["base_url"].rstrip("/") + cfg.get("endpoint", "/chat/completions")
-    headers = cfg["headers"](api_key)
-    payload = cfg["payload"](model, messages, max_tokens=max_tokens, temperature=temperature)
+    # ---- Qwen 通义千问 ----
+    # 返回格式如下：
+    # {
+    #   "output": {
+    #       "text": "<result text>"
+    #   }
+    # }
+    if provider == "qwen":
+        # 兼容老/新版返回结构
+        if "output" in resp and "text" in resp["output"]:
+            return resp["output"]["text"]
+        # 兼容新版 response
+        if "output_text" in resp:
+            return resp["output_text"]
+        return f"[解析错误] 未找到 Qwen 的 output.text：{resp}"
 
-    try:
+    # ---- 未知 provider ----
+    return f"[错误] 不支持的 provider：{provider}"
 
-        r = requests.post(url, headers=headers, json=payload, timeout=timeout)
-        
-        if r.status_code != 200:
-            return False, {"error": f"HTTP错误 {r.status_code}", "content": r.text}, f"HTTP错误 {r.status_code}: {r.text[:200]}"
-            
-        r.raise_for_status()
-        resp_json = r.json()
-        return True, resp_json, ""
-    except Exception as e:
-        error_msg = str(e)
-        st.error(f"API调用错误: {error_msg}")
-        return False, {"error": error_msg}, error_msg
 
 # ===============================
 # 安全的词类判定函数
