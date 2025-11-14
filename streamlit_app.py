@@ -1,4 +1,3 @@
-在以下的代码中我遇到的问题有：在我选择模型之后，模型虽然能够连接成功但是并不能进行词类的计算，只有deep seek能够使用，请修改。
 import streamlit as st
 import requests
 import json
