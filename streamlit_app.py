@@ -31,7 +31,9 @@ footer {visibility: hidden;}
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# 用于兼容 call_llm_api 旧函数
+# ==========================
+#    模型配置
+# ==========================
 MODEL_CONFIGS = {
     "deepseek": {
         "base_url": "https://api.deepseek.com/v1",
@@ -45,7 +47,6 @@ MODEL_CONFIGS = {
             "stream": False,
         },
     },
-
     "openai": {
         "base_url": "https://api.openai.com/v1",
         "endpoint": "/chat/completions",
@@ -58,7 +59,6 @@ MODEL_CONFIGS = {
             "stream": False,
         },
     },
-
     "moonshot": {
         "base_url": "https://api.moonshot.cn/v1",
         "endpoint": "/chat/completions",
@@ -71,23 +71,21 @@ MODEL_CONFIGS = {
             "stream": False,
         },
     },
-
-   "doubao": {
-    "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-    "endpoint": "/chat/completions",
-    "headers": lambda key: {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
+    "doubao": {
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "endpoint": "/chat/completions",
+        "headers": lambda key: {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        },
+        "payload": lambda model, messages, **kw: {
+            "model": model,
+            "messages": messages,
+            "max_tokens": kw.get("max_tokens", 1024),
+            "temperature": kw.get("temperature", 0.0),
+            "stream": False,
+        },
     },
-    "payload": lambda model, messages, **kw: {
-        "model": model,
-        "messages": messages,
-        "max_tokens": kw.get("max_tokens", 1024),
-        "temperature": kw.get("temperature", 0.0),
-        "stream": False,
-    },
-},
-
     "qwen": {
         "base_url": "https://dashscope.aliyuncs.com/api/v1",
         "endpoint": "/services/aigc/text-generation/generation",
@@ -102,6 +100,60 @@ MODEL_CONFIGS = {
         },
     },
 }
+
+
+
+# ==========================
+#   通用响应解析函数
+# ==========================
+def extract_content(provider: str, resp: dict) -> str:
+    """根据不同提供商的返回结构解析 content"""
+
+    # DeepSeek / OpenAI / Moonshot / Doubao
+    if provider in ["deepseek", "openai", "moonshot", "doubao"]:
+        try:
+            return resp["choices"][0]["message"]["content"]
+        except Exception:
+            return f"[解析错误] 无法找到 resp['choices'][0]['message']['content']：{resp}"
+
+    # Qwen 通义千问
+    if provider == "qwen":
+        if "output" in resp and "text" in resp["output"]:
+            return resp["output"]["text"]
+        if "output_text" in resp:
+            return resp["output_text"]
+        return f"[解析错误] 未找到 Qwen output.text：{resp}"
+
+    return f"[错误] 不支持的 provider：{provider}"
+
+
+# ==========================
+#    通用 API 调用
+# ==========================
+def call_llm_api(messages: list, provider: str, model: str, api_key: str,
+                 max_tokens: int = 1024, temperature: float = 0.0, timeout: int = 30) -> Tuple[bool, dict, str]:
+
+    if not api_key:
+        return False, {}, f"未找到 {provider.upper()} 的 API_KEY 环境变量"
+
+    if provider not in MODEL_CONFIGS:
+        return False, {}, f"未知 provider：{provider}"
+
+    cfg = MODEL_CONFIGS[provider]
+    url = cfg["base_url"].rstrip("/") + cfg.get("endpoint", "/chat/completions")
+    headers = cfg["headers"](api_key)
+    payload = cfg["payload"](model, messages, max_tokens=max_tokens, temperature=temperature)
+
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=timeout)
+
+        if response.status_code != 200:
+            return False, {}, f"HTTP {response.status_code}: {response.text}"
+
+        resp_json = response.json()
+        return True, resp_json, ""
+    except Exception as e:
+        return False, {}, f"API 调用异常：{e}"
 
 
 # ===============================
