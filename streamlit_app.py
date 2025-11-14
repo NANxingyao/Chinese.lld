@@ -15,6 +15,7 @@ st.set_page_config(
     page_title="汉语词类隶属度检测",  # 页面标题
     page_icon="📰",                  # 页面图标
     layout="centered",               # 布局居中
+    initial_sidebar_state="collapsed",  # 初始折叠侧边栏
     menu_items=None                  # 隐藏默认菜单
 )
 
@@ -550,37 +551,37 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
 
 # ======== 模型选择部分（侧边栏） ========
 # 由侧边栏选择模型
-    model_choice = st.sidebar.selectbox("选择模型", list(MODEL_OPTIONS.keys()))
-    selected_model = MODEL_OPTIONS[model_choice]
-    
-    st.sidebar.markdown(f"**当前模型：** {model_choice}")
-    st.sidebar.markdown(f"**模型名称：** `{selected_model['model']}`")
+model_choice = st.sidebar.selectbox("选择模型", list(MODEL_OPTIONS.keys()))
+selected_model = MODEL_OPTIONS[model_choice]
+
+st.sidebar.markdown(f"**当前模型：** {model_choice}")
+st.sidebar.markdown(f"**模型名称：** `{selected_model['model']}`")
 
 # 获取选中模型的配置
-    API_KEY = selected_model["api_key"]
-    PROVIDER = selected_model["provider"]
-    MODEL_NAME = selected_model["model"]
+API_KEY = selected_model["api_key"]
+PROVIDER = selected_model["provider"]
+MODEL_NAME = selected_model["model"]
 
 # 检查API密钥
-    if not API_KEY or API_KEY in ["", "sk-your-moonshot-key"]:
-        st.sidebar.error(f"⚠️ 尚未为模型 {model_choice} 配置 API Key")
-        st.sidebar.markdown("""
-        **请设置环境变量：**
-        - OpenAI：`OPENAI_API_KEY`
-        - DeepSeek：`DEEPSEEK_API_KEY`
-        - Moonshot（Kimi）：`MOONSHOT_API_KEY`
-        - 豆包：`DOUBAO_API_KEY`
-        - 通义千问（Qwen）：`QWEN_API_KEY`
-        
-        **设置方法：**
-        ```bash
-        # Linux / Mac
-        export QWEN_API_KEY="你的通义千问Key"
+if not API_KEY or API_KEY in ["", "sk-your-moonshot-key"]:
+    st.sidebar.error(f"⚠️ 尚未为模型 {model_choice} 配置 API Key")
+    st.sidebar.markdown("""
+    **请设置环境变量：**
+    - OpenAI：`OPENAI_API_KEY`
+    - DeepSeek：`DEEPSEEK_API_KEY`
+    - Moonshot（Kimi）：`MOONSHOT_API_KEY`
+    - 豆包：`DOUBAO_API_KEY`
+    - 通义千问（Qwen）：`QWEN_API_KEY`
     
-        # Windows
-        set QWEN_API_KEY=你的密钥
-        ```
-        """)
+    **设置方法：**
+    ```bash
+    # Linux / Mac
+    export QWEN_API_KEY="你的通义千问Key"
+
+    # Windows
+    set QWEN_API_KEY=你的密钥
+    ```
+    """)
 
 # ======== 主体部分 ========
 st.markdown("<h1 style='text-align: center;'>📊汉语词类隶属度检测判类</h1>", unsafe_allow_html=True)
