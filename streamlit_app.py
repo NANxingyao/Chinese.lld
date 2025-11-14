@@ -544,7 +544,8 @@ if not API_KEY or API_KEY in ["", "sk-your-moonshot-key"]:
     **设置方法：**
     ```bash
     # Linux/Mac
-    export OPENAI_API_KEY="你的密钥"
+    export OPENAI_API_KEY="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
+"
     
     # Windows
     set OPENAI_API_KEY=你的密钥
