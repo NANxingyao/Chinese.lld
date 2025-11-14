@@ -79,8 +79,22 @@ MODEL_CONFIGS = {
             "stream": False,
         }
     }
+    "qwen": {
+        "base_url": "https://dashscope.aliyuncs.com/api/v1",
+        "endpoint": "/services/aigc/text-generation/generation",
+        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        "payload": lambda model, messages, **kw: {
+            "model": model,
+            "input": {
+                "messages": messages
+            },
+            "parameters": {
+                "max_tokens": kw.get("max_tokens", 1024),
+                "temperature": kw.get("temperature", 0.0)
+            }
+        }
+    }
 }
-
 
 # ===============================
 # 模型配置与 API Key（从环境变量获取）
@@ -113,7 +127,13 @@ MODEL_OPTIONS = {
         "api_key": os.getenv("DOUBAO_API_KEY", "TlRNd01qaGhPR1EwWWpBek5HRm1NbUZsWkRjNVptTXdOV00zTnpKaVlUZw==")
     }
 }
-
+ "Qwen（通义千问）": {
+        "provider": "qwen",
+        "model": "qwen-max",              
+        "api_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
+        "api_key": os.getenv("QWEN_API_KEY", "sk-b3f7a1153e6f4a44804a296038aa86c5")   
+    }
+}
 
 # ===============================
 # 词类规则示例
