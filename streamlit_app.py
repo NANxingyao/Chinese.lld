@@ -549,17 +549,30 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
 # ===============================
 
 # ======== 模型选择部分（侧边栏） ========
-# 由侧边栏选择模型
+
+st.sidebar.header("模型选择")
+
+# 从 MODEL_OPTIONS 中选择模型
 model_choice = st.sidebar.selectbox("请选择模型", list(MODEL_OPTIONS.keys()))
 selected_model = MODEL_OPTIONS[model_choice]
 
 st.sidebar.markdown(f"**当前模型：** {model_choice}")
 st.sidebar.markdown(f"**模型名称：** `{selected_model['model']}`")
 
-# 获取选中模型的配置
-API_KEY = selected_model["api_key"]
-PROVIDER = selected_model["provider"]
-MODEL_NAME = selected_model["model"]
+# ========== 关键修复点 ==========  
+# 原来的 selected_model["api_key"] 不存在！  
+# 改为根据 provider 自动查找对应的环境变量
+
+provider = selected_model["provider"]
+model_name = selected_model["model"]
+env_name = selected_model["env"]  # 你需要在 MODEL_OPTIONS 里增加这个字段
+
+API_KEY = os.getenv(env_name, "")
+
+if not API_KEY:
+    st.sidebar.error(f"⚠ 未检测到环境变量：{env_name}")
+else:
+    st.sidebar.success(f"🔑 已加载 API Key（来自环境变量 {env_name}）")
 
 # 检查API密钥
 if not API_KEY or API_KEY in ["", "sk-your-moonshot-key"]:
