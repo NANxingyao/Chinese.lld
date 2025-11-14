@@ -593,13 +593,29 @@ MODEL_OPTIONS = {
     }
 }
 
-model_choice = st.sidebar.selectbox("选择模型", list(MODEL_OPTIONS.keys()))
-selected_model = MODEL_OPTIONS[model_choice]
 
-st.sidebar.markdown(f"**当前模型：** {model_choice}")
-st.sidebar.markdown(f"**API 地址：** `{selected_model['api_url']}`")
-st.sidebar.markdown("⚙️ 请在你的系统环境变量中设置对应的 API Key：")
-st.sidebar.code(selected_model["api_key_name"], language="bash")
+# 添加API测试按钮
+st.sidebar.markdown("---")
+if st.sidebar.button("测试大模型连接"):
+    st.sidebar.info("正在测试大模型连接...")
+    
+    test_messages = [
+        {"role": "user", "content": "测试大模型连接，请返回'测试成功'"}
+    ]
+    
+    ok, resp, err = call_llm_api(
+        messages=test_messages,
+        provider=PROVIDER,
+        model=MODEL_NAME,
+        api_key=API_KEY,
+        max_tokens=20
+    )
+    
+    if ok:
+        st.sidebar.success("✅ 大模型连接成功！")
+        st.sidebar.json(resp)
+    else:
+        st.sidebar.error(f"❌ 大模型连接失败: {err}")
 
 # 将所选模型配置赋给全局变量
 API_URL = selected_model["api_url"]
