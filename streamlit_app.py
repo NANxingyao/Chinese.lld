@@ -143,6 +143,37 @@ MODEL_OPTIONS = {
         "api_key": os.getenv("QWEN_API_KEY", "sk-b3f7a1153e6f4a44804a296038aa86c5"),
     },
 }
+MODEL_OPTIONS = {
+    "DeepSeek Chat": {
+        "provider": "deepseek",
+        "model": "deepseek-chat",
+        "env": "DEEPSEEK_API_KEY",   # 必须添加
+    },
+
+    "OpenAI GPT-4.1 Mini": {
+        "provider": "openai",
+        "model": "gpt-4.1-mini",
+        "env": "OPENAI_API_KEY",     # 必须添加
+    },
+
+    "Moonshot V1 8K": {
+        "provider": "moonshot",
+        "model": "moonshot-v1-8k",
+        "env": "MOONSHOT_API_KEY",   # 必须添加
+    },
+
+    "Doubao Lite": {
+        "provider": "doubao",
+        "model": "ep-20240620153346-v7o8p",
+        "env": "DOUBAO_API_KEY",     # 必须添加
+    },
+
+    "Qwen Turbo": {
+        "provider": "qwen",
+        "model": "qwen-turbo",
+        "env": "QWEN_API_KEY",       # 必须添加
+    },
+}
 
 
 # ===============================
