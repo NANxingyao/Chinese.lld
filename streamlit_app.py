@@ -133,7 +133,7 @@ MODEL_OPTIONS = {
         "provider": "doubao",
         "model": "doubao-pro-32k",
         "api_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-        "api_key": os.getenv("DOUBAO_API_KEY", "sk-222afa3f-5f27-403e-bf46-ced2a356ceee"),
+        "api_key": os.getenv("DOUBAO_API_KEY", "222afa3f-5f27-403e-bf46-ced2a356ceee"),
     },
 
     "Qwen（通义千问）": {
@@ -359,21 +359,32 @@ MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in R
 # ===============================
 # 工具函数
 # ===============================
-def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
+def extract_text_from_response(resp_json: Dict[str, Any], provider: str = "") -> str:
     if not isinstance(resp_json, dict):
         return ""
     try:
-        choices = resp_json.get("choices")
-        if choices and isinstance(choices, list) and len(choices) > 0:
-            first = choices[0]
-            msg = first.get("message")
-            if isinstance(msg, dict) and "content" in msg:
-                return msg["content"]
-            for k in ("content", "text", "message"):
-                if k in first and isinstance(first[k], str):
-                    return first[k]
-    except:
-        pass
+        # 根据不同提供商处理响应格式
+        if provider == "qwen":
+            # 通义千问的响应格式
+            output = resp_json.get("output")
+            if output and isinstance(output, dict):
+                text = output.get("text")
+                if isinstance(text, str):
+                    return text
+        else:
+            # 其他模型的响应格式（deepseek, openai, moonshot, doubao）
+            choices = resp_json.get("choices")
+            if choices and isinstance(choices, list) and len(choices) > 0:
+                first = choices[0]
+                msg = first.get("message")
+                if isinstance(msg, dict) and "content" in msg:
+                    return msg["content"]
+                for k in ("content", "text", "message"):
+                    if k in first and isinstance(first[k], str):
+                        return first[k]
+    except Exception as e:
+        st.error(f"解析响应时出错: {e}")
+        st.error(f"响应内容: {resp_json}")
     return json.dumps(resp_json, ensure_ascii=False)
 
 def extract_json_from_text(text: str) -> Tuple[dict, str]:
@@ -428,7 +439,7 @@ def map_to_allowed_score(rule: dict, raw_val) -> int:
 # 安全的 LLM 调用函数
 # ===============================
 def call_llm_api(messages: list, provider: str, model: str, api_key: str,
-                 max_tokens: int = 1024, temperature: float = 0.0, timeout: int = 30) -> Tuple[bool, dict, str]:
+                 max_tokens: int = 1024, temperature: float = 0.0, timeout: int = 60) -> Tuple[bool, dict, str]:
     """
     调用指定 LLM API 获取响应。
     返回: (成功标志, 响应 dict, 错误信息)
@@ -445,19 +456,38 @@ def call_llm_api(messages: list, provider: str, model: str, api_key: str,
     payload = cfg["payload"](model, messages, max_tokens=max_tokens, temperature=temperature)
 
     try:
-
+        st.debug(f"调用API: {provider}")
+        st.debug(f"URL: {url}")
+        st.debug(f"Headers: {headers}")
+        st.debug(f"Payload: {payload}")
+        
         r = requests.post(url, headers=headers, json=payload, timeout=timeout)
         
+        st.debug(f"响应状态码: {r.status_code}")
+        st.debug(f"响应内容: {r.text[:1000]}")
+        
         if r.status_code != 200:
-            return False, {"error": f"HTTP错误 {r.status_code}", "content": r.text}, f"HTTP错误 {r.status_code}: {r.text[:200]}"
+            error_detail = f"HTTP错误 {r.status_code}: {r.text[:500]}"
+            st.error(error_detail)
+            return False, {"error": f"HTTP错误 {r.status_code}", "content": r.text}, error_detail
             
         r.raise_for_status()
         resp_json = r.json()
         return True, resp_json, ""
+    except requests.exceptions.Timeout:
+        error_msg = f"API调用超时（{timeout}秒）"
+        st.error(error_msg)
+        return False, {"error": "超时"}, error_msg
+    except requests.exceptions.ConnectionError:
+        error_msg = "API连接错误，请检查网络连接"
+        st.error(error_msg)
+        return False, {"error": "连接错误"}, error_msg
     except Exception as e:
-        error_msg = str(e)
-        st.error(f"API调用错误: {error_msg}")
-        return False, {"error": error_msg}, error_msg
+        error_msg = f"API调用错误: {str(e)}"
+        st.error(error_msg)
+        import traceback
+        traceback.print_exc()
+        return False, {"error": str(e)}, error_msg
 
 # ===============================
 # 安全的词类判定函数
@@ -498,7 +528,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         return {}, f"调用失败或返回异常: {err_msg}", "未知"
 
     # 尝试解析原始文本
-    raw_text = extract_text_from_response(resp_json)
+    raw_text = extract_text_from_response(resp_json, provider)
     parsed_json, _ = extract_json_from_text(raw_text)
     if not parsed_json:
         return {}, raw_text, "未知"
