@@ -615,8 +615,6 @@ if confirm:
         # 仅在 scores_all 有内容时才遍历
         if scores_all:
             st.subheader(f"词类预测结果：{predicted_pos}")
-            st.json(scores_all)
-            st.text_area("原始输出", raw_out, height=200)
         else:
             st.info("未获得有效评分结果。请检查 API Key 或网络连接。")
             st.text_area("错误信息", raw_out, height=200)
