@@ -88,7 +88,7 @@ MODEL_OPTIONS = {
         "api_key": os.getenv("DEEPSEEK_API_KEY", "sk-1f346646d29947d0a5e29dbaa37476b8"),
         "env_var": "DEEPSEEK_API_KEY"
     },
-    "OpenAI GPT-4o": {
+    "OpenAI GPT-4o（尚不支持）": {
         "provider": "openai", 
         "model": "gpt-4o-mini", 
         "api_key": os.getenv("OPENAI_API_KEY", "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"),
