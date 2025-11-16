@@ -31,6 +31,28 @@ footer {visibility: hidden;}
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
+# ==== FIX BEGIN: 强制展示侧边栏，禁止折叠 ====
+st.markdown("""
+<style>
+/* 让侧边栏永远展示（streamlit 内部类名） */
+[data-testid="stSidebar"] {
+    visibility: visible !important;
+    display: block !important;
+}
+
+/* 让主内容区域在右侧正确缩进（防止侧边栏覆盖） */
+[data-testid="stAppViewContainer"] {
+    margin-left: 260px !important;
+}
+
+/* 隐藏侧边栏折叠按钮（避免冲突） */
+button[kind="header"] {
+    display: none !important;
+}
+</style>
+""", unsafe_allow_html=True)
+# ==== FIX END ====
+
 # ===============================
 # 模型接口配置（重点修复区）
 # ===============================
