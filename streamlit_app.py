@@ -170,35 +170,35 @@ MODEL_OPTIONS = {
         "provider": "deepseek",
         "model": "deepseek-chat",
         "api_url": "https://api.deepseek.com/v1/chat/completions",
-        "api_key": os.getenv("DEEPSEEK_API_KEY", "")
+        "api_key": os.getenv("DEEPSEEK_API_KEY", "sk-1f346646d29947d0a5e29dbaa37476b8")
     },
 
     "OpenAI GPT-4o": {
         "provider": "openai",
         "model": "gpt-4o-mini",
         "api_url": "https://api.openai.com/v1/chat/completions",
-        "api_key": os.getenv("OPENAI_API_KEY", "")
+        "api_key": os.getenv("OPENAI_API_KEY", "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")
     },
 
     "Moonshot（Kimi）": {
         "provider": "moonshot",
         "model": "moonshot-v1-32k",
         "api_url": os.getenv("MOONSHOT_API_URL", "https://api.moonshot.cn/v1/chat/completions"),
-        "api_key": os.getenv("MOONSHOT_API_KEY", "")
+        "api_key": os.getenv("MOONSHOT_API_KEY", "sk-l5FvRWegjM5DEk4AU71YPQ1QgvFPTHZIJOmq6qdssPY4sNtE")
     },
 
     "Doubao（豆包）": {
         "provider": "doubao",
         "model": "doubao-pro-32k",
         "api_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-        "api_key": os.getenv("DOUBAO_API_KEY", "")
+        "api_key": os.getenv("DOUBAO_API_KEY", "222afa3f-5f27-403e-bf46-ced2a356ceee")
     },
 
     "Qwen（通义千问）": {
         "provider": "qwen",
         "model": "qwen-max",
         "api_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
-        "api_key": os.getenv("QWEN_API_KEY", "")
+        "api_key": os.getenv("QWEN_API_KEY", "sk-b3f7a1153e6f4a44804a296038aa86c5")
     }
 }
 
