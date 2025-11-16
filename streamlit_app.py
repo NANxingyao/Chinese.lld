@@ -1,4 +1,4 @@
-#元素最齐全版本（增强版+固定侧边栏+流畅调用）
+# 元素最齐全版本（终极优化版）
 import streamlit as st
 import requests
 import json
@@ -12,15 +12,15 @@ from typing import Tuple, Dict, Any, List
 # 页面配置
 # ===============================
 st.set_page_config(
-    page_title="汉语词类隶属度检测",  # 页面标题
-    page_icon="📰",                  # 页面图标
-    layout="wide",                   # 宽布局
-    initial_sidebar_state="expanded",# 初始展开侧边栏
-    menu_items=None                  # 隐藏默认菜单
+    page_title="汉语词类隶属度检测",
+    page_icon="📰",
+    layout="wide",  # 使用宽布局
+    initial_sidebar_state="expanded",
+    menu_items=None
 )
 
 # 自定义CSS样式
-# 关键改动在这里：增加了固定侧边栏的样式
+# 关键改动：固定侧边栏宽度和主内容区布局
 hide_streamlit_style = """
 <style>
 /* 隐藏顶部菜单栏和页脚 */
@@ -31,19 +31,21 @@ footer {visibility: hidden;}
 .dataframe {font-size: 12px;}
 
 /* --- 固定侧边栏的核心CSS --- */
-/* 1. 确保侧边栏容器始终保持展开状态 */
-[data-testid="stSidebar"][aria-expanded="false"] {
-    transform: translateX(0) !important;
-}
-
-/* 2. 显示侧边栏的折叠/展开按钮 */
+/* 1. 隐藏侧边栏的折叠/展开按钮 */
 [data-testid="collapsedControl"] {
     display: none !important;
 }
 
-/* 3. (可选) 为侧边栏添加一个固定的宽度，防止内容过宽或过窄 */
+/* 2. 固定侧边栏的宽度 */
 [data-testid="stSidebar"] > div:first-child {
-    width: 350px !important;
+    width: 300px !important;
+    min-width: 300px !important;
+    max-width: 300px !important;
+}
+
+/* 3. 固定主内容区的左边距，以适应侧边栏 */
+[data-testid="stAppViewContainer"] {
+    margin-left: 300px !important;
 }
 </style>
 """
@@ -104,10 +106,8 @@ MODEL_OPTIONS = {
 }
 
 # ===============================
-# 词类规则与最大得分 (这部分内容较长，为保持简洁省略，实际使用时请保留完整内容)
+# 词类规则与最大得分
 # ===============================
-# (此处省略了 RULE_SETS 和 MAX_SCORES 的定义，它们与上一版完全相同)
-# 为了代码能正常运行，请确保将上一版中的 RULE_SETS 和 MAX_SCORES 复制到这里
 RULE_SETS = {
     # 1.1 名词
     "名词": [
@@ -143,6 +143,7 @@ RULE_SETS = {
         {"name": "P7_一般不能受程度副词'很'修饰", "desc": "一般不能受程度副词'很'修饰", "match_score": 10, "mismatch_score": 0},
         {"name": "P8_不能跟在'怎么/怎样'与'这么/这样/那么'之后", "desc": "不能跟在'怎么/怎样'或'这么/这样/那么'之后", "match_score": 10, "mismatch_score": -10},
     ],
+    # ... (为简洁起见，省略了其他词类的规则，实际代码中请保持完整)
     # 1.4 处所词
     "处所词": [
         {"name": "L1_可做介词宾语/填介词框架", "desc": "可以做'在/到/从/往/向'等介词的宾语，或填入'从...到/向/往'框架", "match_score": 10, "mismatch_score": -10},
@@ -311,11 +312,11 @@ RULE_SETS = {
         {"name": "NUM_COM5_可出现在'来/多/余'之前等特殊分布", "desc": "可以出现在特定助词之前（见原文条目）", "match_score": 30, "mismatch_score": 0},
     ],
 }
+# 预计算每个词类的最大可能得分
 MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in RULE_SETS.items()}
 
-
 # ===============================
-# 工具函数 (这部分与上一版完全相同，为保持简洁省略)
+# 工具函数
 # ===============================
 def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
     if not isinstance(resp_json, dict): return ""
@@ -332,23 +333,28 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
 def extract_json_from_text(text: str) -> Tuple[dict, str]:
     if not text: return None, ""
     text = text.strip()
+    # 尝试直接解析
     try: return json.loads(text), text
     except: pass
     
+    # 尝试提取文本中的JSON块
     match = re.search(r"(\{[\s\S]*\})", text)
     if not match: return None, text
     
     json_str = match.group(1)
+    # 清理常见的格式问题
     json_str = json_str.replace("：", ":").replace("，", ",").replace("“", '"').replace("”", '"')
     json_str = re.sub(r"'(\s*[^']+?\s*)'\s*:", r'"\1":', json_str)
     json_str = re.sub(r":\s*'([^']*?)'", r': "\1"', json_str)
-    json_str = re.sub(r",\s*([}\]])", r"\1", json_str)
+    json_str = re.sub(r",\s*([}\]])", r"\1", json_str) # 去除 trailing commas
     json_str = re.sub(r"\bTrue\b", "true", json_str)
     json_str = re.sub(r"\bFalse\b", "false", json_str)
     json_str = re.sub(r"\bNone\b", "null", json_str)
     
     try: return json.loads(json_str), json_str
-    except: return None, text
+    except Exception as e:
+        st.warning(f"解析JSON失败: {e}")
+        return None, text
 
 def normalize_key(k: str, pos_rules: list) -> str:
     if not isinstance(k, str): return None
@@ -361,7 +367,7 @@ def normalize_key(k: str, pos_rules: list) -> str:
 def map_to_allowed_score(rule: dict, raw_val) -> int:
     match_score, mismatch_score = rule["match_score"], rule["mismatch_score"]
     if isinstance(raw_val, (int, float)):
-        return match_score if raw_val == match_score else mismatch_score if raw_val == mismatch_score else mismatch_score
+        return match_score if raw_val == match_score else mismatch_score
     if isinstance(raw_val, bool): return match_score if raw_val else mismatch_score
     if isinstance(raw_val, str):
         s = raw_val.strip().lower()
@@ -377,6 +383,7 @@ def calculate_membership(scores_all: Dict[str, Dict[str, int]]) -> Dict[str, flo
         if max_score == 0:
             membership[pos] = 0.0
         else:
+            # 归一化到 [0, 1] 区间
             normalized = (total_score + max_score) / (2 * max_score)
             membership[pos] = max(0.0, min(1.0, normalized))
     return membership
@@ -397,19 +404,22 @@ def prepare_detailed_scores_df(scores_all: Dict[str, Dict[str, int]]) -> pd.Data
     return pd.DataFrame(rows)
 
 # ===============================
-# 安全的 LLM 调用函数 (与上一版相同)
+# 安全的 LLM 调用函数
 # ===============================
-def call_llm_api(messages: list, provider: str, model: str, api_key: str, max_tokens: int = 4096, temperature: float = 0.0) -> Tuple[bool, dict, str]:
-    if not api_key: return False, {"error": "API Key 为空"}, "API Key 未提供"
-    if provider not in MODEL_CONFIGS: return False, {"error": f"未知提供商 {provider}"}, f"未知提供商 {provider}"
+@st.cache_data(show_spinner=False)
+def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, temperature=0.0):
+    """带有缓存的API调用，相同的请求不会重复调用。"""
+    if not _api_key: return False, {"error": "API Key 为空"}, "API Key 未提供"
+    if _provider not in MODEL_CONFIGS: return False, {"error": f"未知提供商 {_provider}"}, f"未知提供商 {_provider}"
 
-    cfg = MODEL_CONFIGS[provider]
+    cfg = MODEL_CONFIGS[_provider]
     url = f"{cfg['base_url'].rstrip('/')}{cfg['endpoint']}"
-    headers = cfg["headers"](api_key)
-    payload = cfg["payload"](model, messages, max_tokens=max_tokens, temperature=temperature)
+    headers = cfg["headers"](_api_key)
+    payload = cfg["payload"](_model, messages, max_tokens=max_tokens, temperature=temperature)
 
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=60) # 增加超时设置
+        # 增加超时设置
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
         response.raise_for_status()
         return True, response.json(), ""
     except requests.exceptions.Timeout:
@@ -423,29 +433,46 @@ def call_llm_api(messages: list, provider: str, model: str, api_key: str, max_to
         return False, {"error": error_msg}, error_msg
 
 # ===============================
-# 安全的词类判定函数 (与上一版相同)
+# 词类判定主函数
 # ===============================
 def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str, str]:
     if not word: return {}, "", "未知", ""
 
-    rules_text = "\n".join([f"{pos}:\n  - " + "\n  - ".join([f"{r['name']}: {r['desc']} (match={r['match_score']}, mismatch={r['mismatch_score']})" for r in rules]) for pos, rules in RULE_SETS.items()])
+    # 优化：精简规则文本，只发送规则名和分数，减少传输量和模型理解负担
+    rules_text = "\n".join([
+        f"{pos}:\n  - " + "\n  - ".join([f"{r['name']}: (match={r['match_score']}, mismatch={r['mismatch_score']})" for r in rules]) 
+        for pos, rules in RULE_SETS.items()
+    ])
 
+    # 优化：精简提示词，指令更直接
     system_msg = (
-        "你是语言学研究专家，请分析输入的中文词语，严格按照提供的规则进行判断。\n"
-        "1. 首先，为每个词类下的每一条规则进行判断，是符合（match）还是不符合（mismatch）。\n"
-        "2. 然后，根据判断结果，为每个规则打上对应的得分（match_score 或 mismatch_score）。\n"
-        "3. 最后，计算每个词类的总得分，并判定最可能的词类。\n"
-        "请以JSON格式返回，包含以下字段：\n"
-        '"predicted_pos": 最可能的词类名称（字符串）\n'
-        '"scores": 一个嵌套字典，结构为 {"词类名": {"规则名": 得分, ...}, ...}\n'
-        '"explanation": 详细的推理过程，解释你是如何根据规则得出每个判断的。'
-    )
-    user_prompt = f"请分析词语「{word}」，基于以下规则进行判定并评分：\n\n{rules_text}\n\n务必返回完整的JSON对象。"
+        "你是一位中文语言学专家。你的任务是根据提供的规则，为给定的词语「{word}」进行词类隶属度评分。"
+        "请严格按照以下步骤操作：\n"
+        "1. **分析词语**：仔细阅读并理解目标词语。\n"
+        "2. **逐条匹配**：为每个词类下的每一条规则进行判断，该词语是符合（match）还是不符合（mismatch）该规则的描述。\n"
+        "3. **给出得分**：根据判断结果，为每条规则打上对应的得分（match_score 或 mismatch_score）。\n"
+        "4. **计算总分**：对每个词类下的所有规则得分进行求和，得到该词类的总得分。\n"
+        "5. **判定结果**：根据总得分，判定该词语最可能属于哪个词类（predicted_pos）。\n"
+        "6. **提供解释**：简要解释你判定为最可能词类的主要依据（1-2句话即可）。\n"
+        "\n"
+        "**输出格式**：请以一个完整、合法的JSON对象作为唯一输出。JSON必须包含以下三个字段：\n"
+        '- "predicted_pos": 最可能的词类名称（字符串）。\n'
+        '- "scores": 一个嵌套字典，键是词类名称，值是另一个字典（键是规则名，值是得分）。\n'
+        '- "explanation": 你的判定解释（字符串）。\n'
+        "\n"
+        "**重要提示**：只输出JSON，不要包含任何其他文字、解释或代码块标记。确保JSON格式正确无误。"
+    ).format(word=word)
+    
+    user_prompt = f"请基于以下规则，分析词语「{word}」并返回JSON结果：\n\n{rules_text}"
 
+    # 显示加载状态
     with st.spinner("正在调用大模型进行分析，请稍候..."):
-        ok, resp_json, err_msg = call_llm_api(
-            messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": user_prompt}],
-            provider=provider, model=model, api_key=api_key
+        # 使用缓存调用API
+        ok, resp_json, err_msg = call_llm_api_cached(
+            _provider=provider,
+            _model=model,
+            _api_key=api_key,
+            messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": user_prompt}]
         )
 
     if not ok:
@@ -453,12 +480,21 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         return {}, f"调用失败: {err_msg}", "未知", f"调用失败: {err_msg}"
 
     raw_text = extract_text_from_response(resp_json)
-    parsed_json, _ = extract_json_from_text(raw_text)
+    parsed_json, cleaned_json_text = extract_json_from_text(raw_text)
     
-    explanation = parsed_json.get("explanation", "模型未提供详细推理过程。") if parsed_json else raw_text
-    predicted_pos = parsed_json.get("predicted_pos", "未知") if parsed_json else "未知"
-    raw_scores = parsed_json.get("scores", {}) if parsed_json else {}
+    # 处理解析结果
+    if parsed_json:
+        explanation = parsed_json.get("explanation", "模型未提供详细推理过程。")
+        predicted_pos = parsed_json.get("predicted_pos", "未知")
+        raw_scores = parsed_json.get("scores", {})
+    else:
+        st.warning("未能从模型响应中解析出有效的JSON。")
+        explanation = "无法解析模型输出。"
+        predicted_pos = "未知"
+        raw_scores = {}
+        cleaned_json_text = raw_text # 展示原始文本
 
+    # 格式化得分
     scores_out = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
     for pos, rules in RULE_SETS.items():
         raw_pos_scores = raw_scores.get(pos, {})
@@ -469,10 +505,10 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
                     rule_def = next(r for r in rules if r["name"] == normalized_key)
                     scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
 
-    return scores_out, raw_text, predicted_pos, explanation
+    return scores_out, cleaned_json_text, predicted_pos, explanation
 
 # ===============================
-# 雷达图 (与上一版相同)
+# 雷达图
 # ===============================
 def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
     if not scores_norm:
@@ -497,7 +533,7 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
     st.plotly_chart(fig, use_container_width=True)
 
 # ===============================
-# 主页面逻辑 (与上一版相同)
+# 主页面逻辑
 # ===============================
 def main():
     st.title("📰 汉语词类隶属度检测")
@@ -510,12 +546,12 @@ def main():
         if st.button("🔗 测试模型链接"):
             model_config = MODEL_OPTIONS[selected_model_display_name]
             with st.spinner("正在测试连接..."):
-                ok, _, err_msg = call_llm_api(
-                    messages=[{"role": "user", "content": "ping"}],
-                    provider=model_config["provider"],
-                    model=model_config["model"],
-                    api_key=model_config["api_key"],
-                    max_tokens=1
+                ok, _, err_msg = call_llm_api_cached(
+                    _provider=model_config["provider"],
+                    _model=model_config["model"],
+                    _api_key=model_config["api_key"],
+                    messages=[{"role": "user", "content": "请回复'pong'"}],
+                    max_tokens=10
                 )
             if ok:
                 st.success("✅ 模型链接测试成功！")
@@ -535,8 +571,13 @@ def main():
     word = st.text_input("请输入要分析的汉语词语", placeholder="例如：苹果、跑、美丽...", key="word_input")
     
     if st.button("🚀 开始分析", type="primary") and word:
+        # 立即显示状态，提升感知速度
+        status_placeholder = st.empty()
+        status_placeholder.info(f"正在为词语「{word}」启动分析...")
+
         model_config = MODEL_OPTIONS[selected_model_display_name]
         
+        # 调用核心函数
         scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
             word=word,
             provider=model_config["provider"],
@@ -544,8 +585,12 @@ def main():
             api_key=model_config["api_key"]
         )
         
+        # 计算隶属度并获取排名
         membership = calculate_membership(scores_all)
         top10 = get_top_10_positions(membership)
+        
+        # 清除状态信息
+        status_placeholder.empty()
         
         # 结果展示
         st.success(f'**分析完成**：词语「{word}」最可能的词类是 【{predicted_pos}】，隶属度为 {membership.get(predicted_pos, 0):.4f}')
@@ -572,7 +617,7 @@ def main():
         st.text_area("推理详情", explanation, height=200, disabled=True)
         
         st.subheader("📥 模型原始响应")
-        with st.expander("点击展开查看原始JSON响应", expanded=False):
+        with st.expander("点击展开查看原始响应", expanded=False):
             st.code(raw_text, language="json")
 
 if __name__ == "__main__":
