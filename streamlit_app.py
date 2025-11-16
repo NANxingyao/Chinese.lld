@@ -43,7 +43,7 @@ footer {visibility: hidden;}
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 # ===============================
-# 模型配置
+# 模型配置 (仅从环境变量获取API Key)
 # ===============================
 MODEL_CONFIGS = {
     "deepseek": {
@@ -70,14 +70,14 @@ MODEL_CONFIGS = {
             "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), "temperature": kw.get("temperature", 0.0), "stream": False,
         },
     },
-   "doubao": {
-    "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-    "endpoint": "/chat/completions",
-    "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json",},
-    "payload": lambda model, messages, **kw: {
-        "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), "temperature": kw.get("temperature", 0.0), "stream": False,
+    "doubao": {
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "endpoint": "/chat/completions",
+        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json",},
+        "payload": lambda model, messages, **kw: {
+            "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), "temperature": kw.get("temperature", 0.0), "stream": False,
+        },
     },
-},
     "qwen": {
         "base_url": "https://dashscope.aliyuncs.com/api/v1",
         "endpoint": "/services/aigc/text-generation/generation",
@@ -88,12 +88,38 @@ MODEL_CONFIGS = {
     },
 }
 
+# 模型选项（仅从环境变量获取API Key，不提供手动输入）
 MODEL_OPTIONS = {
-    "DeepSeek Chat": {"provider": "deepseek", "model": "deepseek-chat", "api_key": os.getenv("DEEPSEEK_API_KEY", "sk-1f346646d29947d0a5e29dbaa37476b8")},
-    "OpenAI GPT-4o": {"provider": "openai", "model": "gpt-4o-mini", "api_key": os.getenv("OPENAI_API_KEY", "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")},
-    "Moonshot（Kimi）": {"provider": "moonshot", "model": "moonshot-v1-32k", "api_key": os.getenv("MOONSHOT_API_KEY", "sk-l5FvRWegjM5DEk4AU71YPQgvFPTHZIJOmq6qdssPY4sNtE")},
-    "Doubao（豆包）": {"provider": "doubao", "model": "doubao-pro-32k", "api_key": os.getenv("DOUBAO_API_KEY", "sk-222afa3f-5f27-403e-bf46-ced2a356ceee")},
-    "Qwen（通义千问）": {"provider": "qwen", "model": "qwen-max", "api_key": os.getenv("QWEN_API_KEY", "sk-b3f7a1153e6f4a44804a296038aa86c5")},
+    "DeepSeek Chat": {
+        "provider": "deepseek", 
+        "model": "deepseek-chat", 
+        "api_key": os.getenv("DEEPSEEK_API_KEY", ""),
+        "env_var": "DEEPSEEK_API_KEY"
+    },
+    "OpenAI GPT-4o": {
+        "provider": "openai", 
+        "model": "gpt-4o-mini", 
+        "api_key": os.getenv("OPENAI_API_KEY", ""),
+        "env_var": "OPENAI_API_KEY"
+    },
+    "Moonshot（Kimi）": {
+        "provider": "moonshot", 
+        "model": "moonshot-v1-32k", 
+        "api_key": os.getenv("MOONSHOT_API_KEY", ""),
+        "env_var": "MOONSHOT_API_KEY"
+    },
+    "Doubao（豆包）": {
+        "provider": "doubao", 
+        "model": "doubao-pro-32k", 
+        "api_key": os.getenv("DOUBAO_API_KEY", ""),
+        "env_var": "DOUBAO_API_KEY"
+    },
+    "Qwen（通义千问）": {
+        "provider": "qwen", 
+        "model": "qwen-max", 
+        "api_key": os.getenv("QWEN_API_KEY", ""),
+        "env_var": "QWEN_API_KEY"
+    },
 }
 
 # ===============================
@@ -394,7 +420,7 @@ def prepare_detailed_scores_df(scores_all: Dict[str, Dict[str, int]]) -> pd.Data
     return pd.DataFrame(rows)
 
 # ===============================
-# 安全的 LLM 调用函数
+# 安全的 LLM 调用函数 (增加超时)
 # ===============================
 @st.cache_data(show_spinner=False)
 def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, temperature=0.0):
@@ -408,50 +434,58 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
     payload = cfg["payload"](_model, messages, max_tokens=max_tokens, temperature=temperature)
 
     try:
-        # 增加超时设置
-        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        # 增加超时设置到120秒
+        response = requests.post(url, headers=headers, json=payload, timeout=120)
         response.raise_for_status()
         return True, response.json(), ""
     except requests.exceptions.Timeout:
-        error_msg = "请求超时，请检查网络连接或尝试更换模型。"
+        error_msg = "请求超时。模型可能正忙或网络连接较慢。建议尝试其他模型或稍后再试。"
         return False, {"error": error_msg}, error_msg
     except requests.exceptions.RequestException as e:
+        # 对于4xx和5xx错误，提取更多信息
         error_msg = f"API请求失败: {str(e)}"
+        if hasattr(e, 'response') and e.response is not None:
+            try:
+                error_details = e.response.json()
+                if 'error' in error_details:
+                    error_msg += f" 详情: {error_details['error']['message']}"
+            except:
+                error_msg += f" 响应内容: {e.response.text[:200]}..." # 只显示部分内容
         return False, {"error": error_msg}, error_msg
     except Exception as e:
         error_msg = f"发生未知错误: {str(e)}"
         return False, {"error": error_msg}, error_msg
 
 # ===============================
-# 词类判定主函数
+# 词类判定主函数 (优化Prompt)
 # ===============================
 def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str, str]:
     if not word: return {}, "", "未知", ""
 
-    # 优化：精简规则文本，只发送规则名和分数，减少传输量和模型理解负担
+    # 优化：极大地精简规则文本，只发送规则名和分数，移除描述以减少Token
     rules_text = "\n".join([
-        f"{pos}:\n  - " + "\n  - ".join([f"{r['name']}: (match={r['match_score']}, mismatch={r['mismatch_score']})" for r in rules]) 
+        f'"{pos}": {{' + ', '.join([f'"{r["name"]}": {r["match_score"]}' for r in rules]) + '}' 
         for pos, rules in RULE_SETS.items()
     ])
+    rules_text = "{\n" + rules_text + "\n}"
 
-    # 优化：精简提示词，指令更直接
+    # 优化：更明确、更简洁的提示词，强调JSON输出
     system_msg = (
-        "你是一位中文语言学专家。你的任务是根据提供的规则，为给定的词语「{word}」进行词类隶属度评分。"
-        "请严格按照以下步骤操作：\n"
-        "1. **分析词语**：仔细阅读并理解目标词语。\n"
-        "2. **逐条匹配**：为每个词类下的每一条规则进行判断，该词语是符合（match）还是不符合（mismatch）该规则的描述。\n"
-        "3. **给出得分**：根据判断结果，为每条规则打上对应的得分（match_score 或 mismatch_score）。\n"
-        "4. **计算总分**：对每个词类下的所有规则得分进行求和，得到该词类的总得分。\n"
-        "5. **判定结果**：根据总得分，判定该词语最可能属于哪个词类（predicted_pos）。\n"
-        "6. **提供解释**：简要解释你判定为最可能词类的主要依据（1-2句话即可）。\n"
-        "\n"
-        "**输出格式**：请以一个完整、合法的JSON对象作为唯一输出。JSON必须包含以下三个字段：\n"
-        '- "predicted_pos": 最可能的词类名称（字符串）。\n'
-        '- "scores": 一个嵌套字典，键是词类名称，值是另一个字典（键是规则名，值是得分）。\n'
-        '- "explanation": 你的判定解释（字符串）。\n'
-        "\n"
-        "**重要提示**：只输出JSON，不要包含任何其他文字、解释或代码块标记。确保JSON格式正确无误。"
-    ).format(word=word)
+        "你是一位中文语言学专家。你的任务是根据提供的规则，为给定的词语「" + word + "」进行词类隶属度评分。\n"
+        "请严格按照以下JSON结构返回结果，不要添加任何其他说明文字：\n"
+        "{\n"
+        '  "predicted_pos": "最可能的词类名称（字符串）",\n'
+        '  "scores": {\n'
+        '    "词类1": { "规则1": 得分, "规则2": 得分, ... },\n'
+        '    "词类2": { "规则1": 得分, "规则2": 得分, ... },\n'
+        '    ...\n'
+        '  },\n'
+        '  "explanation": "简要解释判定为最可能词类的主要依据（1-2句话）"\n'
+        "}\n"
+        "说明：\n"
+        "1. 对于'scores'中的每个规则，如果你判断词语符合规则描述，请填入规则后的分值；否则填0。\n"
+        "2. 请确保返回的是一个完整且格式正确的JSON对象。"
+    )
     
     user_prompt = f"请基于以下规则，分析词语「{word}」并返回JSON结果：\n\n{rules_text}"
 
@@ -493,7 +527,8 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
                 normalized_key = normalize_key(k, rules)
                 if normalized_key:
                     rule_def = next(r for r in rules if r["name"] == normalized_key)
-                    scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
+                    # 这里简化映射，因为我们告诉模型直接返回match_score或0
+                    scores_out[pos][normalized_key] = v if v == rule_def["match_score"] else 0
 
     return scores_out, cleaned_json_text, predicted_pos, explanation
 
@@ -529,88 +564,93 @@ def main():
     st.title("📰 汉语词类隶属度检测")
     
     # --- 顶部固定控制区 ---
-    # 使用 st.container 和 st.columns 来创建一个固定在顶部的控制面板
     control_container = st.container()
     with control_container:
-        # 创建一个多列布局，将模型选择、测试按钮和输入框放在一起
-        col1, col2, col3 = st.columns([2, 1, 3]) # 调整列宽比例
+        col1, col2, col3 = st.columns([2, 1, 3])
         
         with col1:
             st.subheader("⚙️ 模型设置")
             selected_model_display_name = st.selectbox("选择大模型", list(MODEL_OPTIONS.keys()), key="model_select")
+            selected_model_info = MODEL_OPTIONS[selected_model_display_name]
             
+            # 检查API Key是否存在
+            if not selected_model_info["api_key"]:
+                st.error(f"❌ 未找到 {selected_model_display_name} 的API Key")
+                st.info(f"请设置环境变量 **{selected_model_info['env_var']}** 后重试")
+                st.code(f"# Linux/Mac\n export {selected_model_info['env_var']}='你的API Key'\n\n# Windows\n set {selected_model_info['env_var']}='你的API Key'", language="bash")
+        
         with col2:
             st.subheader("🔗 连接测试")
-            # 测试连接按钮
-            if st.button("测试模型链接", type="secondary"):
-                model_config = MODEL_OPTIONS[selected_model_display_name]
-                with st.spinner("正在测试连接..."):
-                    # 使用一个简单的ping请求来测试连接
-                    ok, _, err_msg = call_llm_api_cached(
-                        _provider=model_config["provider"],
-                        _model=model_config["model"],
-                        _api_key=model_config["api_key"],
-                        messages=[{"role": "user", "content": "请回复'pong'"}], # 一个简单的请求
-                        max_tokens=10
-                    )
-                if ok:
-                    st.success("✅ 模型链接测试成功！")
-                else:
-                    st.error(f"❌ 模型链接测试失败: {err_msg}")
+            if not selected_model_info["api_key"]:
+                st.disabled(True)
+                st.button("测试模型链接", type="secondary", disabled=True)
+            else:
+                if st.button("测试模型链接", type="secondary"):
+                    with st.spinner("正在测试连接..."):
+                        # 使用一个简单的ping请求来测试连接
+                        ok, _, err_msg = call_llm_api_cached(
+                            _provider=selected_model_info["provider"],
+                            _model=selected_model_info["model"],
+                            _api_key=selected_model_info["api_key"],
+                            messages=[{"role": "user", "content": "请回复'pong'"}],
+                            max_tokens=10
+                        )
+                    if ok:
+                        st.success("✅ 模型链接测试成功！")
+                    else:
+                        st.error(f"❌ 模型链接测试失败: {err_msg}")
 
         with col3:
             st.subheader("🔤 词语输入")
-            word = st.text_input("请输入要分析的汉语词", placeholder="例如：苹果、跑、美丽...", key="word_input")
+            word = st.text_input("请输入要分析的汉语词语", placeholder="例如：苹果、跑、美丽...", key="word_input")
             
-            # 开始分析按钮
-            analyze_button = st.button("🚀 开始分析", type="primary")
+            # 开始分析按钮（API Key为空时禁用）
+            analyze_button = st.button(
+                "🚀 开始分析", 
+                type="primary",
+                disabled=not (selected_model_info["api_key"] and word)
+            )
 
-    # 添加一个分割线，将控制区和结果区分开
     st.markdown("---")
 
-    # --- 使用说明（可选，放在控制区下方或结果区上方）---
+    # --- 使用说明 ---
     info_container = st.container()
     with info_container:
         with st.expander("ℹ️ 使用说明", expanded=False):
             st.info("""
-            1. 在上方的“词语输入”框中输入一个汉语词语。
-            2. （可选）在“模型设置”中选择你希望使用的大模型。
-            3. （可选）点击“测试模型链接”按钮，确认所选模型可以正常访问。
+            1. 提前设置对应模型的环境变量（API Key）。
+            2. 在上方的“词语输入”框中输入一个汉语词语。
+            3. （可选）点击“测试模型链接”按钮，确认所选模型API可以正常访问。
             4. 点击“开始分析”按钮，系统将使用选定的大模型分析该词语的词类隶属度。
             5. 分析结果将显示在下方，包括隶属度排名、详细得分、推理过程和原始响应。
+            
+            **环境变量设置方法：**
+            - Linux/Mac: export 环境变量名='你的API Key'
+            - Windows: set 环境变量名='你的API Key'
             """)
 
     # --- 结果显示区 ---
-    # 只有当点击分析按钮且输入框不为空时，才显示结果
-    if analyze_button and word:
-        # 立即显示状态，提升感知速度
+    if analyze_button and word and selected_model_info["api_key"]:
         status_placeholder = st.empty()
         status_placeholder.info(f"正在为词语「{word}」启动分析...")
 
-        model_config = MODEL_OPTIONS[selected_model_display_name]
-        
-        # 调用核心函数
         scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
             word=word,
-            provider=model_config["provider"],
-            model=model_config["model"],
-            api_key=model_config["api_key"]
+            provider=selected_model_info["provider"],
+            model=selected_model_info["model"],
+            api_key=selected_model_info["api_key"]
         )
         
-        # 计算隶属度并获取排名
-        membership = calculate_membership(scores_all)
-        top10 = get_top_10_positions(membership)
-        
-        # 清除状态信息
         status_placeholder.empty()
         
-        # 结果展示
+        membership = calculate_membership(scores_all)
         st.success(f'**分析完成**：词语「{word}」最可能的词类是 【{predicted_pos}】，隶属度为 {membership.get(predicted_pos, 0):.4f}')
         
         col_results_1, col_results_2 = st.columns(2)
         
         with col_results_1:
             st.subheader("🏆 词类隶属度排名（前十）")
+            top10 = get_top_10_positions(membership)
             top10_df = pd.DataFrame(top10, columns=["词类", "隶属度"])
             top10_df["隶属度"] = top10_df["隶属度"].apply(lambda x: f"{x:.4f}")
             st.table(top10_df)
