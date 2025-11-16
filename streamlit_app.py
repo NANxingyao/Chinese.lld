@@ -111,7 +111,7 @@ MODEL_OPTIONS = {
     "Doubao（豆包）": {
         "provider": "doubao", 
         "model": "doubao-pro-32k", 
-        "api_key": os.getenv("DOUBAO_API_KEY", "222afa3f-5f27-403e-bf46-ced2a356ceee"),
+        "api_key": os.getenv("DOUBAO_API_KEY", "404571ec-4209-4842-956f-c4fd7a62d0fe"),
         "env_var": "DOUBAO_API_KEY"
     },
     "Qwen（通义千问）": {
