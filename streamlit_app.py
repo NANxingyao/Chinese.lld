@@ -390,11 +390,14 @@ def calculate_membership(scores_all: Dict[str, Dict[str, int]]) -> Dict[str, flo
         total_score = sum(scores.values())
         max_score = MAX_SCORES.get(pos, 1)
         if max_score == 0:
+            # 处理特殊情况，确保得分为0时显示为0
             membership[pos] = 0.0
         else:
             # 归一化到 [0, 1] 区间
             normalized = (total_score + max_score) / (2 * max_score)
-            membership[pos] = max(0.0, min(1.0, normalized))
+            clamped = max(0.0, min(1.0, normalized))
+            # 保留两位小数，且确保0值精确显示为0
+            membership[pos] = round(clamped, 2) if clamped != 0 else 0.0
     return membership
 
 def get_top_10_positions(membership: Dict[str, float]) -> List[Tuple[str, float]]:
