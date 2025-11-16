@@ -419,38 +419,26 @@ def prepare_detailed_scores_df(scores_all: Dict[str, Dict[str, int]]) -> pd.Data
 # 安全的 LLM 调用函数 (增加超时)
 # ===============================
 @st.cache_data(show_spinner=False)
-def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, temperature=0.0):
-    """带有缓存的API调用，相同的请求不会重复调用。"""
-    if not _api_key: return False, {"error": "API Key 为空"}, "API Key 未提供"
-    if _provider not in MODEL_CONFIGS: return False, {"error": f"未知提供商 {_provider}"}, f"未知提供商 {_provider}"
-
-    cfg = MODEL_CONFIGS[_provider]
-    url = f"{cfg['base_url'].rstrip('/')}{cfg['endpoint']}"
-    headers = cfg["headers"](_api_key)
-    payload = cfg["payload"](_model, messages, max_tokens=max_tokens, temperature=temperature)
-
+def call_llm_api(provider: str, model: str, api_key: str, messages: List[Dict[str, str]]) -> Tuple[str, bool]:
+    """调用LLM API获取结果"""
     try:
-        # 增加超时设置到120秒
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        config = MODEL_CONFIGS[provider]
+        url = f"{config['base_url']}{config['endpoint']}"
+        headers = config['headers'](api_key)
+        payload = config['payload'](model, messages)
+        
+        response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=60)
         response.raise_for_status()
-        return True, response.json(), ""
-    except requests.exceptions.Timeout:
-        error_msg = "请求超时。模型可能正忙或网络连接较慢。建议尝试其他模型或稍后再试。"
-        return False, {"error": error_msg}, error_msg
-    except requests.exceptions.RequestException as e:
-        # 对于4xx和5xx错误，提取更多信息
-        error_msg = f"API请求失败: {str(e)}"
-        if hasattr(e, 'response') and e.response is not None:
-            try:
-                error_details = e.response.json()
-                if 'error' in error_details:
-                    error_msg += f" 详情: {error_details['error']['message']}"
-            except:
-                error_msg += f" 响应内容: {e.response.text[:200]}..." # 只显示部分内容
-        return False, {"error": error_msg}, error_msg
+        
+        # 根据不同 provider 解析响应
+        if provider == "qwen":
+            result = response.json().get("output", {}).get("text", "")
+        else:
+            result = response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+            
+        return result, True
     except Exception as e:
-        error_msg = f"发生未知错误: {str(e)}"
-        return False, {"error": error_msg}, error_msg
+        return f"API调用错误: {str(e)}", False
 
 # ===============================
 # 词类判定主函数 (优化Prompt)
