@@ -93,7 +93,7 @@ MODEL_OPTIONS = {
     "DeepSeek Chat": {
         "provider": "deepseek", 
         "model": "deepseek-chat", 
-        "api_key": os.getenv("DEEPSEEK_API_KEY", ""),
+        "api_key": os.getenv("DEEPSEEK_API_KEY", "sk-1f346646d29947d0a5e29dbaa37476b8"),
         "env_var": "DEEPSEEK_API_KEY"
     },
     "OpenAI GPT-4o": {
