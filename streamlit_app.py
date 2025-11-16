@@ -15,12 +15,11 @@ st.set_page_config(
     page_title="汉语词类隶属度检测",
     page_icon="📰",
     layout="wide",  # 使用宽布局
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",  # 默认折叠侧边栏
     menu_items=None
 )
 
 # 自定义CSS样式
-# 关键改动：固定侧边栏宽度和主内容区布局
 hide_streamlit_style = """
 <style>
 /* 隐藏顶部菜单栏和页脚 */
@@ -30,18 +29,14 @@ footer {visibility: hidden;}
 /* 调整表格样式 */
 .dataframe {font-size: 12px;}
 
-/* --- 固定侧边栏的核心CSS --- */
-
-/* 1. 固定侧边栏的宽度 */
-[data-testid="stSidebar"] > div:first-child {
-    width: 300px !important;
-    min-width: 300px !important;
-    max-width: 300px !important;
+/* 隐藏默认的侧边栏 */
+[data-testid="stSidebar"] {
+    display: none !important;
 }
 
-/* 2. 固定主内容区的左边距，以适应侧边栏 */
-[data-testid="stAppViewContainer"] {
-    margin-left: 300px !important;
+/* 为顶部控制区添加边框和背景色，使其看起来像一个固定的面板 */
+.stApp > div:first-child {
+    padding-top: 2rem;
 }
 </style>
 """
@@ -139,7 +134,6 @@ RULE_SETS = {
         {"name": "P7_一般不能受程度副词'很'修饰", "desc": "一般不能受程度副词'很'修饰", "match_score": 10, "mismatch_score": 0},
         {"name": "P8_不能跟在'怎么/怎样'与'这么/这样/那么'之后", "desc": "不能跟在'怎么/怎样'或'这么/这样/那么'之后", "match_score": 10, "mismatch_score": -10},
     ],
-    # ... (为简洁起见，省略了其他词类的规则，实际代码中请保持完整)
     # 1.4 处所词
     "处所词": [
         {"name": "L1_可做介词宾语/填介词框架", "desc": "可以做'在/到/从/往/向'等介词的宾语，或填入'从...到/向/往'框架", "match_score": 10, "mismatch_score": -10},
@@ -534,39 +528,61 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
 def main():
     st.title("📰 汉语词类隶属度检测")
     
-    # 侧边栏
-    with st.sidebar:
-        st.header("⚙️ 模型设置")
-        selected_model_display_name = st.selectbox("选择大模型", list(MODEL_OPTIONS.keys()))
+    # --- 顶部固定控制区 ---
+    # 使用 st.container 和 st.columns 来创建一个固定在顶部的控制面板
+    control_container = st.container()
+    with control_container:
+        # 创建一个多列布局，将模型选择、测试按钮和输入框放在一起
+        col1, col2, col3 = st.columns([2, 1, 3]) # 调整列宽比例
         
-        if st.button("🔗 测试模型链接"):
-            model_config = MODEL_OPTIONS[selected_model_display_name]
-            with st.spinner("正在测试连接..."):
-                ok, _, err_msg = call_llm_api_cached(
-                    _provider=model_config["provider"],
-                    _model=model_config["model"],
-                    _api_key=model_config["api_key"],
-                    messages=[{"role": "user", "content": "请回复'pong'"}],
-                    max_tokens=10
-                )
-            if ok:
-                st.success("✅ 模型链接测试成功！")
-            else:
-                st.error(f"❌ 模型链接测试失败: {err_msg}")
-        
-        st.markdown("---")
-        st.info("""
-        ### ℹ️ 使用说明
-        1. 在主界面输入框中输入一个汉语词语。
-        2. 点击"开始分析"按钮。
-        3. 系统将使用选定的大模型分析该词语的词类隶属度。
-        4. 结果将包括：隶属度排名、详细得分、推理过程和原始响应。
-        """)
+        with col1:
+            st.subheader("⚙️ 模型设置")
+            selected_model_display_name = st.selectbox("选择大模型", list(MODEL_OPTIONS.keys()), key="model_select")
+            
+        with col2:
+            st.subheader("🔗 连接测试")
+            # 测试连接按钮
+            if st.button("测试模型链接", type="secondary"):
+                model_config = MODEL_OPTIONS[selected_model_display_name]
+                with st.spinner("正在测试连接..."):
+                    # 使用一个简单的ping请求来测试连接
+                    ok, _, err_msg = call_llm_api_cached(
+                        _provider=model_config["provider"],
+                        _model=model_config["model"],
+                        _api_key=model_config["api_key"],
+                        messages=[{"role": "user", "content": "请回复'pong'"}], # 一个简单的请求
+                        max_tokens=10
+                    )
+                if ok:
+                    st.success("✅ 模型链接测试成功！")
+                else:
+                    st.error(f"❌ 模型链接测试失败: {err_msg}")
 
-    # 主界面
-    word = st.text_input("请输入要分析的汉语词语", placeholder="例如：苹果、跑、美丽...", key="word_input")
-    
-    if st.button("🚀 开始分析", type="primary") and word:
+        with col3:
+            st.subheader("🔤 词语输入")
+            word = st.text_input("请输入要分析的汉语词语", placeholder="例如：苹果、跑、美丽...", key="word_input")
+            
+            # 开始分析按钮
+            analyze_button = st.button("🚀 开始分析", type="primary")
+
+    # 添加一个分割线，将控制区和结果区分开
+    st.markdown("---")
+
+    # --- 使用说明（可选，放在控制区下方或结果区上方）---
+    info_container = st.container()
+    with info_container:
+        with st.expander("ℹ️ 使用说明", expanded=False):
+            st.info("""
+            1. 在上方的“词语输入”框中输入一个汉语词语。
+            2. （可选）在“模型设置”中选择你希望使用的大模型。
+            3. （可选）点击“测试模型链接”按钮，确认所选模型API可以正常访问。
+            4. 点击“开始分析”按钮，系统将使用选定的大模型分析该词语的词类隶属度。
+            5. 分析结果将显示在下方，包括隶属度排名、详细得分、推理过程和原始响应。
+            """)
+
+    # --- 结果显示区 ---
+    # 只有当点击分析按钮且输入框不为空时，才显示结果
+    if analyze_button and word:
         # 立即显示状态，提升感知速度
         status_placeholder = st.empty()
         status_placeholder.info(f"正在为词语「{word}」启动分析...")
