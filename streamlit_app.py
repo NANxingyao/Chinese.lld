@@ -673,3 +673,13 @@ def main():
 
 if __name__ == "__main__":
     main()
+# ===============================
+# 页面底部说明
+# ===============================
+st.markdown("---")
+st.markdown(
+    "<div style='text-align:center; color:#666;'>"
+    "© 2025 汉语词类隶属度检测划类 "
+    "</div>",
+    unsafe_allow_html=True
+)
