@@ -12,11 +12,10 @@ from typing import Tuple, Dict, Any
 # 页面配置
 # ===============================
 st.set_page_config(
-    page_title="汉语词类隶属度检测",  # 页面标题
-    page_icon="📰",                  # 页面图标
-    layout="centered",               # 布局居中
-    initial_sidebar_state="collapsed",  # 初始折叠侧边栏
-    menu_items=None                  # 隐藏默认菜单
+    page_title="汉语词类隶属度检测",
+    page_icon="📰",
+    layout="centered",
+    initial_sidebar_state="expanded",    # ← 修复关键点！
 )
 
 # 自定义CSS样式，隐藏Streamlit默认的顶部和底部元素
@@ -41,20 +40,18 @@ MODEL_CONFIGS = {
             "messages": messages,
             "max_tokens": kw.get("max_tokens", 1024),
             "temperature": kw.get("temperature", 0.0),
-            "stream": False,
         },
     },
 
     "openai": {
         "base_url": "https://api.openai.com/v1",
         "endpoint": "/chat/completions",
-        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        "headers": lambda key: {"Authorization": f"Bearer " + key},
         "payload": lambda model, messages, **kw: {
             "model": model,
             "messages": messages,
             "max_tokens": kw.get("max_tokens", 1024),
             "temperature": kw.get("temperature", 0.0),
-            "stream": False,
         },
     },
 
@@ -67,41 +64,58 @@ MODEL_CONFIGS = {
             "messages": messages,
             "max_tokens": kw.get("max_tokens", 1024),
             "temperature": kw.get("temperature", 0.0),
-            "stream": False,
         },
     },
 
-   "doubao": {
-    "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-    "endpoint": "/chat/completions",
-    "headers": lambda key: {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    },
-    "payload": lambda model, messages, **kw: {
-        "model": model,
-        "messages": messages,
-        "max_tokens": kw.get("max_tokens", 1024),
-        "temperature": kw.get("temperature", 0.0),
-        "stream": False,
-    },
-},
-
-    "qwen": {
-        "base_url": "https://dashscope.aliyuncs.com/api/v1",
-        "endpoint": "/services/aigc/text-generation/generation",
-        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+    # -----------------------------
+    # ✅【完全修复】豆包 Doubao 新接口
+    # -----------------------------
+    "doubao": {
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "endpoint": "/chat/completions",
+        "headers": lambda key: {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        },
         "payload": lambda model, messages, **kw: {
             "model": model,
-            "input": {"messages": messages},
+            "messages": messages,
             "parameters": {
                 "max_tokens": kw.get("max_tokens", 1024),
                 "temperature": kw.get("temperature", 0.0),
             },
         },
     },
-}
 
+    # -----------------------------
+    # ✅【完全修复】通义千问 Qwen 接口
+    #
+    # DashScope 不是 Chat 模式！
+    # 要求结构：
+    # {
+    #   "model": "qwen-max",
+    #   "input": {"messages": [...] }
+    # }
+    # -----------------------------
+    "qwen": {
+        "base_url": "https://dashscope.aliyuncs.com/api/v1",
+        "endpoint": "/services/aigc/text-generation/generation",
+        "headers": lambda key: {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        },
+        "payload": lambda model, messages, **kw: {
+            "model": model,
+            "input": {
+                "messages": messages
+            },
+            "parameters": {
+                "max_tokens": kw.get("max_tokens", 1024),
+                "temperature": kw.get("temperature", 0.0),
+            }
+        },
+    },
+}
 
 # ===============================
 # 模型配置与 API Key（从环境变量获取）
