@@ -1,4 +1,4 @@
-#元素最齐全版本（增强版+侧边栏+流畅调用）
+#元素最齐全版本（增强版+固定侧边栏+流畅调用）
 import streamlit as st
 import requests
 import json
@@ -20,13 +20,31 @@ st.set_page_config(
 )
 
 # 自定义CSS样式
+# 关键改动在这里：增加了固定侧边栏的样式
 hide_streamlit_style = """
 <style>
 /* 隐藏顶部菜单栏和页脚 */
 header {visibility: hidden;}
 footer {visibility: hidden;}
+
 /* 调整表格样式 */
 .dataframe {font-size: 12px;}
+
+/* --- 固定侧边栏的核心CSS --- */
+/* 1. 确保侧边栏容器始终保持展开状态 */
+[data-testid="stSidebar"][aria-expanded="false"] {
+    transform: translateX(0) !important;
+}
+
+/* 2. 隐藏侧边栏的折叠/展开按钮 */
+[data-testid="collapsedControl"] {
+    display: none !important;
+}
+
+/* 3. (可选) 为侧边栏添加一个固定的宽度，防止内容过宽或过窄 */
+[data-testid="stSidebar"] > div:first-child {
+    width: 300px !important;
+}
 </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
@@ -80,14 +98,16 @@ MODEL_CONFIGS = {
 MODEL_OPTIONS = {
     "DeepSeek Chat": {"provider": "deepseek", "model": "deepseek-chat", "api_key": os.getenv("DEEPSEEK_API_KEY", "sk-1f346646d29947d0a5e29dbaa37476b8")},
     "OpenAI GPT-4o": {"provider": "openai", "model": "gpt-4o-mini", "api_key": os.getenv("OPENAI_API_KEY", "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")},
-    "Moonshot（Kimi）": {"provider": "moonshot", "model": "moonshot-v1-32k", "api_key": os.getenv("MOONSHOT_API_KEY", "sk-l5FvRWegjM5DEk4AU71YPQ1QgvFPTHZIJOmq6qdssPY4sNtE")},
+    "Moonshot（Kimi）": {"provider": "moonshot", "model": "moonshot-v1-32k", "api_key": os.getenv("MOONSHOT_API_KEY", "sk-l5FvRWegjM5DEk4AU71YPQgvFPTHZIJOmq6qdssPY4sNtE")},
     "Doubao（豆包）": {"provider": "doubao", "model": "doubao-pro-32k", "api_key": os.getenv("DOUBAO_API_KEY", "sk-222afa3f-5f27-403e-bf46-ced2a356ceee")},
     "Qwen（通义千问）": {"provider": "qwen", "model": "qwen-max", "api_key": os.getenv("QWEN_API_KEY", "sk-b3f7a1153e6f4a44804a296038aa86c5")},
 }
 
 # ===============================
-# 词类规则与最大得分
+# 词类规则与最大得分 (这部分内容较长，为保持简洁省略，实际使用时请保留完整内容)
 # ===============================
+# (此处省略了 RULE_SETS 和 MAX_SCORES 的定义，它们与上一版完全相同)
+# 为了代码能正常运行，请确保将上一版中的 RULE_SETS 和 MAX_SCORES 复制到这里
 RULE_SETS = {
     # 1.1 名词
     "名词": [
@@ -293,8 +313,9 @@ RULE_SETS = {
 }
 MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in RULE_SETS.items()}
 
+
 # ===============================
-# 工具函数
+# 工具函数 (这部分与上一版完全相同，为保持简洁省略)
 # ===============================
 def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
     if not isinstance(resp_json, dict): return ""
@@ -376,7 +397,7 @@ def prepare_detailed_scores_df(scores_all: Dict[str, Dict[str, int]]) -> pd.Data
     return pd.DataFrame(rows)
 
 # ===============================
-# 安全的 LLM 调用函数
+# 安全的 LLM 调用函数 (与上一版相同)
 # ===============================
 def call_llm_api(messages: list, provider: str, model: str, api_key: str, max_tokens: int = 4096, temperature: float = 0.0) -> Tuple[bool, dict, str]:
     if not api_key: return False, {"error": "API Key 为空"}, "API Key 未提供"
@@ -402,7 +423,7 @@ def call_llm_api(messages: list, provider: str, model: str, api_key: str, max_to
         return False, {"error": error_msg}, error_msg
 
 # ===============================
-# 安全的词类判定函数
+# 安全的词类判定函数 (与上一版相同)
 # ===============================
 def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str, str]:
     if not word: return {}, "", "未知", ""
@@ -451,7 +472,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     return scores_out, raw_text, predicted_pos, explanation
 
 # ===============================
-# 雷达图
+# 雷达图 (与上一版相同)
 # ===============================
 def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
     if not scores_norm:
@@ -476,7 +497,7 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
     st.plotly_chart(fig, use_container_width=True)
 
 # ===============================
-# 主页面逻辑
+# 主页面逻辑 (与上一版相同)
 # ===============================
 def main():
     st.title("📰 汉语词类隶属度检测")
@@ -504,7 +525,7 @@ def main():
         st.markdown("---")
         st.info("""
         ### ℹ️ 使用说明
-        1. 在主界面输入框中输入一个汉语词。
+        1. 在主界面输入框中输入一个汉语词语。
         2. 点击"开始分析"按钮。
         3. 系统将使用选定的大模型分析该词语的词类隶属度。
         4. 结果将包括：隶属度排名、详细得分、推理过程和原始响应。
