@@ -660,10 +660,26 @@ def main():
 
         with col_results_2:
             st.subheader("📋 各词类详细得分")
-            detailed_df = prepare_detailed_scores_df(scores_all)
-            detailed_df = detailed_df.sort_values(by=["词类", "规则代码"])
-            with st.expander("点击展开查看所有规则得分", expanded=False):
-                st.dataframe(detailed_df, use_container_width=True, height=400)
+            
+            # 按词类分组显示，每个词类一个expander
+            for pos in RULE_SETS.keys():
+                # 计算该词类的总分
+                total_score = sum(scores_all[pos].values())
+                # 找到该词类下得分最高的规则
+                max_rule = max(scores_all[pos].items(), key=lambda x: x[1], default=("无", 0))
+                
+                # 创建expander，显示词类名称、总分和最高分规则
+                with st.expander(f"**{pos}** (总分: {total_score}, 最高分规则: {max_rule[0]} - {max_rule[1]}分)"):
+                    # 显示该词类下的所有规则得分
+                    rule_data = []
+                    for rule in RULE_SETS[pos]:
+                        rule_data.append({
+                            "规则代码": rule["name"],
+                            "规则描述": rule["desc"],
+                            "得分": scores_all[pos][rule["name"]]
+                        })
+                    rule_df = pd.DataFrame(rule_data)
+                    st.dataframe(rule_df, use_container_width=True, height=200)
         
         st.subheader("🔍 模型推理过程")
         st.text_area("推理详情", explanation, height=200, disabled=True)
