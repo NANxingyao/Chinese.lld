@@ -31,19 +31,15 @@ footer {visibility: hidden;}
 .dataframe {font-size: 12px;}
 
 /* --- 固定侧边栏的核心CSS --- */
-/* 1. 隐藏侧边栏的折叠/展开按钮 */
-[data-testid="collapsedControl"] {
-    display: none !important;
-}
 
-/* 2. 固定侧边栏的宽度 */
+/* 1. 固定侧边栏的宽度 */
 [data-testid="stSidebar"] > div:first-child {
     width: 300px !important;
     min-width: 300px !important;
     max-width: 300px !important;
 }
 
-/* 3. 固定主内容区的左边距，以适应侧边栏 */
+/* 2. 固定主内容区的左边距，以适应侧边栏 */
 [data-testid="stAppViewContainer"] {
     margin-left: 300px !important;
 }
