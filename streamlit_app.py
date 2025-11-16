@@ -99,25 +99,25 @@ MODEL_OPTIONS = {
     "OpenAI GPT-4o": {
         "provider": "openai", 
         "model": "gpt-4o-mini", 
-        "api_key": os.getenv("OPENAI_API_KEY", ""),
+        "api_key": os.getenv("OPENAI_API_KEY", "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"),
         "env_var": "OPENAI_API_KEY"
     },
     "Moonshot（Kimi）": {
         "provider": "moonshot", 
         "model": "moonshot-v1-32k", 
-        "api_key": os.getenv("MOONSHOT_API_KEY", ""),
+        "api_key": os.getenv("MOONSHOT_API_KEY", "sk-l5FvRWegjM5DEk4AU71YPQ1QgvFPTHZIJOmq6qdssPY4sNtE"),
         "env_var": "MOONSHOT_API_KEY"
     },
     "Doubao（豆包）": {
         "provider": "doubao", 
         "model": "doubao-pro-32k", 
-        "api_key": os.getenv("DOUBAO_API_KEY", ""),
+        "api_key": os.getenv("DOUBAO_API_KEY", "222afa3f-5f27-403e-bf46-ced2a356ceee"),
         "env_var": "DOUBAO_API_KEY"
     },
     "Qwen（通义千问）": {
         "provider": "qwen", 
         "model": "qwen-max", 
-        "api_key": os.getenv("QWEN_API_KEY", ""),
+        "api_key": os.getenv("QWEN_API_KEY", "sk-b3f7a1153e6f4a44804a296038aa86c5"),
         "env_var": "QWEN_API_KEY"
     },
 }
