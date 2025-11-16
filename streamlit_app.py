@@ -762,23 +762,3 @@ def save_results_to_single_excel(word, membership, detailed_scores_df, top_10_po
         return True, filepath
     except Exception as e:
         return False, str(e)
-
-# ===============================
-# 在主界面添加保存按钮（建议添加在结果展示区域下方）
-# ===============================
-# 注意：需要根据实际代码结构调整变量名和放置位置
-if 'membership' in locals() and 'detailed_scores_df' in locals() and 'top_10_positions' in locals() and 'predicted_pos' in locals() and 'explanation' in locals() and word:
-    if st.button("保存结果到Excel"):
-        with st.spinner("正在保存结果..."):
-            success, result = save_results_to_single_excel(
-                word=word,
-                membership=membership,
-                detailed_scores_df=detailed_scores_df,
-                top_10_positions=top_10_positions,
-                predicted_pos=predicted_pos,
-                explanation=explanation
-            )
-            if success:
-                st.success(f"结果已成功保存到：\n{result}")
-            else:
-                st.error(f"保存失败：{result}")
