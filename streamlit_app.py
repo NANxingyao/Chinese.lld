@@ -414,9 +414,7 @@ def prepare_detailed_scores_df(scores_all: Dict[str, Dict[str, int]]) -> pd.Data
 # ===============================
 # 安全的 LLM 调用函数 (增加超时)
 # ===============================
-@st.cache_data(show_spinner=False)
 def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, temperature=0.0):
-    """带有缓存的API调用，相同的请求不会重复调用。"""
     if not _api_key: return False, {"error": "API Key 为空"}, "API Key 未提供"
     if _provider not in MODEL_CONFIGS: return False, {"error": f"未知提供商 {_provider}"}, f"未知提供商 {_provider}"
 
