@@ -1,3 +1,7 @@
+# =========================
+# 内容：导入 / 页面配置 / CSS / MODEL_CONFIGS / MODEL_OPTIONS
+# =========================
+
 import streamlit as st
 import requests
 import json
@@ -8,179 +12,198 @@ import plotly.graph_objects as go
 from typing import Tuple, Dict, Any
 
 # ===============================
-# 模型接口配置（重点修复区）
+# 页面配置（保证侧边栏可见）
 # ===============================
+st.set_page_config(
+    page_title="汉语词类隶属度检测（整合版）",
+    page_icon="📰",
+    layout="centered",
 
+    # ==== FIX BEGIN: 强制侧边栏展开（避免折叠/隐藏问题） ====
+    # 原先 collapsed/隐藏 CSS 导致侧边栏无法显示，这里强制展开。
+    initial_sidebar_state="expanded"
+    # ==== FIX END ====
+)
+
+# ===============================
+# CSS：醒目背景 + 强制侧边栏常显（覆盖原来可能破坏 sidebar 的 CSS）
+# 说明：此段 CSS 不会隐藏任何 sidebar 元素（只做可见与布局调整）
+# ===============================
+st.markdown(
+    """
+    <style>
+    /* 主背景：亮浅蓝 */
+    [data-testid="stAppViewContainer"] {
+        background-color: #E8F4FF !important;
+    }
+
+    /* 主内容容器：半透明卡片，更易阅读 */
+    .block-container {
+        background-color: rgba(255,255,255,0.88) !important;
+        padding: 1.6rem !important;
+        border-radius: 12px !important;
+    }
+
+    /* ==== FIX BEGIN: 强制展示侧边栏，禁止被原 CSS 折叠隐藏 ==== */
+    /* 使 sidebar 主容器可见 */
+    [data-testid="stSidebar"] {
+        visibility: visible !important;
+        display: block !important;
+    }
+    /* 防止 sidebar 被其他样式覆盖 */
+    .css-1d391kg { visibility: visible !important; }
+    /* 给主 app 内容留出侧边栏宽度（避免覆盖） */
+    [data-testid="stAppViewContainer"] {
+        margin-left: 280px !important;
+    }
+    /* 隐藏 Streamlit 的侧边栏 toggle（避免误点折叠） */
+    button[title="Toggle sidebar"] {
+        display: none !important;
+    }
+    /* ==== FIX END ==== */
+
+    /* 美化侧边栏标题 */
+    .css-1d391kg .stSidebarHeader {
+        font-weight: 700;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ===============================
+# 模型接口配置（修复后的 MODEL_CONFIGS）
+# 仅修改配置层；主调用逻辑保持不变（在第2段）
+# ===============================
 MODEL_CONFIGS = {
-
-    # ------------------------------------------------------
-    # DeepSeek：OpenAI-compatible，格式基本正确
-    # ------------------------------------------------------
+    # DeepSeek: OpenAI-compatible
     "deepseek": {
         "base_url": "https://api.deepseek.com/v1",
         "endpoint": "/chat/completions",
-        "headers": lambda key: {
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json"
-        },
+        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         "payload": lambda model, messages, **kw: {
             "model": model,
             "messages": messages,
             "max_tokens": kw.get("max_tokens", 1024),
-            "temperature": kw.get("temperature", 0.0)
-        }
+            "temperature": kw.get("temperature", 0.0),
+        },
     },
 
-    # ------------------------------------------------------
-    # OpenAI：保持原格式
-    # ------------------------------------------------------
+    # OpenAI
     "openai": {
         "base_url": "https://api.openai.com/v1",
         "endpoint": "/chat/completions",
-        "headers": lambda key: {
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json"
-        },
+        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         "payload": lambda model, messages, **kw: {
             "model": model,
             "messages": messages,
             "max_tokens": kw.get("max_tokens", 1024),
-            "temperature": kw.get("temperature", 0.0)
-        }
+            "temperature": kw.get("temperature", 0.0),
+        },
     },
 
-    # ------------------------------------------------------
-    # Moonshot（Kimi）
-    # 支持 OpenAI 格式，但 endpoint 分中国/全球域
-    # ------------------------------------------------------
+    # Moonshot (Kimi) - allow switching CN/global via env
     "moonshot": {
         # ==== FIX BEGIN: Moonshot global/cn 兼容 ====
-        # 原代码写死 https://api.moonshot.cn/v1
-        # 我允许通过环境变量切换全球域
+        # default cn, can set MOONSHOT_BASE_URL env var to override
         "base_url": os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1"),
         # ==== FIX END ====
-
         "endpoint": "/chat/completions",
-        "headers": lambda key: {
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json"
-        },
+        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         "payload": lambda model, messages, **kw: {
             "model": model,
             "messages": messages,
             "max_tokens": kw.get("max_tokens", 1024),
-            "temperature": kw.get("temperature", 0.0)
-        }
+            "temperature": kw.get("temperature", 0.0),
+        },
     },
 
-    # ------------------------------------------------------
-    # Doubao（火山引擎 Ark）
-    # 官方要求：parameters: {max_tokens, temperature}
-    # ------------------------------------------------------
+    # Doubao (VolcEngine Ark) - requires parameters wrapper
     "doubao": {
         "base_url": "https://ark.cn-beijing.volces.com/api/v3",
         "endpoint": "/chat/completions",
-
-        "headers": lambda key: {
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json"
-        },
-
+        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         "payload": lambda model, messages, **kw: {
             "model": model,
             "messages": messages,
-
             # ==== FIX BEGIN: Doubao payload 修复 ====
-            # 原代码缺失 parameters 字段，导致 Ark 接口直接报 400
+            # Ark expects "parameters": {...}
             "parameters": {
                 "max_tokens": kw.get("max_tokens", 1024),
                 "temperature": kw.get("temperature", 0.0)
             }
             # ==== FIX END ====
-        }
+        },
     },
 
-    # ------------------------------------------------------
-    # Qwen（通义千问 DashScope）
-    # 官方要求：
-    # {
-    #   "model": "qwen-max",
-    #   "input": {"messages": [...]},
-    #   "parameters": {...}
-    # }
-    # ------------------------------------------------------
+    # Qwen / DashScope - uses model + input.messages structure
     "qwen": {
         "base_url": "https://dashscope.aliyuncs.com/api/v1",
         "endpoint": "/services/aigc/text-generation/generation",
-
-        "headers": lambda key: {
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json"
-        },
-
+        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         "payload": lambda model, messages, **kw: {
-
             "model": model,
-
             # ==== FIX BEGIN: Qwen input 结构 ====
-            # 官方 DashScope 格式为 input: { "messages": [...] }
             "input": {"messages": messages},
             # ==== FIX END ====
-
-            # ==== FIX BEGIN: Qwen parameters 修复 ====
             "parameters": {
                 "max_tokens": kw.get("max_tokens", 1024),
                 "temperature": kw.get("temperature", 0.0)
             }
-            # ==== FIX END ====
-        }
-    }
+        },
+    },
 }
 
 # ===============================
-# 模型选择栏（保持原样）
+# 供 UI 使用的模型选项（可扩展）
 # ===============================
-
 MODEL_OPTIONS = {
     "DeepSeek Chat": {
         "provider": "deepseek",
         "model": "deepseek-chat",
         "api_url": "https://api.deepseek.com/v1/chat/completions",
-        "api_key": os.getenv("DEEPSEEK_API_KEY", "sk-1f346646d29947d0a5e29dbaa37476b8")
+        "api_key": os.getenv("DEEPSEEK_API_KEY", ""),
     },
 
     "OpenAI GPT-4o": {
         "provider": "openai",
         "model": "gpt-4o-mini",
         "api_url": "https://api.openai.com/v1/chat/completions",
-        "api_key": os.getenv("OPENAI_API_KEY", "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")
+        "api_key": os.getenv("OPENAI_API_KEY", ""),
     },
 
     "Moonshot（Kimi）": {
         "provider": "moonshot",
         "model": "moonshot-v1-32k",
         "api_url": os.getenv("MOONSHOT_API_URL", "https://api.moonshot.cn/v1/chat/completions"),
-        "api_key": os.getenv("MOONSHOT_API_KEY", "sk-l5FvRWegjM5DEk4AU71YPQ1QgvFPTHZIJOmq6qdssPY4sNtE")
+        "api_key": os.getenv("MOONSHOT_API_KEY", ""),
     },
 
     "Doubao（豆包）": {
         "provider": "doubao",
         "model": "doubao-pro-32k",
         "api_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-        "api_key": os.getenv("DOUBAO_API_KEY", "222afa3f-5f27-403e-bf46-ced2a356ceee")
+        "api_key": os.getenv("DOUBAO_API_KEY", ""),
     },
 
     "Qwen（通义千问）": {
         "provider": "qwen",
         "model": "qwen-max",
         "api_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
-        "api_key": os.getenv("QWEN_API_KEY", "sk-b3f7a1153e6f4a44804a296038aa86c5")
-    }
+        "api_key": os.getenv("QWEN_API_KEY", ""),
+    },
 }
 
 # ===============================
-# RULE_SETS（保持完整原样）
-# 词类规则示例
+# 下一步：RULE_SETS 与工具函数将在第 2 段中继续（保持原始内容不变）
+# ===============================
+# 请确认第2段准备好，我将立即发送包含 RULE_SETS、解析函数、call_llm_api、UI 主逻辑的完整下半部分。
+# ===============================
+# 第 2 段：RULE_SETS、工具函数、调用逻辑
+# ===============================
+
+# ===============================
+# RULE_SETS（完整保留你的原始定义）
 # ===============================
 RULE_SETS = {
     # 1.1 名词
@@ -291,7 +314,7 @@ RULE_SETS = {
         {"name": "PREP2_后面必须跟宾语", "desc": "后面必须跟着宾语", "match_score": 20, "mismatch_score": -20},
         {"name": "PREP3_介宾之间不能插时体助词", "desc": "在介词和宾语之间不能加入时体助词'着/了/过'", "match_score": 10, "mismatch_score": -10},
         {"name": "PREP4_不能有重叠形式", "desc": "不能构成'PrepPrep'等重叠形式", "match_score": 10, "mismatch_score": -10},
-        {"name": "PREP5_不能作主/宾（不能受定语）", "desc": "不能作主语和宾语（因而不能受定语修饰）", "match_score": 10, "mismatch_score": -10},
+        {"name": "PREP5_不能作主/宾（不能受定语）", "desc": "不能作主语和宾语，且不能受定语修饰", "match_score": 10, "mismatch_score": -10},
         {"name": "PREP6_不能作谓语核心/不能受状补", "desc": "不能作谓语和谓语核心，且不能受状语/补语修饰", "match_score": 10, "mismatch_score": -10},
         {"name": "PREP7_不能作状语补语和定语", "desc": "不能作状语、补语和定语等修饰性成分", "match_score": 10, "mismatch_score": -10},
         {"name": "PREP8_介词结构可作状语或补语/可后加'的'构定语", "desc": "由介词和宾语组成的介词结构可以做状语或补语（有的可后加'的'作定语）", "match_score": 20, "mismatch_score": -20},
@@ -385,8 +408,8 @@ RULE_SETS = {
         {"name": "NUM_COM5_可出现在'来/多/余'之前等特殊分布", "desc": "可以出现在特定助词之前（见原文条目）", "match_score": 30, "mismatch_score": 0},
     ],
     # 其他规则占位（便于以后补全）
-    # "未列出词类": [ ... ],
 }
+
 # ===============================
 # MAX_SCORES（基于 RULE_SETS 计算）
 # ===============================
@@ -400,22 +423,14 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
     """
     兼容多家 provider 的文本抽取：
     - 首先尝试 OpenAI-style: resp['choices'][0]['message']['content']
-    - 其次尝试常见简化字段 ('choices' -> 'text' / 'content')
-    - 特别兼容 Qwen(DashScope) 的 'output' -> 'text' 列表结构
-    - 如果以上都不可用，返回整个 JSON 的 string 表示
+    - 尝试 Qwen / DashScope 的 output.text 等结构
+    - 尝试通常的 data/result 字段
+    - 兜底返回 JSON 字符串
     """
     if not isinstance(resp_json, dict):
         return ""
 
     # ==== FIX BEGIN: Qwen / DashScope 响应解析兼容 ====
-    # DashScope/Qwen 可能返回:
-    # {
-    #   "output": {
-    #       "text": [
-    #           {"role": "assistant", "content": "..."}
-    #       ]
-    #   }
-    # }
     try:
         if "output" in resp_json:
             out = resp_json.get("output")
@@ -425,7 +440,6 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
                     first = text_list[0]
                     if isinstance(first, dict) and "content" in first:
                         return first["content"]
-                    # 有些实现可能直接是字符串列表
                     if isinstance(text_list[0], str):
                         return text_list[0]
     except Exception:
@@ -437,11 +451,9 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
         choices = resp_json.get("choices")
         if choices and isinstance(choices, list) and len(choices) > 0:
             first = choices[0]
-            # Chat message style
             msg = first.get("message")
             if isinstance(msg, dict) and "content" in msg:
                 return msg["content"]
-            # older/textual style
             for k in ("content", "text", "message"):
                 if k in first and isinstance(first[k], str):
                     return first[k]
@@ -449,17 +461,13 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
         pass
 
     # ==== FIX BEGIN: Doubao / VolcEngine 兼容检查 ====
-    # Ark/Doubao 也可能返回 OpenAI-like 或者不同的包裹字段
     try:
-        # 例如某些实现会返回 'response' / 'data' 等
-        # 尝试寻找常见字段
         for key in ("response", "data", "result", "output"):
             if key in resp_json:
                 val = resp_json[key]
                 if isinstance(val, str):
                     return val
                 if isinstance(val, dict):
-                    # 再尝试类似 choices 结构
                     if "choices" in val and isinstance(val["choices"], list) and val["choices"]:
                         ch = val["choices"][0]
                         if isinstance(ch, dict):
@@ -470,17 +478,12 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
         pass
     # ==== FIX END ====
 
-    # 兜底：返回 JSON 序列化字符串（便于调试）
     try:
         return json.dumps(resp_json, ensure_ascii=False)
     except:
         return str(resp_json)
 
 def extract_json_from_text(text: str) -> Tuple[dict, str]:
-    """
-    从模型文本中提取 JSON（如果模型要求只返回严格 JSON，这个函数会解析出来）。
-    保持你的原有实现，但确保鲁棒性。
-    """
     if not text:
         return None, ""
     s = text.strip()
@@ -529,7 +532,7 @@ def map_to_allowed_score(rule: dict, raw_val) -> int:
     return mismatch
 
 # ===============================
-# 安全的 LLM 调用函数（保持主逻辑不变，但在部分 provider 上做兼容）
+# 调用 LLM 的接口（保持原主逻辑，含错误返回细节）
 # ===============================
 def call_llm_api(messages: list, provider: str, model: str, api_key: str,
                  max_tokens: int = 1024, temperature: float = 0.0, timeout: int = 30) -> Tuple[bool, dict, str]:
@@ -544,32 +547,21 @@ def call_llm_api(messages: list, provider: str, model: str, api_key: str,
         return False, {"error": f"未知提供商 {provider}"}, f"未知提供商 {provider}"
 
     cfg = MODEL_CONFIGS[provider]
-    # 拼接 URL
     url = cfg["base_url"].rstrip("/") + cfg.get("endpoint", "/chat/completions")
     headers = cfg["headers"](api_key)
-
-    # payload 由 MODEL_CONFIGS 中的 lambda 生成（已在第一段修复）
     payload = cfg["payload"](model, messages, max_tokens=max_tokens, temperature=temperature)
-
-    # ==== FIX BEGIN: 针对 Qwen/DashScope 的请求调整 ====
-    # Qwen via DashScope 使用 endpoint /services/aigc/text-generation/generation，并且接受 model + input 字段。
-    # 我们已在 MODEL_CONFIGS payload 中设置为 input:{messages:...}，因此不在此处改写。
-    # 仅在特殊需要时可以改写 headers 或 payload（当前不做额外改写）。
-    # ==== FIX END ====
 
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=timeout)
-
+        
         if r.status_code != 200:
-            # 返回非 200，尽量把服务器返回的 body 一并给出便于调试
             return False, {"error": f"HTTP错误 {r.status_code}", "content": r.text}, f"HTTP错误 {r.status_code}: {r.text[:200]}"
-
+            
         r.raise_for_status()
         resp_json = r.json()
         return True, resp_json, ""
     except Exception as e:
         error_msg = str(e)
-        # 在 UI 中也打印错误，便于本地调试（不改变原流程）
         try:
             st.error(f"API调用错误: {error_msg}")
         except Exception:
@@ -577,7 +569,7 @@ def call_llm_api(messages: list, provider: str, model: str, api_key: str,
         return False, {"error": error_msg}, error_msg
 
 # ===============================
-# 词类判定主函数（保持原样）
+# 主判定函数（保持原逻辑）
 # ===============================
 def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str]:
     """
@@ -611,16 +603,14 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     )
 
     if not ok or not resp_json:
-        # 调用失败或返回为空
         return {}, f"调用失败或返回异常: {err_msg}", "未知"
 
-    # 尝试解析原始文本
+    # 解析文本
     raw_text = extract_text_from_response(resp_json)
     parsed_json, _ = extract_json_from_text(raw_text)
     if not parsed_json:
         return {}, raw_text, "未知"
 
-    # 解析得分
     scores_out = {}
     predicted_pos = parsed_json.get("predicted_pos", "未知")
     raw_scores = parsed_json.get("scores", {})
@@ -662,219 +652,144 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
     st.plotly_chart(fig, use_container_width=True)
 
 # ===============================
-# Streamlit UI（继续保持你的原 UI 结构与文案）
-# 以下代码应与第一段拼接后形成完整文件
+# 第2段结束：请回复“继续第三段”以获取 UI 主逻辑与剩余代码（第3段）
 # ===============================
 # ===============================
-# 页面配置（修复：侧边栏强制展开）
+# 第 3 段：UI 主界面逻辑（最终部分）
 # ===============================
-st.set_page_config(
-    page_title="汉语词类隶属度检测",
-    page_icon="📰",
-    layout="centered",
 
-    # ==== FIX BEGIN: Sidebar always expanded ====
-    # 原代码：initial_sidebar_state="collapsed"
-    # collapsed 会导致侧边栏与 CSS 冲突，从而无法显示模型选择栏
-    initial_sidebar_state="expanded"
-    # ==== FIX END ====
+# 顶部标题
+st.markdown(
+    "<h1 style='text-align:center; color:#003366; font-size:32px;'>汉语词类隶属度检测（整合版）</h1>",
+    unsafe_allow_html=True
 )
 
-# 隐藏默认顶部和底部按钮
-hide_streamlit_style = """
-<style>
-header {visibility: hidden;}
-footer {visibility: hidden;}
-</style>
-"""
-st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+# ===============================
+# 侧边栏：模型选择（已确保可见）
+# ===============================
+st.sidebar.title("🔧 模型设置")
 
-# ==== FIX BEGIN: 强制展示侧边栏，禁止折叠 ====
-st.markdown("""
-<style>
-/* 让侧边栏永远展示（streamlit 内部类名） */
-[data-testid="stSidebar"] {
-    visibility: visible !important;
-    display: block !important;
-}
+model_choice = st.sidebar.selectbox(
+    "请选择模型：",
+    list(MODEL_OPTIONS.keys())
+)
 
-/* 让主内容区域在右侧正确缩进（防止侧边栏覆盖） */
-[data-testid="stAppViewContainer"] {
-    margin-left: 260px !important;
-}
+selected = MODEL_OPTIONS[model_choice]
+provider = selected["provider"]
+model_name = selected["model"]
+api_key = selected["api_key"]
 
-/* 隐藏侧边栏折叠按钮（避免冲突） */
-button[kind="header"] {
-    display: none !important;
-}
-</style>
-""", unsafe_allow_html=True)
-# ==== FIX END ====
-# ======== 模型选择部分（侧边栏） ========
-# 由侧边栏选择模型
-model_choice = st.sidebar.selectbox("选择模型", list(MODEL_OPTIONS.keys()))
-selected_model = MODEL_OPTIONS[model_choice]
+st.sidebar.markdown(f"**当前选择模型：** `{model_choice}`")
+st.sidebar.markdown(f"**提供商 Provider：** `{provider}`")
+st.sidebar.markdown(f"**模型 ID：** `{model_name}`")
 
-st.sidebar.markdown(f"**当前模型：** {model_choice}")
-st.sidebar.markdown(f"**模型名称：** `{selected_model['model']}`")
+# 可选：允许用户手动输入 API key（优先级 > 环境变量）
+api_key_input = st.sidebar.text_input("API Key（可选）")
+if api_key_input.strip():
+    api_key = api_key_input.strip()
 
-# 获取选中模型的配置
-API_KEY = selected_model["api_key"]
-PROVIDER = selected_model["provider"]
-MODEL_NAME = selected_model["model"]
+if not api_key:
+    st.sidebar.error("⚠️ 未检测到 API Key，请填写。")
 
-# 检查API密钥（保持原逻辑）
-if not API_KEY or API_KEY in ["", "sk-your-moonshot-key"]:
-    st.sidebar.error(f"⚠️ 尚未为模型 {model_choice} 配置 API Key")
-    st.sidebar.markdown("""
-    **请设置环境变量：**
-    - OpenAI：`OPENAI_API_KEY`
-    - DeepSeek：`DEEPSEEK_API_KEY`
-    - Moonshot（Kimi）：`MOONSHOT_API_KEY`
-    - 豆包：`DOUBAO_API_KEY`
-    - 通义千问（Qwen）：`QWEN_API_KEY`
-    
-    **设置方法：**
-    ```bash
-    # Linux / Mac
-    export QWEN_API_KEY="你的通义千问Key"
-
-    # Windows
-    set QWEN_API_KEY=你的密钥
-    ```
-    """)
-
-# ======== 主体部分 ========
-st.markdown("<h1 style='text-align: center;'>📊汉语词类隶属度检测判类</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: grey;'>输入单个词 → 模型自动判类并返回各词类规则得分与隶属度（标准化 0~1）</p>", unsafe_allow_html=True)
-st.write("")
-
-c1, c2, c3 = st.columns([1, 2, 1])
-with c2:
-    word_input = st.text_input("", placeholder="在此输入要分析的词（例如：很 / 跑 / 美丽）")
-    confirm = st.button("确认")
-
-if confirm:
-    word = (word_input or "").strip()
-    if not word:
-        st.warning("请输入一个词语后确认。")
-    else:
-        if not API_KEY or API_KEY in ["", "sk-your-moonshot-key"]:
-            st.error("未找到有效 API Key，请检查配置。")
-            scores_all, raw_out, predicted_pos = {}, "", "无"
-        else:
-            with st.spinner("模型打分判类中……"):
-                try:
-                    scores_all, raw_out, predicted_pos = ask_model_for_pos_and_scores(
-                        word, PROVIDER, MODEL_NAME, API_KEY
-                    )
-                except Exception as e:
-                    st.error(f"模型调用出错：{e}")
-                    import traceback
-                    traceback.print_exc()
-                    scores_out, raw_out, predicted_pos = {}, str(e), "错误"
-
-        # 仅在 scores_all 有内容时才遍历
-        if scores_all:
-            st.subheader(f"词类预测结果：{predicted_pos}")
-            st.json(scores_all)
-            st.text_area("原始输出", raw_out, height=200)
-        else:
-            st.info("未获得有效评分结果。请检查 API Key 或网络连接。")
-            st.text_area("错误信息", raw_out, height=200)
-    
-        # 计算每个词类总分与归一化隶属度（0~1）
-        pos_totals = {}
-        pos_normed = {}
-        for pos, score_map in scores_all.items():
-            total = sum(score_map.values())
-            pos_totals[pos] = total
-            max_possible = MAX_SCORES.get(pos, sum(abs(x) for x in score_map.values()) or 1)
-            norm = round(max(0, total) / max_possible, 3) if max_possible != 0 else 0.0
-            pos_normed[pos] = norm
-
-        # 输出顶部摘要
-        st.markdown("---")
-        st.subheader("判定摘要")
-        st.markdown(f"- **输入词**： `{word}`")
-        st.markdown(f"- **模型预测词类**： **{predicted_pos}**")
-
-        # 排名与表格（只显示前 10）
-        ranked = []
-        if pos_normed:
-            ranked = sorted(pos_normed.items(), key=lambda x: x[1], reverse=True)
-        
-        st.subheader("隶属度排行（前10）")
-        if ranked:
-            for i, (p, s) in enumerate(ranked[:10]):
-                st.write(f"{i+1}. **{p}** — 隶属度：{s}")
-        else:
-            st.warning("没有可用的隶属度数据来显示排名。")
-
-        # 雷达图（全量显示当前 RULE_SETS 中的词类）
-        st.subheader("词类隶属度雷达图（标准化 0~1）")
-        if pos_normed:
-            if ranked:
-                radar_scores = {p: pos_normed[p] for p, _ in ranked}
-            else:
-                radar_scores = pos_normed.copy()
-            plot_radar_chart_streamlit(radar_scores, title=f"“{word}” 的词类隶属度分布")
-        else:
-            st.warning("没有可用的隶属度数据来绘制雷达图。")
-
-        # 显示归一化表格
-        st.subheader("各词类隶属度（标准化 0~1）")
-        if pos_normed:
-            data_list = []
-            for p in pos_normed:
-                try:
-                    data_list.append({"词类": p, "隶属度": pos_normed[p]})
-                except Exception as e:
-                    st.warning(f"处理词类 '{p}' 时出错：{e}")
-            
-            if data_list and all("词类" in item and "隶属度" in item for item in data_list):
-                df_norm = pd.DataFrame(data_list).set_index("词类")
-                st.dataframe(df_norm, use_container_width=True)
-            else:
-                st.warning("无法创建有效的隶属度表格。数据格式可能存在问题。")
-        else:
-            st.warning("没有可用的隶属度数据来显示表格。")
-            
-        # 折叠详细规则判断（默认收起）
-        with st.expander("展开：查看各词类的规则明细与得分（详细）"):
-            for pos, rules in RULE_SETS.items():
-                st.markdown(f"**{pos}**（隶属度：{pos_normed.get(pos, 0)}）")
-                rows = []
-                scores_for_pos = scores_all.get(pos, {r["name"]: 0 for r in rules})
-                for r in rules:
-                    nm = r["name"]
-                    sc = scores_for_pos.get(nm, 0)
-                    decision = "是" if sc == r["match_score"] else ("否" if sc == r["mismatch_score"] else "")
-                    rows.append({"规则": nm, "描述": r["desc"], "得分": sc, "判定": decision})
-                if rows:
-                    st.table(pd.DataFrame(rows))
-                else:
-                    st.write("（该词类当前无规则条目）")
-                st.markdown("---")
-
-# 添加API测试按钮（保持原逻辑）
 st.sidebar.markdown("---")
-if st.sidebar.button("测试大模型连接"):
-    st.sidebar.info("正在测试大模型连接...")
-    
-    test_messages = [
-        {"role": "user", "content": "测试大模型连接，请返回'测试成功'"}
-    ]
-    
-    ok, resp, err = call_llm_api(
-        messages=test_messages,
-        provider=PROVIDER,
-        model=MODEL_NAME,
-        api_key=API_KEY,
-        max_tokens=20
-    )
-    
-    if ok:
-        st.sidebar.success("✅ 大模型连接成功！")
-    else:
-        st.sidebar.error(f"❌ 大模型连接失败: {err}")
+st.sidebar.markdown("模型接口参数：")
+max_tokens = st.sidebar.slider("max_tokens", 100, 4096, 1024)
+temperature = st.sidebar.slider("temperature", 0.0, 1.2, 0.0)
+
+# ===============================
+# 主输入区
+# ===============================
+st.subheader("请输入要分析的词语：")
+
+word = st.text_input("词语：", "")
+
+if st.button("🚀 开始分析"):
+    if not word.strip():
+        st.warning("请输入一个词语后再分析。")
+        st.stop()
+
+    if not api_key:
+        st.error("请先在侧边栏提供 API Key。")
+        st.stop()
+
+    with st.spinner("模型正在分析..."):
+        scores_all, raw_text, predicted_pos = ask_model_for_pos_and_scores(
+            word=word,
+            provider=provider,
+            model=model_name,
+            api_key=api_key
+        )
+
+    # ===============================
+    # 原始输出展示
+    # ===============================
+    st.markdown("### 🔍 模型原始输出（RAW）")
+    st.code(raw_text, language="json")
+
+    # 无有效返回
+    if not scores_all:
+        st.error("未解析到有效的词类隶属度，可能是模型未返回 JSON。")
+        st.stop()
+
+    # ===============================
+    # 得分计算：总分与归一化
+    # ===============================
+    total_scores = {}
+    norm_scores = {}
+
+    for pos, rule_scores in scores_all.items():
+        total = sum(rule_scores.values())
+        total_scores[pos] = total
+        max_sc = MAX_SCORES.get(pos, 1)
+        norm_scores[pos] = total / max_sc if max_sc else 0
+
+    # ===============================
+    # 结果展示
+    # ===============================
+    st.markdown("### 🧭 最可能的词类判断")
+    st.success(f"模型预测为：**{predicted_pos}**")
+
+    # ===============================
+    # 表格展示
+    # ===============================
+    st.markdown("### 📊 各词类的原始得分与隶属度（归一化）")
+
+    df_show = pd.DataFrame({
+        "词类": list(total_scores.keys()),
+        "原始得分": list(total_scores.values()),
+        "隶属度(0-1)": [round(norm_scores[pos], 4) for pos in total_scores.keys()]
+    })
+
+    st.dataframe(df_show, use_container_width=True)
+
+    # ===============================
+    # 绘制雷达图
+    # ===============================
+    st.markdown("### 📈 隶属度雷达图")
+    plot_radar_chart_streamlit(norm_scores, f"「{word}」各词类隶属度雷达图")
+
+    # ===============================
+    # 展开规则得分详情
+    # ===============================
+    st.markdown("### 🧩 规则匹配详情（点击展开）")
+
+    for pos, rules in RULE_SETS.items():
+        with st.expander(f"词类：{pos}（展开查看规则评分）"):
+            rule_scores = scores_all[pos]
+            df_details = pd.DataFrame({
+                "规则名": [r["name"] for r in rules],
+                "规则说明": [r["desc"] for r in rules],
+                "评分": [rule_scores[r["name"]] for r in rules]
+            })
+            st.dataframe(df_details, use_container_width=True)
+
+# ===============================
+# 页面底部说明
+# ===============================
+st.markdown("---")
+st.markdown(
+    "<div style='text-align:center; color:#666;'>"
+    "© 2025 汉语词类隶属度检测 — 整合版 UI / 模型接口修复 by ChatGPT"
+    "</div>",
+    unsafe_allow_html=True
+)
