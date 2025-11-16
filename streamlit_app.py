@@ -1,4 +1,4 @@
-#元素最齐全版本（增强版）
+#元素最齐全版本（增强版+侧边栏+流畅调用）
 import streamlit as st
 import requests
 import json
@@ -14,17 +14,16 @@ from typing import Tuple, Dict, Any, List
 st.set_page_config(
     page_title="汉语词类隶属度检测",  # 页面标题
     page_icon="📰",                  # 页面图标
-    layout="wide",                   # 改为宽布局以容纳更多内容
-    initial_sidebar_state="collapsed",  # 初始折叠侧边栏
+    layout="wide",                   # 宽布局
+    initial_sidebar_state="expanded",# 初始展开侧边栏
     menu_items=None                  # 隐藏默认菜单
 )
 
-# 自定义CSS样式，隐藏Streamlit默认的顶部和底部元素
+# 自定义CSS样式
 hide_streamlit_style = """
 <style>
-/* 隐藏顶部菜单栏（Share / GitHub 等） */
+/* 隐藏顶部菜单栏和页脚 */
 header {visibility: hidden;}
-/* 隐藏右下角“Manage app” */
 footer {visibility: hidden;}
 /* 调整表格样式 */
 .dataframe {font-size: 12px;}
@@ -32,122 +31,62 @@ footer {visibility: hidden;}
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# 用于兼容 call_llm_api 旧函数
+# ===============================
+# 模型配置
+# ===============================
 MODEL_CONFIGS = {
     "deepseek": {
         "base_url": "https://api.deepseek.com/v1",
         "endpoint": "/chat/completions",
         "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         "payload": lambda model, messages, **kw: {
-            "model": model,
-            "messages": messages,
-            "max_tokens": kw.get("max_tokens", 2048),  # 增加最大 tokens 以获取详细推理
-            "temperature": kw.get("temperature", 0.0),
-            "stream": False,
+            "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), "temperature": kw.get("temperature", 0.0), "stream": False,
         },
     },
-
     "openai": {
         "base_url": "https://api.openai.com/v1",
         "endpoint": "/chat/completions",
         "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         "payload": lambda model, messages, **kw: {
-            "model": model,
-            "messages": messages,
-            "max_tokens": kw.get("max_tokens", 2048),
-            "temperature": kw.get("temperature", 0.0),
-            "stream": False,
+            "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), "temperature": kw.get("temperature", 0.0), "stream": False,
         },
     },
-
     "moonshot": {
         "base_url": "https://api.moonshot.cn/v1",
         "endpoint": "/chat/completions",
         "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         "payload": lambda model, messages, **kw: {
-            "model": model,
-            "messages": messages,
-            "max_tokens": kw.get("max_tokens", 2048),
-            "temperature": kw.get("temperature", 0.0),
-            "stream": False,
+            "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), "temperature": kw.get("temperature", 0.0), "stream": False,
         },
     },
-
    "doubao": {
     "base_url": "https://ark.cn-beijing.volces.com/api/v3",
     "endpoint": "/chat/completions",
-    "headers": lambda key: {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    },
+    "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json",},
     "payload": lambda model, messages, **kw: {
-        "model": model,
-        "messages": messages,
-        "max_tokens": kw.get("max_tokens", 2048),
-        "temperature": kw.get("temperature", 0.0),
-        "stream": False,
+        "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), "temperature": kw.get("temperature", 0.0), "stream": False,
     },
 },
-
     "qwen": {
         "base_url": "https://dashscope.aliyuncs.com/api/v1",
         "endpoint": "/services/aigc/text-generation/generation",
         "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         "payload": lambda model, messages, **kw: {
-            "model": model,
-            "input": {"messages": messages},
-            "parameters": {
-                "max_tokens": kw.get("max_tokens", 2048),
-                "temperature": kw.get("temperature", 0.0),
-            },
+            "model": model, "input": {"messages": messages}, "parameters": {"max_tokens": kw.get("max_tokens", 4096), "temperature": kw.get("temperature", 0.0),},
         },
     },
 }
 
-
-# ===============================
-# 模型配置与 API Key（从环境变量获取）
-# ===============================
 MODEL_OPTIONS = {
-    "DeepSeek Chat": {
-        "provider": "deepseek",
-        "model": "deepseek-chat",
-        "api_url": "https://api.deepseek.com/v1/chat/completions",
-        "api_key": os.getenv("DEEPSEEK_API_KEY", "sk-1f346646d29947d0a5e29dbaa37476b8"),
-    },
-
-    "OpenAI GPT-4o": {
-        "provider": "openai",
-        "model": "gpt-4o-mini",
-        "api_url": "https://api.openai.com/v1/chat/completions",
-        "api_key": os.getenv("OPENAI_API_KEY", "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"),
-    },
-
-    "Moonshot（Kimi）": {
-        "provider": "moonshot",
-        "model": "moonshot-v1-32k",
-        "api_url": "https://api.moonshot.cn/v1/chat/completions",
-        "api_key": os.getenv("MOONSHOT_API_KEY", "sk-l5FvRWegjM5DEk4AU71YPQ1QgvFPTHZIJOmq6qdssPY4sNtE"),
-    },
-
-    "Doubao（豆包）": {
-        "provider": "doubao",
-        "model": "doubao-pro-32k",
-        "api_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-        "api_key": os.getenv("DOUBAO_API_KEY", "sk-222afa3f-5f27-403e-bf46-ced2a356ceee"),
-    },
-
-    "Qwen（通义千问）": {
-        "provider": "qwen",
-        "model": "qwen-max",
-        "api_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
-        "api_key": os.getenv("QWEN_API_KEY", "sk-b3f7a1153e6f4a44804a296038aa86c5"),
-    },
+    "DeepSeek Chat": {"provider": "deepseek", "model": "deepseek-chat", "api_key": os.getenv("DEEPSEEK_API_KEY", "sk-1f346646d29947d0a5e29dbaa37476b8")},
+    "OpenAI GPT-4o": {"provider": "openai", "model": "gpt-4o-mini", "api_key": os.getenv("OPENAI_API_KEY", "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")},
+    "Moonshot（Kimi）": {"provider": "moonshot", "model": "moonshot-v1-32k", "api_key": os.getenv("MOONSHOT_API_KEY", "sk-l5FvRWegjM5DEk4AU71YPQ1QgvFPTHZIJOmq6qdssPY4sNtE")},
+    "Doubao（豆包）": {"provider": "doubao", "model": "doubao-pro-32k", "api_key": os.getenv("DOUBAO_API_KEY", "sk-222afa3f-5f27-403e-bf46-ced2a356ceee")},
+    "Qwen（通义千问）": {"provider": "qwen", "model": "qwen-max", "api_key": os.getenv("QWEN_API_KEY", "sk-b3f7a1153e6f4a44804a296038aa86c5")},
 }
 
-
 # ===============================
-# 词类规则示例（保持不变）
+# 词类规则与最大得分
 # ===============================
 RULE_SETS = {
     # 1.1 名词
@@ -352,221 +291,162 @@ RULE_SETS = {
         {"name": "NUM_COM5_可出现在'来/多/余'之前等特殊分布", "desc": "可以出现在特定助词之前（见原文条目）", "match_score": 30, "mismatch_score": 0},
     ],
 }
-
 MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in RULE_SETS.items()}
 
 # ===============================
 # 工具函数
 # ===============================
 def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
-    if not isinstance(resp_json, dict):
-        return ""
+    if not isinstance(resp_json, dict): return ""
     try:
-        choices = resp_json.get("choices")
-        if choices and isinstance(choices, list) and len(choices) > 0:
-            first = choices[0]
-            msg = first.get("message")
-            if isinstance(msg, dict) and "content" in msg:
-                return msg["content"]
-            for k in ("content", "text", "message"):
-                if k in first and isinstance(first[k], str):
-                    return first[k]
-    except:
-        pass
+        if "choices" in resp_json and len(resp_json["choices"]) > 0:
+            choice = resp_json["choices"][0]
+            if "message" in choice and "content" in choice["message"]:
+                return choice["message"]["content"]
+            for k in ("content", "text"):
+                if k in choice: return choice[k]
+    except Exception: pass
     return json.dumps(resp_json, ensure_ascii=False)
 
 def extract_json_from_text(text: str) -> Tuple[dict, str]:
-    if not text:
-        return None, ""
-    s = text.strip()
-    try:
-        return json.loads(s), s
-    except:
-        m = re.search(r"(\{[\s\S]*\})", s)
-        if not m:
-            return None, s
-        cand = m.group(1)
-        c = cand.replace("：", ":").replace("，", ",").replace("“", '"').replace("”", '"')
-        c = re.sub(r"'(\s*[^']+?\s*)'\s*:", r'"\1":', c)
-        c = re.sub(r":\s*'([^']*?)'", r': "\1"', c)
-        c = re.sub(r",\s*([}\]])", r"\1", c)
-        c = re.sub(r"\bTrue\b", "true", c)
-        c = re.sub(r"\bFalse\b", "false", c)
-        c = re.sub(r"\bNone\b", "null", c)
-        try:
-            return json.loads(c), c
-        except:
-            return None, s
+    if not text: return None, ""
+    text = text.strip()
+    try: return json.loads(text), text
+    except: pass
+    
+    match = re.search(r"(\{[\s\S]*\})", text)
+    if not match: return None, text
+    
+    json_str = match.group(1)
+    json_str = json_str.replace("：", ":").replace("，", ",").replace("“", '"').replace("”", '"')
+    json_str = re.sub(r"'(\s*[^']+?\s*)'\s*:", r'"\1":', json_str)
+    json_str = re.sub(r":\s*'([^']*?)'", r': "\1"', json_str)
+    json_str = re.sub(r",\s*([}\]])", r"\1", json_str)
+    json_str = re.sub(r"\bTrue\b", "true", json_str)
+    json_str = re.sub(r"\bFalse\b", "false", json_str)
+    json_str = re.sub(r"\bNone\b", "null", json_str)
+    
+    try: return json.loads(json_str), json_str
+    except: return None, text
 
 def normalize_key(k: str, pos_rules: list) -> str:
-    if not isinstance(k, str):
-        return None
-    kk = re.sub(r'\s+', '', k).upper()
+    if not isinstance(k, str): return None
+    k_upper = re.sub(r'\s+', '', k).upper()
     for r in pos_rules:
-        if r["name"].upper() == kk or re.sub(r'\s+', '', r["name"]).upper() == kk:
+        if re.sub(r'\s+', '', r["name"]).upper() == k_upper:
             return r["name"]
     return None
 
 def map_to_allowed_score(rule: dict, raw_val) -> int:
-    match = rule["match_score"]
-    mismatch = rule["mismatch_score"]
+    match_score, mismatch_score = rule["match_score"], rule["mismatch_score"]
     if isinstance(raw_val, (int, float)):
-        cand = [match, mismatch]
-        return min(cand, key=lambda x: abs(x - float(raw_val)))
-    if isinstance(raw_val, bool):
-        return match if raw_val else mismatch
+        return match_score if raw_val == match_score else mismatch_score if raw_val == mismatch_score else mismatch_score
+    if isinstance(raw_val, bool): return match_score if raw_val else mismatch_score
     if isinstance(raw_val, str):
         s = raw_val.strip().lower()
-        if s in ("yes", "y", "true", "是", "√", "符合"):
-            return match
-        if s in ("no", "n", "false", "否", "×", "不符合"):
-            return mismatch
-    return mismatch
+        if s in ("yes", "y", "true", "是", "√", "符合"): return match_score
+        if s in ("no", "n", "false", "否", "×", "不符合"): return mismatch_score
+    return mismatch_score
 
-# 新增：计算隶属度
 def calculate_membership(scores_all: Dict[str, Dict[str, int]]) -> Dict[str, float]:
-    """计算每个词类的隶属度（归一化得分）"""
     membership = {}
     for pos, scores in scores_all.items():
-        total = sum(scores.values())
-        max_score = MAX_SCORES.get(pos, 1)  # 避免除零
-        # 归一化到 [0, 1] 范围
+        total_score = sum(scores.values())
+        max_score = MAX_SCORES.get(pos, 1)
         if max_score == 0:
             membership[pos] = 0.0
         else:
-            # 先将得分映射到 [0, max_score] 范围，再除以 max_score
-            normalized = (total + max_score) / (2 * max_score)
-            membership[pos] = max(0.0, min(1.0, normalized))  # 确保在 [0,1] 之间
+            normalized = (total_score + max_score) / (2 * max_score)
+            membership[pos] = max(0.0, min(1.0, normalized))
     return membership
 
-# 新增：获取排名前十的词类
 def get_top_10_positions(membership: Dict[str, float]) -> List[Tuple[str, float]]:
-    """获取隶属度排名前十的词类"""
-    sorted_pos = sorted(membership.items(), key=lambda x: x[1], reverse=True)
-    return sorted_pos[:10]
+    return sorted(membership.items(), key=lambda x: x[1], reverse=True)[:10]
 
-# 新增：准备详细得分数据框
 def prepare_detailed_scores_df(scores_all: Dict[str, Dict[str, int]]) -> pd.DataFrame:
-    """将详细得分转换为DataFrame用于展示"""
     rows = []
     for pos, rules in RULE_SETS.items():
         for rule in rules:
-            rule_name = rule["name"]
-            desc = rule["desc"]
-            score = scores_all[pos].get(rule_name, 0)
             rows.append({
                 "词类": pos,
-                "规则代码": rule_name,
-                "规则描述": desc,
-                "得分": score
+                "规则代码": rule["name"],
+                "规则描述": rule["desc"],
+                "得分": scores_all[pos].get(rule["name"], 0)
             })
     return pd.DataFrame(rows)
 
 # ===============================
 # 安全的 LLM 调用函数
 # ===============================
-def call_llm_api(messages: list, provider: str, model: str, api_key: str,
-                 max_tokens: int = 2048, temperature: float = 0.0, timeout: int = 60) -> Tuple[bool, dict, str]:
-    """
-    调用指定 LLM API 获取响应。
-    返回: (成功标志, 响应 dict, 错误信息)
-    """
-    if not api_key:
-        return False, {"error": "API Key 为空"}, "API Key 未提供"
-
-    if provider not in MODEL_CONFIGS:
-        return False, {"error": f"未知提供商 {provider}"}, f"未知提供商 {provider}"
+def call_llm_api(messages: list, provider: str, model: str, api_key: str, max_tokens: int = 4096, temperature: float = 0.0) -> Tuple[bool, dict, str]:
+    if not api_key: return False, {"error": "API Key 为空"}, "API Key 未提供"
+    if provider not in MODEL_CONFIGS: return False, {"error": f"未知提供商 {provider}"}, f"未知提供商 {provider}"
 
     cfg = MODEL_CONFIGS[provider]
-    url = cfg["base_url"].rstrip("/") + cfg.get("endpoint", "/chat/completions")
+    url = f"{cfg['base_url'].rstrip('/')}{cfg['endpoint']}"
     headers = cfg["headers"](api_key)
     payload = cfg["payload"](model, messages, max_tokens=max_tokens, temperature=temperature)
 
     try:
-        r = requests.post(url, headers=headers, json=payload, timeout=timeout)
-        
-        if r.status_code != 200:
-            return False, {"error": f"HTTP错误 {r.status_code}", "content": r.text}, f"HTTP错误 {r.status_code}: {r.text[:200]}"
-            
-        r.raise_for_status()
-        resp_json = r.json()
-        return True, resp_json, ""
+        response = requests.post(url, headers=headers, json=payload, timeout=60) # 增加超时设置
+        response.raise_for_status()
+        return True, response.json(), ""
+    except requests.exceptions.Timeout:
+        error_msg = "请求超时，请检查网络连接或尝试更换模型。"
+        return False, {"error": error_msg}, error_msg
+    except requests.exceptions.RequestException as e:
+        error_msg = f"API请求失败: {str(e)}"
+        return False, {"error": error_msg}, error_msg
     except Exception as e:
-        error_msg = str(e)
-        st.error(f"API调用错误: {error_msg}")
+        error_msg = f"发生未知错误: {str(e)}"
         return False, {"error": error_msg}, error_msg
 
 # ===============================
 # 安全的词类判定函数
 # ===============================
 def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str, str]:
-    """
-    根据输入词调用 LLM 获取词类隶属度评分，返回:
-        - scores_all: 每个词类的规则得分字典
-        - raw_text: 模型原始输出
-        - predicted_pos: 模型预测的最可能词类
-        - explanation: 模型推理过程
-    """
-    if not word:
-        return {}, "", "未知", ""
+    if not word: return {}, "", "未知", ""
 
-    rules_summary_lines = []
-    for pos, rules in RULE_SETS.items():
-        rules_summary_lines.append(f"{pos}:")
-        for r in rules:
-            rules_summary_lines.append(f"  - {r['name']}: {r['desc']} (match={r['match_score']}, mismatch={r['mismatch_score']})")
-    rules_text = "\n".join(rules_summary_lines)
+    rules_text = "\n".join([f"{pos}:\n  - " + "\n  - ".join([f"{r['name']}: {r['desc']} (match={r['match_score']}, mismatch={r['mismatch_score']})" for r in rules]) for pos, rules in RULE_SETS.items()])
 
-    # 增强提示词，要求详细推理过程
     system_msg = (
-        "你是语言学研究专家，拥有扎实的汉语词类知识。请分析输入的中文词语，按照提供的规则进行判断：\n"
-        "1. 首先详细解释每个规则的判断依据和推理过程\n"
-        "2. 然后给出每个词类的各项规则得分\n"
-        "3. 最后判断最可能的词类\n"
-        '请以JSON格式返回，包含以下字段：\n'
-        '"predicted_pos": 最可能的词类名称\n'
-        '"scores": 每个词类的规则得分字典，结构为 {"词类名": {"规则名": 得分, ...}, ...}\n'
-        '"explanation": 详细的推理过程，包括每个规则的判断依据和分析'
+        "你是语言学研究专家，请分析输入的中文词语，严格按照提供的规则进行判断。\n"
+        "1. 首先，为每个词类下的每一条规则进行判断，是符合（match）还是不符合（mismatch）。\n"
+        "2. 然后，根据判断结果，为每个规则打上对应的得分（match_score 或 mismatch_score）。\n"
+        "3. 最后，计算每个词类的总得分，并判定最可能的词类。\n"
+        "请以JSON格式返回，包含以下字段：\n"
+        '"predicted_pos": 最可能的词类名称（字符串）\n'
+        '"scores": 一个嵌套字典，结构为 {"词类名": {"规则名": 得分, ...}, ...}\n'
+        '"explanation": 详细的推理过程，解释你是如何根据规则得出每个判断的。'
     )
-    user_prompt = f"词语：『{word}』\n请基于下列规则判定并评分：\n\n{rules_text}\n\n请确保推理过程详细，包含每个规则的判断依据。"
+    user_prompt = f"请分析词语「{word}」，基于以下规则进行判定并评分：\n\n{rules_text}\n\n务必返回完整的JSON对象。"
 
-    ok, resp_json, err_msg = call_llm_api(
-        messages=[{"role": "system", "content": system_msg},
-                  {"role": "user", "content": user_prompt}],
-        provider=provider,
-        model=model,
-        api_key=api_key
-    )
+    with st.spinner("正在调用大模型进行分析，请稍候..."):
+        ok, resp_json, err_msg = call_llm_api(
+            messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": user_prompt}],
+            provider=provider, model=model, api_key=api_key
+        )
 
-    if not ok or not resp_json:
-        return {}, f"调用失败或返回异常: {err_msg}", "未知", ""
+    if not ok:
+        st.error(f"模型调用失败: {err_msg}")
+        return {}, f"调用失败: {err_msg}", "未知", f"调用失败: {err_msg}"
 
-    # 解析原始文本
     raw_text = extract_text_from_response(resp_json)
     parsed_json, _ = extract_json_from_text(raw_text)
     
-    # 提取推理过程
-    explanation = ""
-    if parsed_json and "explanation" in parsed_json:
-        explanation = parsed_json["explanation"]
-    else:
-        # 如果JSON中没有单独的推理过程，使用原始文本作为补充
-        explanation = raw_text
-
-    # 解析得分
-    scores_out = {}
+    explanation = parsed_json.get("explanation", "模型未提供详细推理过程。") if parsed_json else raw_text
     predicted_pos = parsed_json.get("predicted_pos", "未知") if parsed_json else "未知"
     raw_scores = parsed_json.get("scores", {}) if parsed_json else {}
 
+    scores_out = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
     for pos, rules in RULE_SETS.items():
-        scores_out[pos] = {r["name"]: 0 for r in rules}
-        raw_for_pos = raw_scores.get(pos, {})
-        if isinstance(raw_for_pos, dict):
-            for k, v in raw_for_pos.items():
-                nk = normalize_key(k, rules)
-                if nk:
-                    rule_def = next(r for r in rules if r["name"] == nk)
-                    scores_out[pos][nk] = map_to_allowed_score(rule_def, v)
+        raw_pos_scores = raw_scores.get(pos, {})
+        if isinstance(raw_pos_scores, dict):
+            for k, v in raw_pos_scores.items():
+                normalized_key = normalize_key(k, rules)
+                if normalized_key:
+                    rule_def = next(r for r in rules if r["name"] == normalized_key)
+                    scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
 
     return scores_out, raw_text, predicted_pos, explanation
 
@@ -581,16 +461,17 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
     if not categories:
         st.warning("无法绘制雷达图：没有有效词类。")
         return
-    values = [float(scores_norm[c]) for c in categories]
+    values = list(scores_norm.values())
+    
+    # 闭合雷达图
     categories += [categories[0]]
     values += [values[0]]
 
-    fig = go.Figure(
-        data=[go.Scatterpolar(r=values, theta=categories, fill="toself", name="隶属度")]
-    )
+    fig = go.Figure(data=[go.Scatterpolar(r=values, theta=categories, fill="toself", name="隶属度")])
     fig.update_layout(
         polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
-        showlegend=False, title=dict(text=title, x=0.5)
+        showlegend=False,
+        title=dict(text=title, x=0.5, font=dict(size=16))
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -598,68 +479,80 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
 # 主页面逻辑
 # ===============================
 def main():
-    st.title("汉语词类隶属度检测")
+    st.title("📰 汉语词类隶属度检测")
     
-    # 输入区域
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        word = st.text_input("请输入要分析的汉语词语", placeholder="例如：苹果、跑、美丽...")
-    with col2:
-        model_name = st.selectbox("选择模型", list(MODEL_OPTIONS.keys()))
+    # 侧边栏
+    with st.sidebar:
+        st.header("⚙️ 模型设置")
+        selected_model_display_name = st.selectbox("选择大模型", list(MODEL_OPTIONS.keys()))
+        
+        if st.button("🔗 测试模型链接"):
+            model_config = MODEL_OPTIONS[selected_model_display_name]
+            with st.spinner("正在测试连接..."):
+                ok, _, err_msg = call_llm_api(
+                    messages=[{"role": "user", "content": "ping"}],
+                    provider=model_config["provider"],
+                    model=model_config["model"],
+                    api_key=model_config["api_key"],
+                    max_tokens=1
+                )
+            if ok:
+                st.success("✅ 模型链接测试成功！")
+            else:
+                st.error(f"❌ 模型链接测试失败: {err_msg}")
+        
+        st.markdown("---")
+        st.info("""
+        ### ℹ️ 使用说明
+        1. 在主界面输入框中输入一个汉语词语。
+        2. 点击"开始分析"按钮。
+        3. 系统将使用选定的大模型分析该词语的词类隶属度。
+        4. 结果将包括：隶属度排名、详细得分、推理过程和原始响应。
+        """)
+
+    # 主界面
+    word = st.text_input("请输入要分析的汉语词语", placeholder="例如：苹果、跑、美丽...", key="word_input")
     
-    if st.button("开始分析") and word:
-        with st.spinner("正在分析，请稍候..."):
-            # 获取模型配置
-            model_config = MODEL_OPTIONS[model_name]
-            provider = model_config["provider"]
-            model = model_config["model"]
-            api_key = model_config["api_key"]
-            
-            # 调用模型获取结果
-            scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
-                word=word,
-                provider=provider,
-                model=model,
-                api_key=api_key
-            )
-            
-            # 计算隶属度
-            membership = calculate_membership(scores_all)
-            
-            # 获取排名前十的词类
-            top10 = get_top_10_positions(membership)
-            
-            # 展示结果
-            st.success(f"分析完成：『{word}』最可能的词类是【{predicted_pos}】，隶属度为 {membership.get(predicted_pos, 0):.2f}")
-            
-            # 第一部分：隶属度排名前十
-            st.subheader("词类隶属度排名（前十）")
+    if st.button("🚀 开始分析", type="primary") and word:
+        model_config = MODEL_OPTIONS[selected_model_display_name]
+        
+        scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
+            word=word,
+            provider=model_config["provider"],
+            model=model_config["model"],
+            api_key=model_config["api_key"]
+        )
+        
+        membership = calculate_membership(scores_all)
+        top10 = get_top_10_positions(membership)
+        
+        # 结果展示
+        st.success(f'**分析完成**：词语「{word}」最可能的词类是 【{predicted_pos}】，隶属度为 {membership.get(predicted_pos, 0):.4f}')
+        
+        col_results_1, col_results_2 = st.columns(2)
+        
+        with col_results_1:
+            st.subheader("🏆 词类隶属度排名（前十）")
             top10_df = pd.DataFrame(top10, columns=["词类", "隶属度"])
             top10_df["隶属度"] = top10_df["隶属度"].apply(lambda x: f"{x:.4f}")
             st.table(top10_df)
             
-            # 第二部分：雷达图（仅显示前十）
-            st.subheader("词类隶属度雷达图（前十）")
-            top10_dict = dict(top10)
-            plot_radar_chart_streamlit(top10_dict, f"『{word}』的词类隶属度分布")
-            
-            # 第三部分：详细得分
-            st.subheader("各词类详细得分")
+            st.subheader("📊 词类隶属度雷达图（前十）")
+            plot_radar_chart_streamlit(dict(top10), f"「{word}」的词类隶属度分布")
+
+        with col_results_2:
+            st.subheader("📋 各词类详细得分")
             detailed_df = prepare_detailed_scores_df(scores_all)
-            # 按词类和规则代码排序
             detailed_df = detailed_df.sort_values(by=["词类", "规则代码"])
-            # 使用分页展示详细得分（数据量可能较大）
-            with st.expander("点击查看详细得分表", expanded=False):
-                st.dataframe(detailed_df, use_container_width=True)
-            
-            # 第四部分：模型推理过程
-            st.subheader("模型推理过程")
-            st.text_area("推理详情", explanation, height=300, disabled=True)
-            
-            # 第五部分：原始响应
-            st.subheader("模型原始响应")
-            with st.expander("点击查看原始响应", expanded=False):
-                st.text(raw_text)
+            with st.expander("点击展开查看所有规则得分", expanded=False):
+                st.dataframe(detailed_df, use_container_width=True, height=400)
+        
+        st.subheader("🔍 模型推理过程")
+        st.text_area("推理详情", explanation, height=200, disabled=True)
+        
+        st.subheader("📥 模型原始响应")
+        with st.expander("点击展开查看原始JSON响应", expanded=False):
+            st.code(raw_text, language="json")
 
 if __name__ == "__main__":
     main()
