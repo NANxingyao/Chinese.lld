@@ -12,7 +12,7 @@ from typing import Tuple, Dict, Any, List
 # 页面配置
 # ===============================
 st.set_page_config(
-    page_title="汉语词类隶属度检测",
+    page_title="汉语词类隶属度检测划类",
     page_icon="📰",
     layout="wide",  # 使用宽布局
     initial_sidebar_state="collapsed",  # 默认折叠侧边栏
@@ -554,7 +554,7 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
 # 主页面逻辑
 # ===============================
 def main():
-    st.title("📰 汉语词类隶属度检测")
+    st.title("📰 汉语词类隶属度检测划类")
     
     # --- 顶部固定控制区 ---
     control_container = st.container()
