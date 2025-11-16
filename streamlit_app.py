@@ -1,30 +1,6 @@
-import re
-import json
-import requests
-import traceback
-from typing import Dict, Any, Tuple, List
-import streamlit as st
-import plotly.graph_objects as go
-
-# 假设MODEL_CONFIGS和MODEL_OPTIONS已定义（保持原有配置）
-MODEL_CONFIGS = {
-    # 这里保持原有模型配置结构
-    "OpenAI": {"base_url": "https://api.openai.com", "endpoint": "/v1/chat/completions", 
-               "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-               "payload": lambda model, messages, max_tokens, temperature: {
-                   "model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature
-               }},
-    # 其他模型配置...
-}
-
-MODEL_OPTIONS = {
-    # 这里保持原有模型选项
-    "OpenAI (GPT-3.5)": {"provider": "OpenAI", "model": "gpt-3.5-turbo", "api_key_env": "OPENAI_API_KEY"},
-    # 其他模型选项...
-}
-
-# 词类规则集（保持不变）
-RULE_SETS = {
+        {"name": "PART4_不能作谓语核心", "desc": "不能作谓语和谓语核心", "match_score": 10, "mismatch_score": -10},
+        {"name": "PART5_不能做修饰性成分", "desc": "不能做状语、补语和定语等修饰性成分", "match_score": 10, "mismatch_score": -10},
+    ],
     # 2.4 语气词
     "语气词": [
         {"name": "MOD1_不能单独回答（黏着词）", "desc": "不能单独回答问题（黏着词）", "match_score": 10, "mismatch_score": -10},
@@ -33,13 +9,146 @@ RULE_SETS = {
         {"name": "MOD4_不能作谓语核心", "desc": "不能作谓语和谓语核心", "match_score": 10, "mismatch_score": -10},
         {"name": "MOD5_不能作修饰性成分", "desc": "不能作状语、定语和补语等修饰成分", "match_score": 10, "mismatch_score": -10},
     ],
-    # 其他词类规则...
+    # 2.5 感叹词
+    "感叹词": [
+        {"name": "INT1_可充当独立成分（停顿）", "desc": "可以充当独立成分（前后可有停顿）", "match_score": 30, "mismatch_score": -30},
+        {"name": "INT2_可以独立成句（前后长停顿）", "desc": "可以独立成句（前后都可有较长停顿）", "match_score": 20, "mismatch_score": -20},
+        {"name": "INT3_不能跟其他句法成分组合构句法结构", "desc": "不能与其他句法成分组合构成主谓/述补/并列等结构", "match_score": 50, "mismatch_score": -50},
+    ],
+    # 2.6 拟声词
+    "拟声词": [
+        {"name": "ON1_可充当独立成分（停顿）", "desc": "可以充当独立成分（前后可有停顿）", "match_score": 20, "mismatch_score": -20},
+        {"name": "ON2_可以独立成句", "desc": "可以独立成句", "match_score": 20, "mismatch_score": -20},
+        {"name": "ON3_可直接或带'的'作定语", "desc": "可以直接或带'的'后作定语修饰名词", "match_score": 20, "mismatch_score": 0},
+        {"name": "ON4_可直接或带'地'作状语", "desc": "可以直接或后带'地'作状语修饰动词", "match_score": 20, "mismatch_score": 0},
+        {"name": "ON5_不能充当主/宾/谓/补等", "desc": "不能充当主语、宾语、谓语和补语等句法成分", "match_score": 20, "mismatch_score": -20},
+    ],
+    # 3.1 体代词（代词与数量词部分示例）
+    "体代词": [
+        {"name": "PR1_可作典型主宾语", "desc": "可以做典型的主语或宾语", "match_score": 20, "mismatch_score": -20},
+        {"name": "PR2_可做定语或跟'的'构'的'字结构", "desc": "可以做定语或跟助词'的'构成'的'字结构", "match_score": 10, "mismatch_score": -10},
+        {"name": "PR3_不能受数量/形容词/'的'修饰", "desc": "不能受数量词、形容词和'的'字结构的修饰", "match_score": 20, "mismatch_score": -20},
+        {"name": "PR4_不能受'不/很'等副词修饰", "desc": "不能受'不'和'很'等副词修饰", "match_score": 10, "mismatch_score": -10},
+        {"name": "PR5_不能作谓语核心", "desc": "不能作谓语和谓语核心（不能带宾语/时体助词）", "match_score": 10, "mismatch_score": -10},
+        {"name": "PR6_不能做补语或状语", "desc": "不能做补语，也不能作状语", "match_score": 10, "mismatch_score": -10},
+        {"name": "PR7_不能后附单音方位词构处所", "desc": "不能后附单音方位词构处所", "match_score": 20, "mismatch_score": -20},
+    ],
+    # 3.2 谓代词（示例）
+    "谓代词": [
+        {"name": "WP1_可作典型主宾语", "desc": "可以做典型的主语或宾语", "match_score": 20, "mismatch_score": -20},
+        {"name": "WP2_可作状语直接修饰动/形", "desc": "可以作状语直接修饰动词或形容词", "match_score": 20, "mismatch_score": -20},
+        {"name": "WP3_不能受'很'等程度副词修饰", "desc": "不能受'很'等程度副词修饰", "match_score": 20, "mismatch_score": -20},
+        {"name": "WP4_可受'不/也'等副词修饰", "desc": "可以受'不'或'也'等副词修饰", "match_score": 20, "mismatch_score": -20},
+        {"name": "WP5_可做谓语或谓词核心", "desc": "可以做谓语或谓词核心", "match_score": 10, "mismatch_score": -10},
+        {"name": "WP6_不能带宾语和补语", "desc": "不能带宾语和补语", "match_score": 10, "mismatch_score": -10},
+    ],
+    # 3.3 代词（通用代词条目示例）
+    "代词": [
+        {"name": "DPR1_可作典型主宾语", "desc": "可做典型主语或宾语", "match_score": 20, "mismatch_score": -20},
+        {"name": "DPR2_不能受数量/形容/的修饰", "desc": "不能受数量词、形容词和'的'字结构修饰", "match_score": 20, "mismatch_score": -20},
+        {"name": "DPR3_不能受程度副词修饰", "desc": "不能受'很'等程度副词修饰", "match_score": 20, "mismatch_score": -20},
+        {"name": "DPR4_不能带宾语和补语", "desc": "不能带宾语和补语", "match_score": 20, "mismatch_score": 0},
+        {"name": "DPR5_可受'不/也'等副词修饰（针对谓代）或不能后附方位（针对体代）", "desc": "混合规则，按具体代词类型判定", "match_score": 20, "mismatch_score": -20},
+    ],
+    # 3.4 系数词、位数词、合成数词等：
+    "系数词": [
+        {"name": "NUM_CO1_黏着词不能单独回答", "desc": "系数词是黏着词不能单独回答", "match_score": 20, "mismatch_score": -20},
+        {"name": "NUM_CO2_可在量词前构数量词组", "desc": "可以用在量词前，一起构成数量词组", "match_score": 20, "mismatch_score": -20},
+        {"name": "NUM_CO3_可构系谓构造", "desc": "可以用在位数词/构成序数组合等", "match_score": 20, "mismatch_score": 0},
+        {"name": "NUM_CO4_可构序数组合（第...）", "desc": "可以用在'第'的后面构成序数组合", "match_score": 20, "mismatch_score": 0},
+        {"name": "NUM_CO5_不能直接修饰名词（除非省略'第'）", "desc": "不能直接修饰名词（除非省略'第'）", "match_score": 20, "mismatch_score": 0},
+    ],
+    "位数词": [
+        {"name": "NUM_POS1_黏着词不能单独回答", "desc": "位数词是黏着词不能单独回答", "match_score": 20, "mismatch_score": -20},
+        {"name": "NUM_POS2_不能单独用在量词前", "desc": "不能单独用在量词前", "match_score": 10, "mismatch_score": 0},
+        {"name": "NUM_POS3_可在系数词后构成系位构造", "desc": "可以用在系数词后构成系位构造", "match_score": 20, "mismatch_score": -20},
+        {"name": "NUM_POS4_不能用于前缀'第'后面构序数组合", "desc": "不能用于前缀'第'后面构序数组合", "match_score": 20, "mismatch_score": -20},
+        {"name": "NUM_POS5_不能作定语直接修饰名词", "desc": "不能作定语直接修饰名词", "match_score": 20, "mismatch_score": 0},
+        {"name": "NUM_POS6_可用在'来/把'之前构数次组合", "desc": "可以用在助词'来'或'把'之前构成数次组合", "match_score": 10, "mismatch_score": 0},
+    ],
+    "合成数词": [
+        {"name": "NUM_COM1_可以单独回答问题（部分自由）", "desc": "合成数词可以用来单独回答问题", "match_score": 10, "mismatch_score": 0},
+        {"name": "NUM_COM2_可与量词构数量词组", "desc": "可以用在量词前构成数量词组", "match_score": 20, "mismatch_score": -20},
+        {"name": "NUM_COM3_可在'第'后构序数组合", "desc": "可以用在'第'后造成序数组合", "match_score": 20, "mismatch_score": -20},
+        {"name": "NUM_COM4_不能直接作定语修饰名词（除非省第）", "desc": "不能直接作定语修饰名词（除非省略'第'）", "match_score": 20, "mismatch_score": 0},
+        {"name": "NUM_COM5_可出现在'来/多/余'之前等特殊分布", "desc": "可以出现在特定助词之前（见原文条目）", "match_score": 30, "mismatch_score": 0},
+    ],
+    # 其他规则占位（便于以后补全）
+    # "未列出词类": [ ... ],
 }
 
 MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in RULE_SETS.items()}
 
+# 模型配置 - 假设API在后台部署，无需前端输入API Key
+MODEL_OPTIONS = {
+    "OpenAI": {"provider": "openai", "model": "gpt-3.5-turbo"},
+    "DeepSeek": {"provider": "deepseek", "model": "deepseek-chat"},
+    "Moonshot (Kimi)": {"provider": "moonshot", "model": "moonshot-v1-8k"},
+    "豆包": {"provider": "doubao", "model": "doubao-pro"},
+    "通义千问 (Qwen)": {"provider": "qwen", "model": "qwen-plus"},
+}
+
+# 模型详细配置 - 适配后台部署的API
+MODEL_CONFIGS = {
+    "openai": {
+        "base_url": "https://api.openai.com/v1",
+        "endpoint": "/chat/completions",
+        "headers": lambda api_key: {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+        "payload": lambda model, messages, max_tokens, temperature: {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature
+        }
+    },
+    "deepseek": {
+        "base_url": "https://api.deepseek.com/v1",
+        "endpoint": "/chat/completions",
+        "headers": lambda api_key: {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+        "payload": lambda model, messages, max_tokens, temperature: {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature
+        }
+    },
+    "moonshot": {
+        "base_url": "https://api.moonshot.cn/v1",
+        "endpoint": "/chat/completions",
+        "headers": lambda api_key: {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+        "payload": lambda model, messages, max_tokens, temperature: {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature
+        }
+    },
+    "doubao": {
+        "base_url": "https://api.doubao.com/chat",
+        "endpoint": "/completions",
+        "headers": lambda api_key: {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+        "payload": lambda model, messages, max_tokens, temperature: {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature
+        }
+    },
+    "qwen": {
+        "base_url": "https://api.qwen.com/v1",
+        "endpoint": "/chat/completions",
+        "headers": lambda api_key: {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+        "payload": lambda model, messages, max_tokens, temperature: {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature
+        }
+    }
+}
+
 # ===============================
-# 工具函数（保持不变）
+# 工具函数
 # ===============================
 def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
     if not isinstance(resp_json, dict):
@@ -109,20 +218,19 @@ def map_to_allowed_score(rule: dict, raw_val) -> int:
 # ===============================
 # 安全的 LLM 调用函数
 # ===============================
-def call_llm_api(messages: list, provider: str, model: str, api_key: str,
+def call_llm_api(messages: list, provider: str, model: str,
                  max_tokens: int = 1024, temperature: float = 0.0, timeout: int = 30) -> Tuple[bool, dict, str]:
     """
-    调用指定 LLM API 获取响应。
+    调用指定 LLM API 获取响应（假设API在后台部署，无需前端API Key）
     返回: (成功标志, 响应 dict, 错误信息)
     """
-    if not api_key:
-        return False, {"error": "API Key 为空"}, "API Key 未提供"
-
     if provider not in MODEL_CONFIGS:
         return False, {"error": f"未知提供商 {provider}"}, f"未知提供商 {provider}"
 
     cfg = MODEL_CONFIGS[provider]
     url = cfg["base_url"].rstrip("/") + cfg.get("endpoint", "/chat/completions")
+    # 从环境变量获取API Key（后台部署）
+    api_key = os.getenv(f"{provider.upper()}_API_KEY", "")
     headers = cfg["headers"](api_key)
     payload = cfg["payload"](model, messages, max_tokens=max_tokens, temperature=temperature)
 
@@ -137,35 +245,19 @@ def call_llm_api(messages: list, provider: str, model: str, api_key: str,
         return True, resp_json, ""
     except Exception as e:
         error_msg = str(e)
+        st.error(f"API调用错误: {error_msg}")
         return False, {"error": error_msg}, error_msg
 
-# 新增：测试模型连接函数
-def test_model_connection(provider: str, model: str, api_key: str) -> Tuple[bool, str]:
-    """测试模型连接是否成功"""
-    if not api_key:
-        return False, "API Key 未提供"
-    
-    # 使用简单消息测试连接
-    test_messages = [
-        {"role": "system", "content": "请返回'连接测试成功'"},
-        {"role": "user", "content": "测试连接"}
-    ]
-    
-    ok, _, err_msg = call_llm_api(
-        messages=test_messages,
-        provider=provider,
-        model=model,
-        api_key=api_key,
-        max_tokens=10,
-        temperature=0.0
-    )
-    
-    return ok, err_msg if not ok else "连接成功"
-
 # ===============================
-# 安全的词类判定函数（保持不变）
+# 安全的词类判定函数
 # ===============================
-def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str]:
+def ask_model_for_pos_and_scores(word: str, provider: str, model: str) -> Tuple[Dict[str, Dict[str, int]], str, str]:
+    """
+    根据输入词调用 LLM 获取词类隶属度评分，返回:
+        - scores_all: 每个词类的规则得分字典
+        - raw_text: 模型原始输出
+        - predicted_pos: 模型预测的最可能词类
+    """
     if not word:
         return {}, "", "未知"
 
@@ -186,18 +278,20 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         messages=[{"role": "system", "content": system_msg},
                   {"role": "user", "content": user_prompt}],
         provider=provider,
-        model=model,
-        api_key=api_key
+        model=model
     )
 
     if not ok or not resp_json:
+        # 调用失败或返回为空
         return {}, f"调用失败或返回异常: {err_msg}", "未知"
 
+    # 尝试解析原始文本
     raw_text = extract_text_from_response(resp_json)
     parsed_json, _ = extract_json_from_text(raw_text)
     if not parsed_json:
         return {}, raw_text, "未知"
 
+    # 解析得分
     scores_out = {}
     predicted_pos = parsed_json.get("predicted_pos", "未知")
     raw_scores = parsed_json.get("scores", {})
@@ -215,7 +309,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     return scores_out, raw_text, predicted_pos
 
 # ===============================
-# 雷达图（保持不变）
+# 雷达图
 # ===============================
 def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
     if not scores_norm:
@@ -239,40 +333,20 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
     st.plotly_chart(fig, use_container_width=True)
 
 # ===============================
-# Streamlit UI
+# Streamlit UI（简洁居中输入 + 模型选择 + 结果）
 # ===============================
 
-# ======== 侧边栏部分 ========
-st.sidebar.markdown("## 模型设置")
+# ======== 模型选择部分（侧边栏） ========
+# 由侧边栏选择模型
 model_choice = st.sidebar.selectbox("选择模型", list(MODEL_OPTIONS.keys()))
 selected_model = MODEL_OPTIONS[model_choice]
 
 st.sidebar.markdown(f"**当前模型：** {model_choice}")
 st.sidebar.markdown(f"**模型名称：** `{selected_model['model']}`")
 
-# 输入API Key（密码框形式，不显示明文）
-api_key_input = st.sidebar.text_input(
-    "API Key",
-    type="password",
-    placeholder=f"请输入{model_choice}的API Key",
-    help=f"需要{selected_model['api_key_env']}环境变量对应的密钥"
-)
-
-# 测试连接按钮
-if st.sidebar.button("测试模型连接"):
-    if not api_key_input:
-        st.sidebar.error("请先输入API Key")
-    else:
-        with st.sidebar.spinner("测试连接中..."):
-            ok, msg = test_model_connection(
-                selected_model["provider"],
-                selected_model["model"],
-                api_key_input
-            )
-            if ok:
-                st.sidebar.success(f"✅ {msg}")
-            else:
-                st.sidebar.error(f"❌ 连接失败：{msg}")
+# 获取选中模型的配置
+PROVIDER = selected_model["provider"]
+MODEL_NAME = selected_model["model"]
 
 # ======== 主体部分 ========
 st.markdown("<h1 style='text-align: center;'>📊汉语词类隶属度检测判类</h1>", unsafe_allow_html=True)
@@ -289,29 +363,27 @@ if confirm:
     if not word:
         st.warning("请输入一个词语后确认。")
     else:
-        if not api_key_input:
-            st.error("请先在侧边栏输入API Key")
-            scores_all, raw_out, predicted_pos = {}, "", "无"
-        else:
-            with st.spinner("模型打分判类中……"):
-                try:
-                    scores_all, raw_out, predicted_pos = ask_model_for_pos_and_scores(
-                        word, selected_model["provider"], selected_model["model"], api_key_input
-                    )
-                except Exception as e:
-                    st.error(f"模型调用出错：{e}")
-                    traceback.print_exc()
-                    scores_all, raw_out, predicted_pos = {}, str(e), "错误"
+        with st.spinner("模型打分判类中……"):
+            try:
+                scores_all, raw_out, predicted_pos = ask_model_for_pos_and_scores(
+                    word, PROVIDER, MODEL_NAME
+                )
+            except Exception as e:
+                st.error(f"模型调用出错：{e}")
+                import traceback
+                traceback.print_exc()
+                scores_out, raw_out, predicted_pos = {}, str(e), "错误"
 
+        # 仅在 scores_all 有内容时才遍历
         if scores_all:
             st.subheader(f"词类预测结果：{predicted_pos}")
             st.json(scores_all)
             st.text_area("原始输出", raw_out, height=200)
         else:
-            st.info("未获得有效评分结果。请检查 API Key 或网络连接。")
+            st.info("未获得有效评分结果。请检查网络连接。")
             st.text_area("错误信息", raw_out, height=200)
-        
-        # 计算每个词类总分与归一化隶属度
+    
+        # 计算每个词类总分与归一化隶属度（0~1）
         pos_totals = {}
         pos_normed = {}
         for pos, score_map in scores_all.items():
@@ -327,7 +399,7 @@ if confirm:
         st.markdown(f"- **输入词**： `{word}`")
         st.markdown(f"- **模型预测词类**： **{predicted_pos}**")
 
-        # 排名与表格
+        # 排名与表格（只显示前 10）
         ranked = []
         if pos_normed:
             ranked = sorted(pos_normed.items(), key=lambda x: x[1], reverse=True)
