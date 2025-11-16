@@ -1,151 +1,229 @@
-#11.16测试用
-# ===============================
-# 页面配置
-# ===============================
-st.set_page_config(
-    page_title="汉语词类隶属度检测",  # 页面标题
-    page_icon="📰",                  # 页面图标
-    layout="centered",               # 布局居中
-    initial_sidebar_state="expanded",  # 修改为默认展开侧边栏
-    menu_items=None                  # 隐藏默认菜单
-)
 
-# 自定义CSS样式，隐藏Streamlit默认的顶部和底部元素
-hide_streamlit_style = """
-<style>
-/* 隐藏顶部菜单栏（Share / GitHub 等） */
-header {visibility: hidden;}
-/* 隐藏右下角“Manage app” */
-footer {visibility: hidden;}
-/* 调整侧边栏宽度 */
-[data-testid="stSidebar"][aria-expanded="true"]{
-    min-width: 300px;
-    max-width: 400px;
+
+# ===============================
+# 通用 LLM 调用函数
+# ===============================
+def call_llm_api(messages: list,
+                 provider: str,
+                 model: str,
+                 api_key: str,
+                 max_tokens: int = 1024,
+                 temperature: float = 0.0,
+                 timeout: int = 30,
+                 **kwargs) -> Tuple[bool, dict]:
+
+    if provider not in MODEL_CONFIGS:
+        return False, {"error": f"未知的模型提供商: {provider}"}
+
+    cfg = MODEL_CONFIGS[provider]
+    url = cfg["base_url"].rstrip("/") + cfg["endpoint"]
+    headers = cfg["headers"](api_key)
+    payload = cfg["payload"](model, messages, max_tokens=max_tokens, temperature=temperature, **kwargs)
+
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        r.raise_for_status()
+        return True, r.json()
+    except Exception as e:
+        text = ""
+        try:
+            text = r.text
+        except:
+            pass
+        return False, {"error": str(e), "resp_text": text}
+
+
+
+
+import streamlit as st
+import requests
+import json
+import re
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+from typing import Tuple, Dict, Any
+
+# ===============================
+# 模型与 API Key 配置区
+# ===============================
+MODEL_CONFIGS = {
+    "DeepSeek": {
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-chat",
+        "api_key": "sk-1f346646d29947d0a5e29dbaa37476b8"   
+    },
+    "OpenAI": {
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-4o-mini",
+        "api_key": "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"
+    },
+    "Moonshot": {
+        "base_url": "https://api.moonshot.cn/v1",
+        "model": "moonshot-v1-8k",
+        "api_key": "sk-moonshot-xxxx"
+    },
+    "GLM（智谱）": {
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "model": "glm-4",
+        "api_key": "9720beea6bff408ea6c26cd5d9ecf3b8.cRNTQiKRNaTieIiz"
+    },
+    "通义千问": {
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "model": "qwen-turbo",
+        "api_key": "sk-qwen-xxxx"
+    },
+    "豆包": {
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "model": "ep-20241106172028-vhdew",
+        "api_key": "WmpRMlptTmxNRGM0TjJNMk5HUTBOR0ZtWVRsbU56TTNNakUyT0RVNU1EUQ=="
+    },
 }
-</style>
-"""
-st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# 用于兼容 call_llm_api 旧函数
+# ===============================
+# 通用模型配置（支持多模型自由切换）
+# ===============================
+import requests
+import streamlit as st
+from typing import Tuple
+
+# 默认配置
+MODEL_PROVIDER = "deepseek"   # 初始默认模型，可选: deepseek, openai, moonshot, glm, qwen, doubao
+MODEL_NAME = "deepseek-chat"
+API_KEY = "sk-1f346646d29947d0a5e29dbaa37476b8"
+
+# 模型调用配置模板
 MODEL_CONFIGS = {
     "deepseek": {
         "base_url": "https://api.deepseek.com/v1",
         "endpoint": "/chat/completions",
-        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        "model": "deepseek-chat",
+        "headers": lambda key: {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json"
+        },
         "payload": lambda model, messages, **kw: {
             "model": model,
             "messages": messages,
             "max_tokens": kw.get("max_tokens", 1024),
             "temperature": kw.get("temperature", 0.0),
-            "stream": False,
-        },
-        "response_handler": lambda resp: resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+            "stream": False
+        }
     },
-
     "openai": {
         "base_url": "https://api.openai.com/v1",
         "endpoint": "/chat/completions",
-        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        "model": "gpt-4o-mini",
+        "headers": lambda key: {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json"
+        },
         "payload": lambda model, messages, **kw: {
             "model": model,
             "messages": messages,
             "max_tokens": kw.get("max_tokens", 1024),
             "temperature": kw.get("temperature", 0.0),
-            "stream": False,
-        },
-        "response_handler": lambda resp: resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+            "stream": False
+        }
     },
-
     "moonshot": {
         "base_url": "https://api.moonshot.cn/v1",
         "endpoint": "/chat/completions",
-        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        "model": "moonshot-v1-32k",
+        "headers": lambda key: {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json"
+        },
         "payload": lambda model, messages, **kw: {
             "model": model,
             "messages": messages,
-            "max_tokens": kw.get("max_tokens", 1024),
             "temperature": kw.get("temperature", 0.0),
-            "stream": False,
+            "stream": False
+        }
+    },
+    "glm": {
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "endpoint": "/chat/completions",
+        "model": "glm-4",
+        "headers": lambda key: {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json"
         },
-        "response_handler": lambda resp: resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+        "payload": lambda model, messages, **kw: {
+            "model": model,
+            "messages": messages,
+            "temperature": kw.get("temperature", 0.0),
+            "stream": False
+        }
     },
-
-   "doubao": {
-    "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-    "endpoint": "/chat/completions",
-    "headers": lambda key: {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    },
-    "payload": lambda model, messages, **kw: {
-        "model": model,
-        "messages": messages,
-        "max_tokens": kw.get("max_tokens", 1024),
-        "temperature": kw.get("temperature", 0.0),
-        "stream": False,
-    },
-    "response_handler": lambda resp: resp.get("choices", [{}])[0].get("message", {}).get("content", "")
-},
-
     "qwen": {
         "base_url": "https://dashscope.aliyuncs.com/api/v1",
         "endpoint": "/services/aigc/text-generation/generation",
-        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        "model": "qwen-plus",
+        "headers": lambda key: {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json"
+        },
         "payload": lambda model, messages, **kw: {
             "model": model,
             "input": {"messages": messages},
-            "parameters": {
-                "max_tokens": kw.get("max_tokens", 1024),
-                "temperature": kw.get("temperature", 0.0),
-            },
+            "parameters": {"temperature": kw.get("temperature", 0.0)}
+        }
+    },
+    "doubao": {
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "endpoint": "/chat/completions",
+        "model": "doubao-pro-32k",  # 或 doubao-lite、doubao-1.5-pro 等
+        "headers": lambda key: {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json"
         },
-        "response_handler": lambda resp: resp.get("output", {}).get("text", "")
-    },
+        "payload": lambda model, messages, **kw: {
+            "model": model,
+            "messages": messages,
+            "temperature": kw.get("temperature", 0.0),
+            "max_output_tokens": kw.get("max_tokens", 1024),
+            "stream": False
+        }
+    }
 }
 
 
 # ===============================
-# 模型配置与 API Key（从环境变量获取）
+# 通用 LLM 调用函数
 # ===============================
-MODEL_OPTIONS = {
-    "DeepSeek Chat": {
-        "provider": "deepseek",
-        "model": "deepseek-chat",
-        "api_url": "https://api.deepseek.com/v1/chat/completions",
-        "api_key": os.getenv("DEEPSEEK_API_KEY", "sk-1f346646d29947d0a5e29dbaa37476b8"),
-    },
+def call_llm_api(messages: list,
+                 provider: str,
+                 model: str,
+                 api_key: str,
+                 max_tokens: int = 1024,
+                 temperature: float = 0.0,
+                 timeout: int = 30,
+                 **kwargs) -> Tuple[bool, dict]:
 
-    "OpenAI GPT-4o": {
-        "provider": "openai",
-        "model": "gpt-4o-mini",
-        "api_url": "https://api.openai.com/v1/chat/completions",
-        "api_key": os.getenv("OPENAI_API_KEY", "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"),
-    },
+    if provider not in MODEL_CONFIGS:
+        return False, {"error": f"未知的模型提供商: {provider}"}
 
-    "Moonshot（Kimi）": {
-        "provider": "moonshot",
-        "model": "moonshot-v1-32k",
-        "api_url": "https://api.moonshot.cn/v1/chat/completions",
-        "api_key": os.getenv("MOONSHOT_API_KEY", "sk-l5FvRWegjM5DEk4AU71YPQ1QgvFPTHZIJOmq6qdssPY4sNtE"),
-    },
+    cfg = MODEL_CONFIGS[provider]
+    url = cfg["base_url"].rstrip("/") + cfg["endpoint"]
+    headers = cfg["headers"](api_key)
+    payload = cfg["payload"](model, messages, max_tokens=max_tokens, temperature=temperature, **kwargs)
 
-    "Doubao（豆包）": {
-        "provider": "doubao",
-        "model": "doubao-pro-32k",
-        "api_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-        "api_key": os.getenv("DOUBAO_API_KEY", "sk-222afa3f-5f27-403e-bf46-ced2a356ceee"),
-    },
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        r.raise_for_status()
+        return True, r.json()
+    except Exception as e:
+        text = ""
+        try:
+            text = r.text
+        except:
+            pass
+        return False, {"error": str(e), "resp_text": text}
 
-    "Qwen（通义千问）": {
-        "provider": "qwen",
-        "model": "qwen-max",
-        "api_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
-        "api_key": os.getenv("QWEN_API_KEY", "sk-b3f7a1153e6f4a44804a296038aa86c5"),
-    },
-}
 
 # ===============================
-# 词类规则示例
+# 规则定义（此处示例，可自行扩展）
 # ===============================
 RULE_SETS = {
     # 1.1 名词
@@ -168,7 +246,7 @@ RULE_SETS = {
         {"name": "T5_不能带宾语和补语", "desc": "不能带宾语和补语（不能作述语）", "match_score": 10, "mismatch_score": -10},
         {"name": "T6_可作时间中心语/作定语", "desc": "一般可以做中心语受其他时间词修饰，或作定语修饰时间词", "match_score": 10, "mismatch_score": 0},
         {"name": "T7_一般不能受名词修饰", "desc": "一般不能作中心语受名词直接修饰，也不能作定语直接修饰名词", "match_score": 10, "mismatch_score": 0},
-        {"name": "T8_可后附'的'作定语但通常不作主宾", "desc": "可以后附助词'的'作定语，但一般不能作主语和宾语", "match_score": 10, "mismatch_score": -10},
+        {"name": "T8_可后附'的'作定语但通常不作主宾", "desc": "可以后附助词'的'构成定语，但一般不能作主语和宾语", "match_score": 10, "mismatch_score": -10},
         {"name": "T9_可用'什么时候'提问/可用'这个时候'指代", "desc": "可以用'什么时候'提问或'这个时候/那个时候'指代", "match_score": 10, "mismatch_score": 0},
     ],
     # 1.3 方位词
@@ -326,7 +404,7 @@ RULE_SETS = {
         {"name": "DPR4_不能带宾语和补语", "desc": "不能带宾语和补语", "match_score": 20, "mismatch_score": 0},
         {"name": "DPR5_可受'不/也'等副词修饰（针对谓代）或不能后附方位（针对体代）", "desc": "混合规则，按具体代词类型判定", "match_score": 20, "mismatch_score": -20},
     ],
-    # 3.4 系数词、位数词、合成数词等：
+    # 3.4 系数词、位数词、合成数词等：示例性规则（你可以继续补全）
     "系数词": [
         {"name": "NUM_CO1_黏着词不能单独回答", "desc": "系数词是黏着词不能单独回答", "match_score": 20, "mismatch_score": -20},
         {"name": "NUM_CO2_可在量词前构数量词组", "desc": "可以用在量词前，一起构成数量词组", "match_score": 20, "mismatch_score": -20},
@@ -355,37 +433,27 @@ RULE_SETS = {
 
 MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in RULE_SETS.items()}
 
+
 # ===============================
-# 工具函数
+# 工具函数（解析模型响应等）
 # ===============================
-def extract_text_from_response(resp_json: Dict[str, Any], provider: str) -> str:
-    """根据不同提供商提取响应文本"""
+def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
     if not isinstance(resp_json, dict):
         return ""
-    
     try:
-        # 使用每个模型配置中定义的响应处理器
-        if provider in MODEL_CONFIGS:
-            return MODEL_CONFIGS[provider]["response_handler"](resp_json)
-        
-        # 通用提取方法
-        if "choices" in resp_json:
-            choices = resp_json["choices"]
-            if isinstance(choices, list) and len(choices) > 0:
-                first = choices[0]
-                if "message" in first and "content" in first["message"]:
-                    return first["message"]["content"]
-                if "content" in first:
-                    return first["content"]
-        
-        # 通义千问等特殊格式
-        if "output" in resp_json and "text" in resp_json["output"]:
-            return resp_json["output"]["text"]
-            
-    except Exception as e:
-        st.warning(f"提取响应文本时出错: {str(e)}")
-    
+        choices = resp_json.get("choices")
+        if choices and isinstance(choices, list) and len(choices) > 0:
+            first = choices[0]
+            msg = first.get("message")
+            if isinstance(msg, dict) and "content" in msg:
+                return msg["content"]
+            for k in ("content", "text", "message"):
+                if k in first and isinstance(first[k], str):
+                    return first[k]
+    except:
+        pass
     return json.dumps(resp_json, ensure_ascii=False)
+
 
 def extract_json_from_text(text: str) -> Tuple[dict, str]:
     if not text:
@@ -410,6 +478,7 @@ def extract_json_from_text(text: str) -> Tuple[dict, str]:
         except:
             return None, s
 
+
 def normalize_key(k: str, pos_rules: list) -> str:
     if not isinstance(k, str):
         return None
@@ -418,6 +487,7 @@ def normalize_key(k: str, pos_rules: list) -> str:
         if r["name"].upper() == kk or re.sub(r'\s+', '', r["name"]).upper() == kk:
             return r["name"]
     return None
+
 
 def map_to_allowed_score(rule: dict, raw_val) -> int:
     match = rule["match_score"]
@@ -435,63 +505,14 @@ def map_to_allowed_score(rule: dict, raw_val) -> int:
             return mismatch
     return mismatch
 
-# ===============================
-# 安全的 LLM 调用函数
-# ===============================
-def call_llm_api(messages: list, provider: str, model: str, api_key: str,
-                 max_tokens: int = 1024, temperature: float = 0.0, timeout: int = 30) -> Tuple[bool, dict, str]:
-    """
-    调用指定 LLM API 获取响应。
-    返回: (成功标志, 响应 dict, 错误信息)
-    """
-    if not api_key:
-        return False, {"error": "API Key 为空"}, "API Key 未提供"
-
-    if provider not in MODEL_CONFIGS:
-        return False, {"error": f"未知提供商 {provider}"}, f"未知提供商 {provider}"
-
-    cfg = MODEL_CONFIGS[provider]
-    url = cfg["base_url"].rstrip("/") + cfg.get("endpoint", "/chat/completions")
-    headers = cfg["headers"](api_key)
-    payload = cfg["payload"](model, messages, max_tokens=max_tokens, temperature=temperature)
-
-    try:
-        # 显示调试信息（可选）
-        with st.expander("查看API请求详情", expanded=False):
-            st.write(f"URL: {url}")
-            st.write("Headers:", headers)
-            st.write("Payload:", payload)
-
-        r = requests.post(url, headers=headers, json=payload, timeout=timeout)
-        
-        # 显示响应状态
-        with st.expander("查看API响应状态", expanded=False):
-            st.write(f"状态码: {r.status_code}")
-            st.write("响应内容:", r.text[:500])  # 只显示前500字符
-            
-        if r.status_code != 200:
-            return False, {"error": f"HTTP错误 {r.status_code}", "content": r.text}, f"HTTP错误 {r.status_code}: {r.text[:200]}"
-            
-        r.raise_for_status()
-        resp_json = r.json()
-        return True, resp_json, ""
-    except Exception as e:
-        error_msg = str(e)
-        st.error(f"API调用错误: {error_msg}")
-        return False, {"error": error_msg}, error_msg
 
 # ===============================
-# 安全的词类判定函数
+# 主逻辑：请求模型进行词类判定
 # ===============================
-def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str]:
-    """
-    根据输入词调用 LLM 获取词类隶属度评分，返回:
-        - scores_all: 每个词类的规则得分字典
-        - raw_text: 模型原始输出
-        - predicted_pos: 模型预测的最可能词类
-    """
-    if not word:
-        return {}, "", "未知"
+def ask_model_for_pos_and_scores(word: str,
+                                 provider: str,
+                                 model: str,
+                                 api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str]:
 
     rules_summary_lines = []
     for pos, rules in RULE_SETS.items():
@@ -501,30 +522,22 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     rules_text = "\n".join(rules_summary_lines)
 
     system_msg = (
-        "你是语言学研究专家，拥有中外语言学界的所有知识。在输入一个中文词语后，请检索全网的相关知识，严格按照定义的规则，请判断最可能的词类并返回 JSON："
+        "你是语言学研究助手。输入一个中文词语，请你判断该词最可能的词类，并返回 JSON："
         '{"predicted_pos":"<词类名>", "scores": {"<词类名>": {"<规则名>": <值>, ...}, ...}, "explanation":"说明"}。'
     )
     user_prompt = f"词语：『{word}』\n请基于下列规则判定并评分：\n\n{rules_text}\n\n仅返回严格 JSON。"
 
-    ok, resp_json, err_msg = call_llm_api(
-        messages=[{"role": "system", "content": system_msg},
-                  {"role": "user", "content": user_prompt}],
-        provider=provider,
-        model=model,
-        api_key=api_key
+    ok, resp = call_llm_api(
+        [{"role": "system", "content": system_msg},
+         {"role": "user", "content": user_prompt}],
+        provider=provider, model=model, api_key=api_key
     )
 
-    if not ok or not resp_json:
-        # 调用失败或返回为空
-        return {}, f"调用失败或返回异常: {err_msg}", "未知"
-
-    # 尝试解析原始文本，传入provider参数以便正确提取
-    raw_text = extract_text_from_response(resp_json, provider)
+    raw_text = extract_text_from_response(resp) if ok else str(resp)
     parsed_json, _ = extract_json_from_text(raw_text)
     if not parsed_json:
         return {}, raw_text, "未知"
 
-    # 解析得分
     scores_out = {}
     predicted_pos = parsed_json.get("predicted_pos", "未知")
     raw_scores = parsed_json.get("scores", {})
@@ -538,20 +551,14 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
                 if nk:
                     rule_def = next(r for r in rules if r["name"] == nk)
                     scores_out[pos][nk] = map_to_allowed_score(rule_def, v)
-
     return scores_out, raw_text, predicted_pos
 
+
 # ===============================
-# 雷达图
+# 可视化函数
 # ===============================
 def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
-    if not scores_norm:
-        st.warning("无法绘制雷达图：没有有效数据。")
-        return
     categories = list(scores_norm.keys())
-    if not categories:
-        st.warning("无法绘制雷达图：没有有效词类。")
-        return
     values = [float(scores_norm[c]) for c in categories]
     categories += [categories[0]]
     values += [values[0]]
@@ -563,131 +570,71 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
         polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
         showlegend=False, title=dict(text=title, x=0.5)
     )
-    st.plotly_chart(fig)
-
-# ===============================
-# 主页面逻辑
-# ===============================
-def main():
-    # 侧边栏模型选择
-    with st.sidebar:
-        st.title("模型设置")
-        selected_model = st.selectbox(
-            "选择模型",
-            list(MODEL_OPTIONS.keys())
-        )
-        
-        # 显示选中模型的信息并允许修改API Key
-        model_info = MODEL_OPTIONS[selected_model]
-        st.text(f"提供商: {model_info['provider']}")
-        st.text(f"模型名称: {model_info['model']}")
-        st.text(f"API地址: {model_info['api_url'][:50]}...")
-        
-        # 允许用户输入API Key
-        api_key = st.text_input(
-            "API Key",
-            value=model_info["api_key"],
-            type="password"
-        )
-        
-        # 其他参数设置
-        max_tokens = st.slider("最大 tokens", 512, 4096, 1024)
-        temperature = st.slider("温度参数", 0.0, 1.0, 0.0, 0.1)
-
-    # 主页面内容
-    st.title("汉语词类隶属度检测")
-    
-    # 输入词语
-    word = st.text_input("请输入要检测的汉语词语", "")
-    
-    if st.button("开始检测"):
-        if not word:
-            st.warning("请输入词语后再检测")
-            return
-            
-        with st.spinner(f"正在使用 {selected_model} 检测词语『{word}』的词类隶属度..."):
-            # 调用模型进行检测
-            scores, raw_text, predicted_pos = ask_model_for_pos_and_scores(
-                word=word,
-                provider=model_info["provider"],
-                model=model_info["model"],
-                api_key=api_key
-            )
-            
-            # 显示结果
-            st.success(f"检测完成！最可能的词类: {predicted_pos}")
-            
-            # 显示原始响应
-            with st.expander("查看模型原始响应", expanded=False):
-                st.text(raw_text)
-                
-            # 计算并显示归一化分数
-            if scores:
-                st.subheader("词类隶属度分数（归一化）")
-                scores_norm = {}
-                for pos, pos_scores in scores.items():
-                    total = sum(pos_scores.values())
-                    max_total = MAX_SCORES.get(pos, 1)  # 避免除以零
-                    if max_total == 0:
-                        norm_score = 0.0
-                    else:
-                        # 归一化到0-1范围
-                        norm_score = (total + max_total) / (2 * max_total)
-                        norm_score = max(0.0, min(1.0, norm_score))  # 确保在0-1之间
-                    scores_norm[pos] = norm_score
-                
-                # 显示分数表格
-                scores_df = pd.DataFrame(list(scores_norm.items()), columns=["词类", "隶属度"])
-                scores_df = scores_df.sort_values(by="隶属度", ascending=False)
-                st.dataframe(scores_df.style.format({"隶属度": "{:.2%}"}))
-                
-                # 绘制雷达图
-                st.subheader("词类隶属度雷达图")
-                plot_radar_chart_streamlit(scores_norm, f"词语『{word}』的词类隶属度分布")
-
+    st.plotly_chart(fig, use_container_width=True)
 
 # ===============================
 # Streamlit UI（简洁居中输入 + 模型选择 + 结果）
-# ==============================
+# ===============================
+st.set_page_config(page_title="汉语词类隶属度检测判类", layout="wide")
+
+# ======== 模型选择部分（侧边栏） ========
+st.sidebar.header("模型配置")
+MODEL_OPTIONS = {
+    "DeepSeek Chat": {
+        "api_url": "https://api.deepseek.com/v1/chat/completions",
+        "api_key_name": "DEEPSEEK_API_KEY"
+    },
+    "OpenAI GPT-4o": {
+        "api_url": "https://api.openai.com/v1/chat/completions",
+        "api_key_name": "OPENAI_API_KEY"
+    },
+    "Moonshot（Kimi）": {
+        "api_url": "https://api.moonshot.cn/v1/chat/completions",
+        "api_key_name": "MOONSHOT_API_KEY"
+    },
+    "Doubao（豆包）": {
+        "api_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+        "api_key_name": "DOUBAO_API_KEY"
+    }
+}
+
+model_choice = st.sidebar.selectbox("选择模型", list(MODEL_OPTIONS.keys()))
+selected_model = MODEL_OPTIONS[model_choice]
+
+st.sidebar.markdown(f"**当前模型：** {model_choice}")
+st.sidebar.markdown(f"**API 地址：** `{selected_model['api_url']}`")
+st.sidebar.markdown("⚙️ 请在你的系统环境变量中设置对应的 API Key：")
+st.sidebar.code(selected_model["api_key_name"], language="bash")
+
+# 将所选模型配置赋给全局变量
+API_URL = selected_model["api_url"]
+API_KEY_ENV_NAME = selected_model["api_key_name"]
+
+import os
+API_KEY = os.getenv(API_KEY_ENV_NAME, "")
+if not API_KEY:
+    st.sidebar.warning(f"未检测到 {API_KEY_ENV_NAME}，请在系统环境变量中设置对应 Key。")
+
 # ======== 主体部分 ========
-st.markdown("<h1 style='text-align: center;'>📊汉语词类隶属度检测判类</h1>", unsafe_allow_html=True)
+# 顶部标题
+st.markdown("<h1 style='text-align: center;'>汉语词类隶属度检测判类</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center; color: grey;'>输入单个词 → 模型自动判类并返回各词类规则得分与隶属度（标准化 0~1）</p>", unsafe_allow_html=True)
 st.write("")
 
+# 居中输入框
 c1, c2, c3 = st.columns([1, 2, 1])
 with c2:
     word_input = st.text_input("", placeholder="在此输入要分析的词（例如：很 / 跑 / 美丽）")
     confirm = st.button("确认")
-
+# 当按下确认时，进行模型调用与展示
 if confirm:
     word = (word_input or "").strip()
     if not word:
         st.warning("请输入一个词语后确认。")
     else:
-        if not API_KEY or API_KEY in ["", "sk-your-moonshot-key"]:
-            st.error("未找到有效 API Key，请检查配置。")
-            scores_all, raw_out, predicted_pos = {}, "", "无"
-        else:
-            with st.spinner("模型打分判类中……"):
-                try:
-                    scores_all, raw_out, predicted_pos = ask_model_for_pos_and_scores(
-                        word, PROVIDER, MODEL_NAME, API_KEY
-                    )
-                except Exception as e:
-                    st.error(f"模型调用出错：{e}")
-                    import traceback
-                    traceback.print_exc()
-                    scores_out, raw_out, predicted_pos = {}, str(e), "错误"
+        with st.spinner("模型打分判类中……"):
+            scores_all, raw_out, predicted_pos = ask_model_for_pos_and_scores(word)
 
-        # 仅在 scores_all 有内容时才遍历
-        if scores_all:
-            st.subheader(f"词类预测结果：{predicted_pos}")
-            st.json(scores_all)
-            st.text_area("原始输出", raw_out, height=200)
-        else:
-            st.info("未获得有效评分结果。请检查 API Key 或网络连接。")
-            st.text_area("错误信息", raw_out, height=200)
-    
         # 计算每个词类总分与归一化隶属度（0~1）
         pos_totals = {}
         pos_normed = {}
@@ -695,6 +642,7 @@ if confirm:
             total = sum(score_map.values())
             pos_totals[pos] = total
             max_possible = MAX_SCORES.get(pos, sum(abs(x) for x in score_map.values()) or 1)
+            # 归一化（0~1），用 max(0,total)/max_possible 避免负值
             norm = round(max(0, total) / max_possible, 3) if max_possible != 0 else 0.0
             pos_normed[pos] = norm
 
@@ -703,53 +651,26 @@ if confirm:
         st.subheader("判定摘要")
         st.markdown(f"- **输入词**： `{word}`")
         st.markdown(f"- **模型预测词类**： **{predicted_pos}**")
+        st.markdown(f"- **解析策略 / 原始响应摘要**： `{raw_out}`")
 
         # 排名与表格（只显示前 10）
-        ranked = []
-        if pos_normed:
-            ranked = sorted(pos_normed.items(), key=lambda x: x[1], reverse=True)
-        
+        ranked = sorted(pos_normed.items(), key=lambda x: x[1], reverse=True)
         st.subheader("隶属度排行（前10）")
-        if ranked:
-            for i, (p, s) in enumerate(ranked[:10]):
-                st.write(f"{i+1}. **{p}** — 隶属度：{s}")
-        else:
-            st.warning("没有可用的隶属度数据来显示排名。")
+        for i, (p, s) in enumerate(ranked[:10]):
+            st.write(f"{i+1}. **{p}** — 隶属度：{s}")
 
         # 雷达图（全量显示当前 RULE_SETS 中的词类）
         st.subheader("词类隶属度雷达图（标准化 0~1）")
-        if pos_normed:
-            if ranked:
-                radar_scores = {p: pos_normed[p] for p, _ in ranked}
-            else:
-                # 如果 ranked 为空，直接使用 pos_normed
-                radar_scores = pos_normed.copy()
-            plot_radar_chart_streamlit(radar_scores, title=f"“{word}” 的词类隶属度分布")
-        else:
-            st.warning("没有可用的隶属度数据来绘制雷达图。")
+        # 为了图示美观，将 pos_normed 的顺序固定为字典顺序或按得分排序——这里按得分排序
+        radar_scores = {p: pos_normed[p] for p, _ in ranked}
+        plot_radar_chart_streamlit(radar_scores, title=f"“{word}” 的词类隶属度分布")
 
         # 显示归一化表格
         st.subheader("各词类隶属度（标准化 0~1）")
-        if pos_normed:
-            # 创建数据列表并进行验证
-            data_list = []
-            for p in pos_normed:
-                try:
-                    # 确保每个字典都包含"词类"和"隶属度"键
-                    data_list.append({"词类": p, "隶属度": pos_normed[p]})
-                except Exception as e:
-                    st.warning(f"处理词类 '{p}' 时出错：{e}")
-            
-            # 确保数据列表不为空且包含所需的键
-            if data_list and all("词类" in item and "隶属度" in item for item in data_list):
-                df_norm = pd.DataFrame(data_list).set_index("词类")
-                st.dataframe(df_norm, use_container_width=True)
-            else:
-                st.warning("无法创建有效的隶属度表格。数据格式可能存在问题。")
-        else:
-            st.warning("没有可用的隶属度数据来显示表格。")
-            
-             # 折叠详细规则判断（默认收起）
+        df_norm = pd.DataFrame([{"词类": p, "隶属度": pos_normed[p]} for p in pos_normed]).set_index("词类")
+        st.dataframe(df_norm, use_container_width=True)
+
+        # 折叠详细规则判断（默认收起）
         with st.expander("展开：查看各词类的规则明细与得分（详细）"):
             for pos, rules in RULE_SETS.items():
                 st.markdown(f"**{pos}**（隶属度：{pos_normed.get(pos, 0)}）")
@@ -766,24 +687,9 @@ if confirm:
                     st.write("（该词类当前无规则条目）")
                 st.markdown("---")
 
-# 添加API测试按钮
-st.sidebar.markdown("---")
-if st.sidebar.button("测试大模型连接"):
-    st.sidebar.info("正在测试大模型连接...")
-    
-    test_messages = [
-        {"role": "user", "content": "测试大模型连接，请返回'测试成功'"}
-    ]
-    
-    ok, resp, err = call_llm_api(
-        messages=test_messages,
-        provider=PROVIDER,
-        model=MODEL_NAME,
-        api_key=API_KEY,
-        max_tokens=20
-    )
-    
-    if ok:
-        st.sidebar.success("✅ 大模型连接成功！")
-    else:
-        st.sidebar.error(f"❌ 大模型连接失败: {err}")
+        # 可选：显示原始模型输出
+        with st.expander("查看原始模型文本 / 响应"):
+            st.code(raw_out if raw_out else "(无)")
+
+
+
