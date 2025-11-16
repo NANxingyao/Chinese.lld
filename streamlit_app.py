@@ -8,52 +8,6 @@ import plotly.graph_objects as go
 from typing import Tuple, Dict, Any
 
 # ===============================
-# 页面配置（修复：侧边栏强制展开）
-# ===============================
-st.set_page_config(
-    page_title="汉语词类隶属度检测",
-    page_icon="📰",
-    layout="centered",
-
-    # ==== FIX BEGIN: Sidebar always expanded ====
-    # 原代码：initial_sidebar_state="collapsed"
-    # collapsed 会导致侧边栏与 CSS 冲突，从而无法显示模型选择栏
-    initial_sidebar_state="expanded"
-    # ==== FIX END ====
-)
-
-# 隐藏默认顶部和底部按钮
-hide_streamlit_style = """
-<style>
-header {visibility: hidden;}
-footer {visibility: hidden;}
-</style>
-"""
-st.markdown(hide_streamlit_style, unsafe_allow_html=True)
-
-# ==== FIX BEGIN: 强制展示侧边栏，禁止折叠 ====
-st.markdown("""
-<style>
-/* 让侧边栏永远展示（streamlit 内部类名） */
-[data-testid="stSidebar"] {
-    visibility: visible !important;
-    display: block !important;
-}
-
-/* 让主内容区域在右侧正确缩进（防止侧边栏覆盖） */
-[data-testid="stAppViewContainer"] {
-    margin-left: 260px !important;
-}
-
-/* 隐藏侧边栏折叠按钮（避免冲突） */
-button[kind="header"] {
-    display: none !important;
-}
-</style>
-""", unsafe_allow_html=True)
-# ==== FIX END ====
-
-# ===============================
 # 模型接口配置（重点修复区）
 # ===============================
 
@@ -711,7 +665,51 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
 # Streamlit UI（继续保持你的原 UI 结构与文案）
 # 以下代码应与第一段拼接后形成完整文件
 # ===============================
+# ===============================
+# 页面配置（修复：侧边栏强制展开）
+# ===============================
+st.set_page_config(
+    page_title="汉语词类隶属度检测",
+    page_icon="📰",
+    layout="centered",
 
+    # ==== FIX BEGIN: Sidebar always expanded ====
+    # 原代码：initial_sidebar_state="collapsed"
+    # collapsed 会导致侧边栏与 CSS 冲突，从而无法显示模型选择栏
+    initial_sidebar_state="expanded"
+    # ==== FIX END ====
+)
+
+# 隐藏默认顶部和底部按钮
+hide_streamlit_style = """
+<style>
+header {visibility: hidden;}
+footer {visibility: hidden;}
+</style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
+# ==== FIX BEGIN: 强制展示侧边栏，禁止折叠 ====
+st.markdown("""
+<style>
+/* 让侧边栏永远展示（streamlit 内部类名） */
+[data-testid="stSidebar"] {
+    visibility: visible !important;
+    display: block !important;
+}
+
+/* 让主内容区域在右侧正确缩进（防止侧边栏覆盖） */
+[data-testid="stAppViewContainer"] {
+    margin-left: 260px !important;
+}
+
+/* 隐藏侧边栏折叠按钮（避免冲突） */
+button[kind="header"] {
+    display: none !important;
+}
+</style>
+""", unsafe_allow_html=True)
+# ==== FIX END ====
 # ======== 模型选择部分（侧边栏） ========
 # 由侧边栏选择模型
 model_choice = st.sidebar.selectbox("选择模型", list(MODEL_OPTIONS.keys()))
