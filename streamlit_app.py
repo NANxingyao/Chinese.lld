@@ -70,14 +70,6 @@ MODEL_CONFIGS = {
             "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), "temperature": kw.get("temperature", 0.0), "stream": False,
         },
     },
-    "doubao": {
-        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-        "endpoint": "/chat/completions",
-        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json",},
-        "payload": lambda model, messages, **kw: {
-            "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), "temperature": kw.get("temperature", 0.0), "stream": False,
-        },
-    },
     "qwen": {
         "base_url": "https://dashscope.aliyuncs.com/api/v1",
         "endpoint": "/services/aigc/text-generation/generation",
@@ -107,12 +99,6 @@ MODEL_OPTIONS = {
         "model": "moonshot-v1-32k", 
         "api_key": os.getenv("MOONSHOT_API_KEY", "sk-l5FvRWegjM5DEk4AU71YPQ1QgvFPTHZIJOmq6qdssPY4sNtE"),
         "env_var": "MOONSHOT_API_KEY"
-    },
-    "Doubao（豆包）": {
-        "provider": "doubao", 
-        "model": "doubao-pro-32k", 
-        "api_key": os.getenv("DOUBAO_API_KEY", "404571ec-4209-4842-956f-c4fd7a62d0fe"),
-        "env_var": "DOUBAO_API_KEY"
     },
     "Qwen（通义千问）": {
         "provider": "qwen", 
@@ -625,15 +611,11 @@ def main():
     with info_container:
         with st.expander("ℹ️ 使用说明", expanded=False):
             st.info("""
-            1. 提前设置对应模型的环境变量（API Key）。
-            2. 在上方的“词语输入”框中输入一个汉语词语。
-            3. （可选）点击“测试模型链接”按钮，确认所选模型API可以正常访问。
+            1. 在上方的“词语输入”框中输入一个汉语词。
+            2. （可选）在模型选择区域点击向下箭头展开，可以选择不同的大语言模型。
+            3. （可选）点击“测试模型链接”按钮，确认所选模型可以正常访问。
             4. 点击“开始分析”按钮，系统将使用选定的大模型分析该词语的词类隶属度。
             5. 分析结果将显示在下方，包括隶属度排名、详细得分、推理过程和原始响应。
-            
-            **环境变量设置方法：**
-            - Linux/Mac: export 环境变量名='你的API Key'
-            - Windows: set 环境变量名='你的API Key'
             """)
 
     # --- 结果显示区 ---
