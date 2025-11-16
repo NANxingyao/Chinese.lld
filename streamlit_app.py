@@ -36,14 +36,14 @@ footer {visibility: hidden;}
     transform: translateX(0) !important;
 }
 
-/* 2. 隐藏侧边栏的折叠/展开按钮 */
+/* 2. 显示侧边栏的折叠/展开按钮 */
 [data-testid="collapsedControl"] {
     display: none !important;
 }
 
 /* 3. (可选) 为侧边栏添加一个固定的宽度，防止内容过宽或过窄 */
 [data-testid="stSidebar"] > div:first-child {
-    width: 300px !important;
+    width: 350px !important;
 }
 </style>
 """
