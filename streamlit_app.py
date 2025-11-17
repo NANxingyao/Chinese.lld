@@ -312,6 +312,19 @@ RULE_SETS = {
         {"name": "NUM_COM4_不能直接作定语修饰名词（除非省第）", "desc": "不能直接作定语修饰名词（除非省略'第'）", "match_score": 20, "mismatch_score": 0},
         {"name": "NUM_COM5_可出现在'来/多/余'之前等特殊分布", "desc": "可以出现在特定助词之前（见原文条目）", "match_score": 30, "mismatch_score": 0},
     ],
+    #4.小类
+    "名动词": [
+    {"name": "MV1_可被“不/没有”否定且“没有”有对应肯定式", "desc": "可以用“不”和“没有”否定，并且“没有…”对应的肯定形式可以是“…了/有…”", "match_score": 10, "mismatch_score": -10},
+    {"name": "MV2_可接“着/了/过”或进入“……了没有”格式", "desc": "可以后附时体助词“着、了、过”，或可以进入“……了没有”格式", "match_score": 10, "mismatch_score": -10},
+    {"name": "MV3_可带真宾语且不能受程度副词修饰", "desc": "可以带真宾语，并且不能受“很”等程度副词修饰", "match_score": 10, "mismatch_score": -10},
+    {"name": "MV4_有VV/V一V/V了V/V不V等重叠形式", "desc": "可以有‘VV、V一V、V了V、V不V’等重叠和正反重叠形式", "match_score": 10, "mismatch_score": 0},
+    {"name": "MV5_能作谓语核心/主语/宾语且能作形式动词宾语", "desc": "既可以作谓语/谓语核心，又可以作主语或宾语，并且可以作“作、进行、加以、给予、受到”等形式动词的宾语", "match_score": 10, "mismatch_score": -10},
+    {"name": "MV6_不能直接作状语修饰动词性成分", "desc": "不能直接作状语用来修饰动词性成分", "match_score": 10, "mismatch_score": -10},
+    {"name": "MV7_可修饰名词/被名词修饰/可受数量词修饰", "desc": "可以修饰名词或受名词修饰，或者可以受数量词修饰", "match_score": 10, "mismatch_score": 0},
+    {"name": "MV8_可跟在“怎么/怎样/这么/那样”之后", "desc": "可以跟在“怎么、怎样”之后询问动作方式，也可跟在“这么、这样、那么、那样”后作回答", "match_score": 10, "mismatch_score": 0},
+    {"name": "MV9_不能跟在“多/多么”之后", "desc": "不能跟在“多”之后询问性质程度，也不能跟在“多么”之后表示感叹", "match_score": 10, "mismatch_score": -10}
+]
+
 }
 # 预计算每个词类的最大可能得分
 MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in RULE_SETS.items()}
