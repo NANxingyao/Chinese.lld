@@ -5,8 +5,6 @@ import re
 import os
 import pandas as pd
 import plotly.graph_objects as go
-from openpyxl import Workbook, load_workbook
-from datetime import datetime
 from typing import Tuple, Dict, Any, List
 
 # ===============================
@@ -410,57 +408,6 @@ def prepare_detailed_scores_df(scores_all: Dict[str, Dict[str, int]]) -> pd.Data
             })
     return pd.DataFrame(rows)
 
-#结果保存
-def save_test_result(word, best_class, top10_results):
-    """
-    保存测试结果到桌面 Excel 文件
-    word: 输入词语（字符串）
-    best_class: 最可能的词类（字符串）
-    top10_results: 列表，如：[("名词", 0.92), ("动词", 0.81), ...]
-    """
-
-    # 1. 桌面路径
-    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-    file_path = os.path.join(desktop, "汉语词类隶属度测试表.xlsx")
-
-    # 2. 如果不存在，则创建表头
-    if not os.path.exists(file_path):
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "测试结果"
-
-        # 表头
-        headers = [
-            "测试时间", 
-            "词目", 
-            "最可能词类", 
-            "前十名词类及隶属度（词类:隶属度）"
-        ]
-        ws.append(headers)
-        wb.save(file_path)
-
-    # 3. 加载已有文件
-    wb = load_workbook(file_path)
-    ws = wb.active
-
-    # 4. 组装“前十词类”字符串
-    top10_str = "; ".join([f"{cls}:{score:.4f}" for cls, score in top10_results])
-
-    # 5. 写入一行新数据
-    ws.append([
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        word,
-        best_class,
-        top10_str,
-    ])
-
-    wb.save(file_path)
-    return file_path
-
-
-
-
-
 # ===============================
 # 安全的 LLM 调用函数 (增加超时)
 # ===============================
@@ -653,16 +600,6 @@ def main():
 
     st.markdown("---")
 
-import streamlit as st
-
-# 显示保存按钮
-if st.button("💾 保存测试结果到桌面"):
-    path = save_test_result(
-        word=input_word,
-        best_class=best_class,
-        top10_results=top10_sorted
-    )
-    st.success(f"测试结果已保存到：{path}")
     
     # --- 使用说明 ---
     info_container = st.container()
