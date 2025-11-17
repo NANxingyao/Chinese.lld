@@ -653,6 +653,17 @@ def main():
 
     st.markdown("---")
 
+import streamlit as st
+
+# 显示保存按钮
+if st.button("💾 保存测试结果到桌面"):
+    path = save_test_result(
+        word=input_word,
+        best_class=best_class,
+        top10_results=top10_sorted
+    )
+    st.success(f"测试结果已保存到：{path}")
+    
     # --- 使用说明 ---
     info_container = st.container()
     with info_container:
@@ -723,17 +734,9 @@ def main():
         st.subheader("📥 模型原始响应")
         with st.expander("点击展开查看原始响应", expanded=False):
             st.code(raw_text, language="json")
+        
 
-import streamlit as st
 
-# 显示保存按钮
-if st.button("💾 保存测试结果到桌面"):
-    path = save_test_result(
-        word=input_word,
-        best_class=best_class,
-        top10_results=top10_sorted
-    )
-    st.success(f"测试结果已保存到：{path}")
 
 
 if __name__ == "__main__":
