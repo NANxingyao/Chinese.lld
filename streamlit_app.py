@@ -534,13 +534,20 @@ def normalize_key(k: str, pos_rules: list) -> str:
 
 def map_to_allowed_score(rule: dict, raw_val) -> int:
     match_score, mismatch_score = rule["match_score"], rule["mismatch_score"]
+    # 强制保留原始得分中的负分（如果是有效规则分）
     if isinstance(raw_val, (int, float)):
-        return match_score if raw_val == match_score else mismatch_score
-    if isinstance(raw_val, bool): return match_score if raw_val else mismatch_score
+        # 允许匹配得分或不匹配得分（包括负分）
+        if raw_val == match_score or raw_val == mismatch_score:
+            return int(raw_val)
+    if isinstance(raw_val, bool):
+        return match_score if raw_val else mismatch_score
     if isinstance(raw_val, str):
         s = raw_val.strip().lower()
-        if s in ("yes", "y", "true", "是", "√", "符合"): return match_score
-        if s in ("no", "n", "false", "否", "×", "不符合"): return mismatch_score
+        if s in ("yes", "y", "true", "是", "√", "符合"):
+            return match_score
+        if s in ("no", "n", "false", "否", "×", "不符合"):
+            return mismatch_score
+    # 无效值时返回不匹配得分（保留负分）
     return mismatch_score
 
 def calculate_membership(scores_all: Dict[str, Dict[str, int]]) -> Dict[str, float]:
@@ -549,8 +556,12 @@ def calculate_membership(scores_all: Dict[str, Dict[str, int]]) -> Dict[str, flo
         total_score = sum(scores.values())
         # 改为：总得分除以100得到隶属度（几十分对应零点几）
         # 同时限制在 [0, 1] 区间内
+        # 负分可降低隶属度，保留原始计算逻辑但不强制截断为0（可选调整）
         normalized = total_score / 100
-        membership[pos] = max(0.0, min(1.0, normalized))
+        # 若需允许隶属度为负（更准确反映负分影响），可改为：
+        # membership[pos] = normalized
+        # 若需限制在[-1, 1]区间：
+        membership[pos] = max(-1.0, min(1.0, normalized))
     return membership
 
 def get_top_10_positions(membership: Dict[str, float]) -> List[Tuple[str, float]]:
@@ -627,13 +638,15 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 
 #### 步骤1：初步筛选候选词类（必须包含此思考过程）
 1. 快速分析词语「{word}」的语法特征（如能否受数量词修饰、能否带宾语等）
-2. 参考以下核心规则（仅展示match_score≥20的关键规则），筛选出最可能的10个候选词类：
+2. 参考以下核心规则（仅展示match_score≥20的关键规则），筛选出最可能的5个候选词类：
 {core_rules_text}
 3. 说明筛选理由（如："排除动词，因为「{word}」不能带宾语，不符合V3规则"）
 
 #### 步骤2：对候选词类进行完整评分
 1. 针对步骤1筛选出的候选词类，使用该词类的全部规则进行评分（符合规则填对应match_score，否则填0）
-2. 候选词类的完整规则如下（仅使用你筛选出的词类对应的规则）：
+2. 每个词类包含多个规则，每个规则有明确的match_score（符合得分）和mismatch_score（不符合得分）。
+3. 必须严格使用规则中定义的分数，** 不符合规则时必须使用负分（如-20、-10），绝对不能用0分代替 **。
+4. 候选词类的完整规则如下（仅使用你筛选出的词类对应的规则）：
 """
     # 拼接所有词类的完整规则（供模型在步骤2使用）
     for pos, rules_str in full_rules_by_pos.items():
@@ -650,14 +663,15 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     "候选词类2": {{ "规则1": 得分, "规则2": 得分, ... }},
     ...
   }},
-  "explanation": "详细说明判定为最可能词类的主要依据"
+  "explanation": "简要说明判定为最可能词类的主要依据（1-2句话）"
 }}
 
 关键说明：
 1. 步骤1的筛选过程必须在思考中体现，帮助你聚焦核心词类
 2. 步骤2仅评分候选词类，无需处理所有词类，减少计算量
 3. 确保"scores"中的规则名称与提供的完全一致（如"N1_可受数量词修饰"）
-4. 若候选词类不足10个，按实际数量评分；若所有词类均不符合，保留得分最高的5个
+4. 若候选词类不足5个，按实际数量评分；若所有词类均不符合，保留得分最高的3个
+5. 严格使用规则定义的mismatch_score（包括负分），不符合规则时禁止用0分替代
 """
 
     # 用户提示仅需触发模型开始分析
@@ -693,7 +707,8 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         cleaned_json_text = raw_text # 展示原始文本
 
     # 格式化得分（确保所有词类的规则都有对应条目，未评分的规则填0）
-    scores_out = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
+    # 改为：认可匹配得分或不匹配得分（包括负分）
+scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
     for pos, rules in RULE_SETS.items():
         raw_pos_scores = raw_scores.get(pos, {})
         if isinstance(raw_pos_scores, dict):
@@ -850,7 +865,16 @@ def main():
                             "得分": scores_all[pos][rule["name"]]
                         })
                     rule_df = pd.DataFrame(rule_data)
-                    st.dataframe(rule_df, use_container_width=True, height=200)
+                    # 负分标红，动态调整高度
+        styled_df = rule_df.style.applymap(
+            lambda x: "color: #ff4b4b; font-weight: bold" if isinstance(x, int) and x < 0 else "",
+            subset=["得分"]
+        )
+        st.dataframe(
+            styled_df,
+            use_container_width=True,
+            height=min(200 + len(rule_df)*20, 500)  # 根据规则数量调整高度
+        )
         
         st.subheader("🔍 模型推理过程")
         st.text_area("推理详情", explanation, height=200, disabled=True)
