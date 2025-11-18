@@ -618,7 +618,8 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
 # 词类判定主函数 (优化Prompt)
 # ===============================
 def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str, str]:
-    if not word: return {}, "", "未知", ""
+    if not word:
+        return {}, "", "未知", ""
 
     # 优化1：筛选每个词类的核心规则（match_score≥20），减少传输量
     core_rules_text = "\n".join([
@@ -704,14 +705,14 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         explanation = "无法解析模型输出。"
         predicted_pos = "未知"
         raw_scores = {}
-        cleaned_json_text = raw_text # 展示原始文本
+        cleaned_json_text = raw_text  # 展示原始文本
 
- # --- 关键修复：在循环开始前，初始化 scores_out ---
-# 为了避免 KeyError，先为每个词类（pos）在 scores_out 中创建一个空字典
-scores_out = {pos: {} for pos in RULE_SETS.keys()}
+    # --- 关键修复：在循环开始前，初始化 scores_out ---
+    # 为了避免 KeyError，先为每个词类（pos）在 scores_out 中创建一个空字典
+    scores_out = {pos: {} for pos in RULE_SETS.keys()}
 
-# 格式化得分（确保所有词类的规则都有对应条目，未评分的规则填0）
-# 改为：认可匹配得分或不匹配得分（包括负分）
+    # 格式化得分（确保所有词类的规则都有对应条目，未评分的规则填0）
+    # 改为：认可匹配得分或不匹配得分（包括负分）
     for pos, rules in RULE_SETS.items():
         raw_pos_scores = raw_scores.get(pos, {})
         if isinstance(raw_pos_scores, dict):
