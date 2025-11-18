@@ -73,14 +73,10 @@ MODEL_CONFIGS = {
         "base_url": "https://dashscope.aliyuncs.com/api/v1",
         "endpoint": "/services/aigc/text-generation/generation",
         "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-      "payload": lambda model, messages, **kw: {
-    "model": model, 
-    "input": {"messages": messages}, 
-    "parameters": {
-        "max_tokens": kw.get("max_tokens", 4096), 
-        "temperature": kw.get("temperature", 0.0)  # 移除此处的多余逗号
+        "payload": lambda model, messages, **kw: {
+            "model": model, "input": {"messages": messages}, "parameters": {"max_tokens": kw.get("max_tokens", 4096), "temperature": kw.get("temperature", 0.0),},
+        },
     },
-},
 }
 
 # 模型选项（仅从环境变量获取API Key，不提供手动输入）
@@ -853,4 +849,3 @@ st.markdown(
     "</div>",
     unsafe_allow_html=True
 )
-
