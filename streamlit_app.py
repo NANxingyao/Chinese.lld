@@ -787,10 +787,8 @@ scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores_
     api_key=selected_model_info["api_key"],
 )
 
+status_placeholder.empty()
 
-        
-        status_placeholder.empty()
-        
         membership = calculate_membership(scores_all)
         st.success(f'**分析完成**：词语「{word}」最可能的词类是 【{predicted_pos}】，隶属度为 {membership.get(predicted_pos, 0):.4f}')
         
