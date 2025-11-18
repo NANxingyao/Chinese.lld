@@ -846,17 +846,21 @@ def main():
         
         col_results_1, col_results_2 = st.columns(2)
         
-        with col_results_1:
-            st.subheader("🏆 词类隶属度排名（前十）")
-            top10 = get_top_10_positions(membership)
-            top10_df = pd.DataFrame(top10, columns=["词类", "隶属度"])
-            top10_df["隶属度"] = top10_df["隶属度"].apply(lambda x: f"{x:.4f}")
-            st.table(top10_df)
-            
-            st.subheader("📊 词类隶属度雷达图（前十）")
-            plot_radar_chart_streamlit(dict(top10), f"「{word}」的词类隶属度分布")
+      # 假设 col_results_1 和 col_results_2 是通过 st.columns() 创建的
+# col_results_1, col_results_2 = st.columns(2)
 
-      with col_results_2:
+with col_results_1:
+    st.subheader("🏆 词类隶属度排名（前十）")
+    top10 = get_top_10_positions(membership)
+    top10_df = pd.DataFrame(top10, columns=["词类", "隶属度"])
+    top10_df["隶属度"] = top10_df["隶属度"].apply(lambda x: f"{x:.4f}")
+    st.table(top10_df)
+    
+    st.subheader("📊 词类隶属度雷达图（前十）")
+    plot_radar_chart_streamlit(dict(top10), f"「{word}」的词类隶属度分布")
+
+with col_results_2:
+    # 关键修复：这一行以及其下的所有内容都必须缩进，属于 col_results_2 代码块
     st.subheader("📋 各词类详细得分（按总分排名前10）")
     
     # 1. 计算所有词类的总分并排序，取前10名
@@ -891,22 +895,21 @@ def main():
                 subset=["得分"]
             )
             
-            # 调整表格高度，确保所有规则都能显示（每行约30px，至少显示10行）
+            # 调整表格高度，确保所有规则都能显示
             min_height = len(rule_df) * 30 + 50  # 50px为表头高度
             st.dataframe(
                 styled_df,
                 use_container_width=True,
-                height=min(min_height, 800)  # 最大高度限制为800px，避免页面过长
+                height=min(min_height, 800)  # 最大高度限制为800px
             )
     
+    # 这些元素也属于 col_results_2，保持正确缩进
     st.subheader("🔍 模型推理过程")
     st.text_area("推理详情", explanation, height=200, disabled=True)
     
     st.subheader("📥 模型原始响应")
     with st.expander("点击展开查看原始响应", expanded=False):
         st.code(raw_text, language="json")
-        
-
 
 
 
