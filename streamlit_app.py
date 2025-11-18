@@ -708,16 +708,15 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 
     # 格式化得分（确保所有词类的规则都有对应条目，未评分的规则填0）
     # 改为：认可匹配得分或不匹配得分（包括负分）
-scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
-for pos, rules in RULE_SETS.items():
+    for pos, rules in RULE_SETS.items():
         raw_pos_scores = raw_scores.get(pos, {})
         if isinstance(raw_pos_scores, dict):
             for k, v in raw_pos_scores.items():
                 normalized_key = normalize_key(k, rules)
                 if normalized_key:
                     rule_def = next(r for r in rules if r["name"] == normalized_key)
-                    # 保持与原逻辑一致：仅当得分等于规则match_score时才认可（避免模型返回无效分数）
-                    scores_out[pos][normalized_key] = v if v == rule_def["match_score"] else 0
+                    # 关键修改：使用 map_to_allowed_score 函数处理得分，保留负分
+                    scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
 
     return scores_out, cleaned_json_text, predicted_pos, explanation
     
