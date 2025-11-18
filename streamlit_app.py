@@ -712,26 +712,26 @@ scores_out = {pos: {} for pos in RULE_SETS.keys()}
 
 # 格式化得分（确保所有词类的规则都有对应条目，未评分的规则填0）
 # 改为：认可匹配得分或不匹配得分（包括负分）
-for pos, rules in RULE_SETS.items():
-    raw_pos_scores = raw_scores.get(pos, {})
-    if isinstance(raw_pos_scores, dict):
-        for k, v in raw_pos_scores.items():
-            normalized_key = normalize_key(k, rules)
-            if normalized_key:
-                # 查找当前规则的定义
-                rule_def = next(r for r in rules if r["name"] == normalized_key)
-                # 关键修改：使用 map_to_allowed_score 函数处理得分，保留负分
-                scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
-
-# 循环结束后，确保所有规则都有一个得分（未被模型评分的规则，其得分为0）
-for pos, rules in RULE_SETS.items():
-    for rule in rules:
-        rule_name = rule["name"]
-        # 如果规则在 scores_out 中没有得分，则默认为0
-        if rule_name not in scores_out[pos]:
-            scores_out[pos][rule_name] = 0
-
-return scores_out, cleaned_json_text, predicted_pos, explanation
+    for pos, rules in RULE_SETS.items():
+        raw_pos_scores = raw_scores.get(pos, {})
+        if isinstance(raw_pos_scores, dict):
+            for k, v in raw_pos_scores.items():
+                normalized_key = normalize_key(k, rules)
+                if normalized_key:
+                    # 查找当前规则的定义
+                    rule_def = next(r for r in rules if r["name"] == normalized_key)
+                    # 关键修改：使用 map_to_allowed_score 函数处理得分，保留负分
+                    scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
+    
+    # 循环结束后，确保所有规则都有一个得分（未被模型评分的规则，其得分为0）
+    for pos, rules in RULE_SETS.items():
+        for rule in rules:
+            rule_name = rule["name"]
+            # 如果规则在 scores_out 中没有得分，则默认为0
+            if rule_name not in scores_out[pos]:
+                scores_out[pos][rule_name] = 0
+    
+    return scores_out, cleaned_json_text, predicted_pos, explanation
 # ===============================
 # 雷达图
 # ===============================
