@@ -609,32 +609,59 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
 def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str, str]:
     if not word: return {}, "", "未知", ""
 
-    # 优化：极大地精简规则文本，只发送规则名和分数，移除描述以减少Token
-    rules_text = "\n".join([
-        f'"{pos}": {{' + ', '.join([f'"{r["name"]}": {r["match_score"]}' for r in rules]) + '}' 
+    # 优化1：筛选每个词类的核心规则（match_score≥20），减少传输量
+    core_rules_text = "\n".join([
+        f'"{pos}": {{' + ', '.join([f'"{r["name"]}": {r["match_score"]}' for r in rules if r["match_score"] >= 20]) + '}' 
         for pos, rules in RULE_SETS.items()
     ])
-    rules_text = "{\n" + rules_text + "\n}"
+    core_rules_text = "{\n" + core_rules_text + "\n}"
 
-    # 优化：更明确、更简洁的提示词，强调JSON输出
-    system_msg = (
-        "你是一位中文语言学专家。你的任务是根据提供的规则，为给定的词语「" + word + "」进行词类隶属度评分。\n"
-        "请严格按照以下JSON结构返回结果，不要添加任何其他说明文字：\n"
-        "{\n"
-        '  "predicted_pos": "最可能的词类名称（字符串）",\n'
-        '  "scores": {\n'
-        '    "词类1": { "规则1": 得分, "规则2": 得分, ... },\n'
-        '    "词类2": { "规则1": 得分, "规则2": 得分, ... },\n'
-        '    ...\n'
-        '  },\n'
-        '  "explanation": "简要解释判定为最可能词类的主要依据（1-2句话）"\n'
-        "}\n"
-        "说明：\n"
-        "1. 对于'scores'中的每个规则，如果你判断词语符合规则描述，请填入规则后的分值；否则填0。\n"
-        "2. 请确保返回的是一个完整且格式正确的JSON对象。"
-    )
+    # 优化2：完整规则仅保留候选词类的，通过思维链分阶段处理
+    full_rules_by_pos = {
+        pos: "\n".join([f'"{r["name"]}": {r["match_score"]}' for r in rules])
+        for pos, rules in RULE_SETS.items()
+    }
+
+    # 优化3：分阶段提示词，引入思维链，先筛选再评分
+    system_msg = f"""你是一位中文语言学专家。你的任务是根据提供的规则，为给定的词语「{word}」进行词类隶属度评分。请严格按以下步骤操作：
+
+#### 步骤1：初步筛选候选词类（必须包含此思考过程）
+1. 快速分析词语「{word}」的语法特征（如能否受数量词修饰、能否带宾语等）
+2. 参考以下核心规则（仅展示match_score≥20的关键规则），筛选出最可能的5个候选词类：
+{core_rules_text}
+3. 说明筛选理由（如："排除动词，因为「{word}」不能带宾语，不符合V3规则"）
+
+#### 步骤2：对候选词类进行完整评分
+1. 针对步骤1筛选出的候选词类，使用该词类的全部规则进行评分（符合规则填对应match_score，否则填0）
+2. 候选词类的完整规则如下（仅使用你筛选出的词类对应的规则）：
+"""
+    # 拼接所有词类的完整规则（供模型在步骤2使用）
+    for pos, rules_str in full_rules_by_pos.items():
+        system_msg += f'\n{pos}的完整规则：\n{{{rules_str}}}'
     
-    user_prompt = f"请基于以下规则，分析词语「{word}」并返回JSON结果：\n\n{rules_text}"
+    system_msg += f"""
+
+#### 步骤3：返回最终结果（仅输出JSON，无其他文字）
+请严格按照以下格式返回，确保JSON完整且格式正确：
+{{
+  "predicted_pos": "最可能的词类名称（从候选词类中选择）",
+  "scores": {{
+    "候选词类1": {{ "规则1": 得分, "规则2": 得分, ... }},
+    "候选词类2": {{ "规则1": 得分, "规则2": 得分, ... }},
+    ...
+  }},
+  "explanation": "简要说明判定为最可能词类的主要依据（1-2句话）"
+}}
+
+关键说明：
+1. 步骤1的筛选过程必须在思考中体现，帮助你聚焦核心词类
+2. 步骤2仅评分候选词类，无需处理所有词类，减少计算量
+3. 确保"scores"中的规则名称与提供的完全一致（如"N1_可受数量词修饰"）
+4. 若候选词类不足5个，按实际数量评分；若所有词类均不符合，保留得分最高的3个
+"""
+
+    # 用户提示仅需触发模型开始分析
+    user_prompt = f"请根据上述步骤，为词语「{word}」进行词类隶属度评分并返回JSON结果。"
 
     # 显示加载状态
     with st.spinner("正在调用大模型进行分析，请稍候..."):
@@ -665,7 +692,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         raw_scores = {}
         cleaned_json_text = raw_text # 展示原始文本
 
-    # 格式化得分
+    # 格式化得分（确保所有词类的规则都有对应条目，未评分的规则填0）
     scores_out = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
     for pos, rules in RULE_SETS.items():
         raw_pos_scores = raw_scores.get(pos, {})
@@ -674,11 +701,11 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
                 normalized_key = normalize_key(k, rules)
                 if normalized_key:
                     rule_def = next(r for r in rules if r["name"] == normalized_key)
-                    # 这里简化映射，因为我们告诉模型直接返回match_score或0
+                    # 保持与原逻辑一致：仅当得分等于规则match_score时才认可（避免模型返回无效分数）
                     scores_out[pos][normalized_key] = v if v == rule_def["match_score"] else 0
 
     return scores_out, cleaned_json_text, predicted_pos, explanation
-
+    
 # ===============================
 # 雷达图
 # ===============================
