@@ -472,6 +472,7 @@ RULE_SETS = {
         {"name": "Mod8_不能单独回答", "desc": "不能单独回答问题(即是黏着词)", "match_score": 10, "mismatch_score": -10}
     ]
 }
+
 # 预计算每个词类的最大可能得分
 MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in RULE_SETS.items()}
 
@@ -605,82 +606,78 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
 # ===============================
 # 词类判定主函数 (优化Prompt)
 # ===============================
-def ask_model_for_pos_and_scores_two_stage(word: str, provider: str, model: str, api_key: str,
-                                          per_class_topk: int = 3, global_topk: int = None) -> Tuple[Dict[str, Dict[str,int]], str, str, str]:
-    """
-    两阶段：shortlist -> scoring
-    返回：scores_out, raw_text_of_final_response, predicted_pos, explanation
-    """
-    if not word:
-        return {}, "", "未知", ""
+def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str, str]:
+    if not word: return {}, "", "未知", ""
 
-    # 构建简化规则字典（只发送规则名和match_score，减少token）
-    compact_rules = {pos: {r["name"]: r["match_score"] for r in rules} for pos, rules in RULE_SETS.items()}
+    # 优化：极大地精简规则文本，只发送规则名和分数，移除描述以减少Token
+    rules_text = "\n".join([
+        f'"{pos}": {{' + ', '.join([f'"{r["name"]}": {r["match_score"]}' for r in rules]) + '}' 
+        for pos, rules in RULE_SETS.items()
+    ])
+    rules_text = "{\n" + rules_text + "\n}"
 
-    # --------- 阶段一：候选筛选（shortlist） ---------
-    system1 = "你是一位中文语言学专家。不要写链式思维或内部推理。严格返回 JSON。"
-    user1 = f"词语：\"{word}\"。\n规则（仅名与分值）：\n{json.dumps(compact_rules, ensure_ascii=False)}\n请为每个词类返回最相关的前 {per_class_topk} 条规则代码（如果希望改为全局 top-k 请设置 global_topk）。返回 JSON: {{\"shortlist\":{{...}},\"note\":\"...\"}}"
-    ok1, resp1, err1 = call_llm_api_cached(_provider=provider, _model=model, _api_key=api_key, messages=[{"role":"system","content":system1},{"role":"user","content":user1}], max_tokens=1024, temperature=0.0)
-    if not ok1:
-        # 失败退回：使用默认策略（每类取 match_score 最大的前 per_class_topk）
-        shortlist = {}
-        for pos, rules in compact_rules.items():
-            sorted_rules = sorted(rules.items(), key=lambda x: -abs(x[1]))
-            shortlist[pos] = [r[0] for r in sorted_rules[:per_class_topk]]
+    # 优化：更明确、更简洁的提示词，强调JSON输出
+    system_msg = (
+        "你是一位中文语言学专家。你的任务是根据提供的规则，为给定的词语「" + word + "」进行词类隶属度评分。\n"
+        "请严格按照以下JSON结构返回结果，不要添加任何其他说明文字：\n"
+        "{\n"
+        '  "predicted_pos": "最可能的词类名称（字符串）",\n'
+        '  "scores": {\n'
+        '    "词类1": { "规则1": 得分, "规则2": 得分, ... },\n'
+        '    "词类2": { "规则1": 得分, "规则2": 得分, ... },\n'
+        '    ...\n'
+        '  },\n'
+        '  "explanation": "简要解释判定为最可能词类的主要依据（1-2句话）"\n'
+        "}\n"
+        "说明：\n"
+        "1. 对于'scores'中的每个规则，如果你判断词语符合规则描述，请填入规则后的分值；否则填0。\n"
+        "2. 请确保返回的是一个完整且格式正确的JSON对象。"
+    )
+    
+    user_prompt = f"请基于以下规则，分析词语「{word}」并返回JSON结果：\n\n{rules_text}"
+
+    # 显示加载状态
+    with st.spinner("正在调用大模型进行分析，请稍候..."):
+        # 使用缓存调用API
+        ok, resp_json, err_msg = call_llm_api_cached(
+            _provider=provider,
+            _model=model,
+            _api_key=api_key,
+            messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": user_prompt}]
+        )
+
+    if not ok:
+        st.error(f"模型调用失败: {err_msg}")
+        return {}, f"调用失败: {err_msg}", "未知", f"调用失败: {err_msg}"
+
+    raw_text = extract_text_from_response(resp_json)
+    parsed_json, cleaned_json_text = extract_json_from_text(raw_text)
+    
+    # 处理解析结果
+    if parsed_json:
+        explanation = parsed_json.get("explanation", "模型未提供详细推理过程。")
+        predicted_pos = parsed_json.get("predicted_pos", "未知")
+        raw_scores = parsed_json.get("scores", {})
     else:
-        raw1 = extract_text_from_response(resp1)
-        parsed1, _ = extract_json_from_text(raw1)
-        if parsed1 and "shortlist" in parsed1:
-            shortlist = parsed1["shortlist"]
-        else:
-            shortlist = {}
-            for pos, rules in compact_rules.items():
-                shortlist[pos] = [r for r,_ in sorted(rules.items(), key=lambda x:-abs(x[1]))[:per_class_topk]]
+        st.warning("未能从模型响应中解析出有效的JSON。")
+        explanation = "无法解析模型输出。"
+        predicted_pos = "未知"
+        raw_scores = {}
+        cleaned_json_text = raw_text # 展示原始文本
 
-    # 如果用户/模型希望用全局 topk，合并所有规则并取 top
-    if global_topk:
-        all_candidates = []
-        for pos, rs in shortlist.items():
-            for r in rs:
-                all_candidates.append((pos, r, compact_rules.get(pos, {}).get(r, 0)))
-        all_sorted = sorted(all_candidates, key=lambda x: -abs(x[2]))
-        chosen = all_sorted[:global_topk]
-        shortlist = {}
-        for pos, r, _ in chosen:
-            shortlist.setdefault(pos, []).append(r)
-
-    # --------- 阶段二：精确评分（scoring） ---------
-    # 组装被评分的规则子集
-    candidate_rules = {pos: {r: compact_rules.get(pos, {}).get(r, 0) for r in rules_list} for pos, rules_list in shortlist.items()}
-
-    system2 = ("你是一位中文语言学专家。不要写链式思维或内部推理。只返回严格的 JSON，"
-               "格式见说明。要求每条理由最多20字，explanation 最多30字。")
-    user2 = f"词语：\"{word}\"。\n候选规则（仅名与match_score）：\n{json.dumps(candidate_rules, ensure_ascii=False)}\n请返回JSON：{{'predicted_pos':'...','scores':{{...}},'reasons':{{...}},'explanation':'...'}}"
-    ok2, resp2, err2 = call_llm_api_cached(_provider=provider, _model=model, _api_key=api_key, messages=[{"role":"system","content":system2},{"role":"user","content":user2}], max_tokens=1500, temperature=0.0)
-    if not ok2:
-        return {}, f"调用失败: {err2}", "未知", f"stage2 调用失败: {err2}"
-
-    raw2 = extract_text_from_response(resp2)
-    parsed2, _ = extract_json_from_text(raw2)
-    if not parsed2:
-        return {}, raw2, "未知", "无法解析模型输出"
-
-    predicted_pos = parsed2.get("predicted_pos", "未知")
-    raw_scores = parsed2.get("scores", {})
-    explanation = parsed2.get("explanation", "")
-
-    # map raw_scores -> allowed scores_out（其余规则为0）
+    # 格式化得分
     scores_out = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
-    for pos, rs in raw_scores.items():
-        for k, v in rs.items():
-            normalized = normalize_key(k, RULE_SETS.get(pos, []))
-            if normalized:
-                rule_def = next((r for r in RULE_SETS[pos] if r["name"]==normalized), None)
-                if rule_def:
-                    scores_out[pos][normalized] = v if v == rule_def["match_score"] else 0
+    for pos, rules in RULE_SETS.items():
+        raw_pos_scores = raw_scores.get(pos, {})
+        if isinstance(raw_pos_scores, dict):
+            for k, v in raw_pos_scores.items():
+                normalized_key = normalize_key(k, rules)
+                if normalized_key:
+                    rule_def = next(r for r in rules if r["name"] == normalized_key)
+                    # 这里简化映射，因为我们告诉模型直接返回match_score或0
+                    scores_out[pos][normalized_key] = v if v == rule_def["match_score"] else 0
 
-    return scores_out, raw2, predicted_pos, explanation
-
+    return scores_out, cleaned_json_text, predicted_pos, explanation
 
 # ===============================
 # 雷达图
@@ -763,6 +760,7 @@ def main():
 
     st.markdown("---")
 
+    
     # --- 使用说明 ---
     info_container = st.container()
     with info_container:
@@ -779,16 +777,16 @@ def main():
     if analyze_button and word and selected_model_info["api_key"]:
         status_placeholder = st.empty()
         status_placeholder.info(f"正在为词语「{word}」启动分析...")
+
+        scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
+            word=word,
+            provider=selected_model_info["provider"],
+            model=selected_model_info["model"],
+            api_key=selected_model_info["api_key"]
+        )
         
-scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores_two_stage(
-    word=word,
-    provider=selected_model_info["provider"],
-    model=selected_model_info["model"],
-    api_key=selected_model_info["api_key"],
-)
-
-status_placeholder.empty()
-
+        status_placeholder.empty()
+        
         membership = calculate_membership(scores_all)
         st.success(f'**分析完成**：词语「{word}」最可能的词类是 【{predicted_pos}】，隶属度为 {membership.get(predicted_pos, 0):.4f}')
         
@@ -833,6 +831,20 @@ status_placeholder.empty()
         st.subheader("📥 模型原始响应")
         with st.expander("点击展开查看原始响应", expanded=False):
             st.code(raw_text, language="json")
+        
+
+
+
 
 if __name__ == "__main__":
     main()
+# ===============================
+# 页面底部说明
+# ===============================
+st.markdown("---")
+st.markdown(
+    "<div style='text-align:center; color:#666;'>"
+    "© 2025 汉语词类隶属度检测划类 "
+    "</div>",
+    unsafe_allow_html=True
+)
