@@ -1,3 +1,5 @@
+python
+运行
 import streamlit as st
 import requests
 import json
@@ -84,28 +86,29 @@ MODEL_OPTIONS = {
     "DeepSeek Chat": {
         "provider": "deepseek", 
         "model": "deepseek-chat", 
-        "api_key": os.getenv("DEEPSEEK_API_KEY", "sk-1f346646d29947d0a5e29dbaa37476b8"),
+        "api_key": os.getenv("DEEPSEEK_API_KEY"),  # 移除硬编码默认值
         "env_var": "DEEPSEEK_API_KEY"
     },
     "OpenAI GPT-4o（尚不支持）": {
         "provider": "openai", 
         "model": "gpt-4o-mini", 
-        "api_key": os.getenv("OPENAI_API_KEY", "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"),
+        "api_key": os.getenv("OPENAI_API_KEY"),  # 移除硬编码默认值
         "env_var": "OPENAI_API_KEY"
     },
     "Moonshot（Kimi）": {
         "provider": "moonshot", 
         "model": "moonshot-v1-32k", 
-        "api_key": os.getenv("MOONSHOT_API_KEY", "sk-l5FvRWegjM5DEk4AU71YPQ1QgvFPTHZIJOmq6qdssPY4sNtE"),
+        "api_key": os.getenv("MOONSHOT_API_KEY"),  # 移除硬编码默认值
         "env_var": "MOONSHOT_API_KEY"
     },
     "Qwen（通义千问）": {
         "provider": "qwen", 
         "model": "qwen-max", 
-        "api_key": os.getenv("QWEN_API_KEY", "sk-b3f7a1153e6f4a44804a296038aa86c5"),
+        "api_key": os.getenv("QWEN_API_KEY"),  # 移除硬编码默认值
         "env_var": "QWEN_API_KEY"
     },
 }
+
 
 # ===============================
 # 词类规则与最大得分
