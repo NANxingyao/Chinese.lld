@@ -827,7 +827,7 @@ def main():
             5. 分析结果将显示在下方，包括隶属度排名、详细得分、推理过程和原始响应。
             """)
 
-    # --- 结果显示区 ---
+     # --- 结果显示区 ---
     if analyze_button and word and selected_model_info["api_key"]:
         status_placeholder = st.empty()
         status_placeholder.info(f"正在为词语「{word}」启动分析...")
@@ -846,70 +846,67 @@ def main():
         
         col_results_1, col_results_2 = st.columns(2)
         
-      # 假设 col_results_1 和 col_results_2 是通过 st.columns() 创建的
-# col_results_1, col_results_2 = st.columns(2)
-
-with col_results_1:
-    st.subheader("🏆 词类隶属度排名（前十）")
-    top10 = get_top_10_positions(membership)
-    top10_df = pd.DataFrame(top10, columns=["词类", "隶属度"])
-    top10_df["隶属度"] = top10_df["隶属度"].apply(lambda x: f"{x:.4f}")
-    st.table(top10_df)
-    
-    st.subheader("📊 词类隶属度雷达图（前十）")
-    plot_radar_chart_streamlit(dict(top10), f"「{word}」的词类隶属度分布")
-
-with col_results_2:
-    # 关键修复：这一行以及其下的所有内容都必须缩进，属于 col_results_2 代码块
-    st.subheader("📋 各词类详细得分（按总分排名前10）")
-    
-    # 1. 计算所有词类的总分并排序，取前10名
-    pos_total_scores = {pos: sum(scores_all[pos].values()) for pos in RULE_SETS.keys()}
-    # 按总分降序排序，取前10
-    top10_pos = sorted(pos_total_scores.items(), key=lambda x: x[1], reverse=True)[:10]
-    
-    # 2. 只显示排名前10的词类
-    for pos, total_score in top10_pos:
-        # 找到该词类下得分最高的规则
-        max_rule = max(scores_all[pos].items(), key=lambda x: x[1], default=("无", 0))
+        # --- 关键修复：将两个列的内容缩进，放入 if 语句块内 ---
         
-        # 创建expander，显示词类名称、总分和最高分规则
-        with st.expander(f"**{pos}** (总分: {total_score}, 最高分规则: {max_rule[0]} - {max_rule[1]}分)"):
-            # 显示该词类下的所有规则得分（按规则得分降序排列）
-            rule_data = []
-            for rule in RULE_SETS[pos]:
-                rule_score = scores_all[pos][rule["name"]]
-                rule_data.append({
-                    "规则代码": rule["name"],
-                    "规则描述": rule["desc"],
-                    "得分": rule_score
-                })
+        with col_results_1:
+            st.subheader("🏆 词类隶属度排名（前十）")
+            top10 = get_top_10_positions(membership)
+            top10_df = pd.DataFrame(top10, columns=["词类", "隶属度"])
+            top10_df["隶属度"] = top10_df["隶属度"].apply(lambda x: f"{x:.4f}")
+            st.table(top10_df)
             
-            # 按得分降序排序规则，让高分规则排在前面
-            rule_data_sorted = sorted(rule_data, key=lambda x: x["得分"], reverse=True)
-            rule_df = pd.DataFrame(rule_data_sorted)
+            st.subheader("📊 词类隶属度雷达图（前十）")
+            plot_radar_chart_streamlit(dict(top10), f"「{word}」的词类隶属度分布")
+
+        with col_results_2:
+            st.subheader("📋 各词类详细得分（按总分排名前10）")
             
-            # 负分标红，动态调整高度（确保所有规则都能显示）
-            styled_df = rule_df.style.applymap(
-                lambda x: "color: #ff4b4b; font-weight: bold" if isinstance(x, int) and x < 0 else "",
-                subset=["得分"]
-            )
+            # 1. 计算所有词类的总分并排序，取前10名
+            pos_total_scores = {pos: sum(scores_all[pos].values()) for pos in RULE_SETS.keys()}
+            # 按总分降序排序，取前10
+            top10_pos = sorted(pos_total_scores.items(), key=lambda x: x[1], reverse=True)[:10]
             
-            # 调整表格高度，确保所有规则都能显示
-            min_height = len(rule_df) * 30 + 50  # 50px为表头高度
-            st.dataframe(
-                styled_df,
-                use_container_width=True,
-                height=min(min_height, 800)  # 最大高度限制为800px
-            )
-    
-    # 这些元素也属于 col_results_2，保持正确缩进
-    st.subheader("🔍 模型推理过程")
-    st.text_area("推理详情", explanation, height=200, disabled=True)
-    
-    st.subheader("📥 模型原始响应")
-    with st.expander("点击展开查看原始响应", expanded=False):
-        st.code(raw_text, language="json")
+            # 2. 只显示排名前10的词类
+            for pos, total_score in top10_pos:
+                # 找到该词类下得分最高的规则
+                max_rule = max(scores_all[pos].items(), key=lambda x: x[1], default=("无", 0))
+                
+                # 创建expander，显示词类名称、总分和最高分规则
+                with st.expander(f"**{pos}** (总分: {total_score}, 最高分规则: {max_rule[0]} - {max_rule[1]}分)"):
+                    # 显示该词类下的所有规则得分（按规则得分降序排列）
+                    rule_data = []
+                    for rule in RULE_SETS[pos]:
+                        rule_score = scores_all[pos][rule["name"]]
+                        rule_data.append({
+                            "规则代码": rule["name"],
+                            "规则描述": rule["desc"],
+                            "得分": rule_score
+                        })
+                    
+                    # 按得分降序排序规则，让高分规则排在前面
+                    rule_data_sorted = sorted(rule_data, key=lambda x: x["得分"], reverse=True)
+                    rule_df = pd.DataFrame(rule_data_sorted)
+                    
+                    # 负分标红
+                    styled_df = rule_df.style.applymap(
+                        lambda x: "color: #ff4b4b; font-weight: bold" if isinstance(x, int) and x < 0 else "",
+                        subset=["得分"]
+                    )
+                    
+                    st.dataframe(
+                        styled_df,
+                        use_container_width=True,
+                        height=min(len(rule_df) * 30 + 50, 800)
+                    )
+            
+            st.subheader("🔍 模型推理过程")
+            st.text_area("推理详情", explanation, height=200, disabled=True)
+            
+            st.subheader("📥 模型原始响应")
+            with st.expander("点击展开查看原始响应", expanded=False):
+                st.code(raw_text, language="json")
+
+    # --- if 语句块结束 ---
 
 
 
