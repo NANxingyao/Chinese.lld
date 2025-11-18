@@ -709,7 +709,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     # 格式化得分（确保所有词类的规则都有对应条目，未评分的规则填0）
     # 改为：认可匹配得分或不匹配得分（包括负分）
 scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
-    for pos, rules in RULE_SETS.items():
+for pos, rules in RULE_SETS.items():
         raw_pos_scores = raw_scores.get(pos, {})
         if isinstance(raw_pos_scores, dict):
             for k, v in raw_pos_scores.items():
