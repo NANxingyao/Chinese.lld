@@ -779,13 +779,14 @@ def main():
     if analyze_button and word and selected_model_info["api_key"]:
         status_placeholder = st.empty()
         status_placeholder.info(f"正在为词语「{word}」启动分析...")
-
-        scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores_two_stage(
-    word=input_word,
-    provider=provider,
-    model=model_name,
-    api_key=API_KEY,
+        
+scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores_two_stage(
+    word=word,
+    provider=selected_model_info["provider"],
+    model=selected_model_info["model"],
+    api_key=selected_model_info["api_key"],
 )
+
 
         
         status_placeholder.empty()
