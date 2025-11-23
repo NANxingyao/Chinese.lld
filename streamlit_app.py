@@ -852,7 +852,7 @@ def main():
             st.subheader("🏆 词类隶属度排名（前十）")
             top10 = get_top_10_positions(membership)
             top10_df = pd.DataFrame(top10, columns=["词类", "隶属度"])
-            top10_df["隶属度"] = top10_df["隶属度"].apply(lambda x: f"{x:.4f}")
+            top10_df["隶属度"] = top10_df["隶属度"].apply(lambda x: f"{x:.2f}")
             st.table(top10_df)
             
             st.subheader("📊 词类隶属度雷达图（前十）")
