@@ -639,7 +639,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 
 #### 步骤1：初步筛选候选词类（必须包含此思考过程）
 1. 快速分析词语「{word}」的语法特征
-2. 参考以下核心规则（仅展示match_score≥20的关键规则），筛选出最可能的10个候选词类：
+2. 参考以下核心规则（仅展示match_score≥20的关键规则，无match_score≥20的关键规则时，直接将其归入需要考虑的类别），筛选出最可能的10个候选词类：
 {core_rules_text}
 3. 说明筛选理由
 
