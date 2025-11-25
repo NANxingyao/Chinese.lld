@@ -681,7 +681,6 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     # 用户提示仅需触发模型开始分析
     user_prompt = f"请根据上述步骤，为词语「{word}」进行词类隶属度评分并返回JSON结果。"
 
-
     # 显示加载状态
     with st.spinner("正在调用大模型进行分析，请稍候..."):
         # 使用缓存调用API
