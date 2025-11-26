@@ -104,7 +104,7 @@ MODEL_OPTIONS = {
         "model": "qwen-max", 
         "api_key": os.getenv("QWEN_API_KEY", "sk-b3f7a1153e6f4a44804a296038aa86c5"),
         "env_var": "QWEN_API_KEY"
-    },
+    }
 }
 
 # ===============================
