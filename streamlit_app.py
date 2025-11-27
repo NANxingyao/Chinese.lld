@@ -1,4 +1,3 @@
-
 import streamlit as st
 import requests
 import json
@@ -517,6 +516,15 @@ def main():
         
         membership = calculate_membership(scores_all)
         st.success(f'**分析完成**：词语「{word}」最可能的词类是 【{predicted_pos}】，隶属度为 {membership.get(predicted_pos, 0):.4f}')
+        
+        # 新增：显示推理过程
+        st.subheader("🔍 模型推理过程")
+        st.markdown(f"""
+        <div style="background-color: #f0f2f6; padding: 15px; border-radius: 8px; font-size: 14px; line-height: 1.6;">
+            {explanation.replace('。', '。<br><br>').replace('，', '，<br>')}
+        </div>
+        """, unsafe_allow_html=True)
+        st.markdown("---")
         
         col_results_1, col_results_2 = st.columns(2)
         
