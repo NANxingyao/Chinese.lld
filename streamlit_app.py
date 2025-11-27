@@ -407,7 +407,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
             if rule_name not in scores_out[pos]:
                 scores_out[pos][rule_name] = 0
 
-    return scores_out, cleaned_json_text, predicted_pos, explanation
+    return scores_out, raw_text, predicted_pos, explanation
 
 # ===============================
 # 雷达图
