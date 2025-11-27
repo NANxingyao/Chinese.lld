@@ -342,7 +342,6 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 4. 最后输出时，先写详细的文字推理，最后单独给出一段合法的 JSON（不要再加注释）。
 """
 
-    # 用户提示：再强调一次
     user_prompt = f"""
 请严格按照上述要求分析词语「{word}」。
 
@@ -371,11 +370,36 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     raw_text = extract_text_from_response(resp_json)
     parsed_json, cleaned_json_text = extract_json_from_text(raw_text)
 
-    # 解析 JSON
+    # ========= 这块是关键：聪明一点去“捞解释” =========
+    explanation = ""
+    predicted_pos = "未知"
+    raw_scores = {}
+
     if parsed_json and isinstance(parsed_json, dict):
-        explanation = parsed_json.get("explanation", "模型未提供详细推理过程。")
+        # 1）如果 JSON 里本身有 explanation，就直接用
+        explanation = parsed_json.get("explanation", "")
+        if isinstance(explanation, str):
+            explanation = explanation.strip()
+        else:
+            explanation = ""
+
         predicted_pos = parsed_json.get("predicted_pos", "未知")
         raw_scores = parsed_json.get("scores", {})
+
+        # 2）如果 JSON 里没 explanation，就从原始文本里把 JSON 前后的自然语言部分当解释
+        if not explanation:
+            # 尝试用正则把 JSON 块剪掉
+            m = re.search(r"(\{[\s\S]*\})", raw_text)
+            if m:
+                explanation_text = (raw_text[:m.start()] + raw_text[m.end():]).strip()
+                # 如果剪出来有内容，就用它当推理过程
+                if explanation_text:
+                    explanation = explanation_text
+
+        # 3）最后兜底：还是空，就用一个“无法解析但把原文全给你看”的版本
+        if not explanation:
+            explanation = "模型未在 JSON 中提供 explanation 字段。以下为完整原始输出文本：\n\n" + raw_text
+
     else:
         st.warning("未能从模型响应中解析出有效的JSON。")
         explanation = "无法解析模型输出。原始响应：\n" + raw_text
@@ -383,22 +407,18 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         raw_scores = {}
         cleaned_json_text = raw_text  # 展示原始文本
 
-    # --- 关键：初始化所有词类的得分字典 ---
+    # --- 下面这部分保持不变：只负责把 true/false 映射成正负分 ---
     scores_out = {pos: {} for pos in RULE_SETS.keys()}
 
-    # 只把“符合/不符合”转成具体分值（正分 / 负分）
     for pos, rules in RULE_SETS.items():
         raw_pos_scores = raw_scores.get(pos, {})
         if isinstance(raw_pos_scores, dict):
             for k, v in raw_pos_scores.items():
                 normalized_key = normalize_key(k, rules)
                 if normalized_key:
-                    # 找到当前规则的定义
                     rule_def = next(r for r in rules if r["name"] == normalized_key)
-                    # 使用 map_to_allowed_score：true/false/“是/否”等 → match_score / mismatch_score
                     scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
 
-    # 保证每条规则都有得分，没有就默认 0 分（说明模型完全没提到）
     for pos, rules in RULE_SETS.items():
         for rule in rules:
             rule_name = rule["name"]
