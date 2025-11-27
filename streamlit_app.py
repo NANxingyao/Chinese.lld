@@ -339,7 +339,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 3. predicted_pos：
    - 请选择「名词」「动词」「名动词」之一，作为该词语最典型的词类。
 
-4. 最后输出时，先写详细的文字推理，最后单独给出一段合法的 JSON（不要再加注释）。
+4. 最后输出时，写明详细的文字推理。
 """
 
     # 用户提示：再强调一次
