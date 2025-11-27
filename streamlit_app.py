@@ -136,17 +136,17 @@ RULE_SETS = {
         {"name": "V9_不能跟在'多/多么'之后提问或表示感叹", "desc": "不能跟在'多'之后对性质提问，不能跟在'多么'之后表示感叹", "match_score": 10, "mismatch_score": -10},
     ],
     # 4.6 名动词
-    "动词": [
-        {"name": "V1_可被\"不/没有\"否定且肯定形式", "desc": "可以用\"不\"和\"没有\"来否定，并且\"没有……\"的肯定形式可以是\"……了\"和\"有……\"(前一种情况中的\"没有\"是副词，后一种情况中的\"没有\"是动词)", "match_score": 10, "mismatch_score": -10},
-        {"name": "V2_可附时体助词或进入\"……了没有\"格式", "desc": "可以后附时体助词\"着、了、过\"，或者可以进入\"………了没有\"格式", "match_score": 10, "mismatch_score": -10},
-        {"name": "V3_可带真宾语且不受\"很\"修饰", "desc": "可以带真宾语，并且不能受程度副词\"很\"等修饰", "match_score": 10, "mismatch_score": -10},
-        {"name": "V4_有重叠和正反重叠形式", "desc": "可以有\"VV、V一V、V了V、V不V\"等重叠和正反重叠形式", "match_score": 10, "mismatch_score": 0},
-        {"name": "V5_可作多种句法成分且可作形式动词宾语", "desc": "既可以作谓语或谓语核心，又可以作主语或宾语，并且，可以作形式动词\"作、进行、加以、给予、受到\"等的宾语", "match_score": 10, "mismatch_score": -10},
-        {"name": "V6_不能直接作状语", "desc": "不能直接作状语修饰动词性成分", "match_score": 10, "mismatch_score": -10},
-        {"name": "V7_可修饰名词或受名词/数量词修饰", "desc": "可以修饰名词或者受名词修饰，或者可以受数量词修饰", "match_score": 10, "mismatch_score": 0},
-        {"name": "V8_可跟在\"怎么/怎样/这么/这样/那么/那样\"之后", "desc": "可以跟在\"怎么、怎样\"之后，对动作的方式进行提问，并且可以跟在\"这么、这样、那么、那样\"之后，用以作出相应的回答", "match_score": 10, "mismatch_score": 0},
-        {"name": "V9_不能跟在\"多/多么\"之后", "desc": "不能跟在\"多\"之后，对性质的程度进行提问，也不能跟在\"多么\"之后，表示感叹", "match_score": 10, "mismatch_score": -10},
-        {"name": "V10_否定与肯定式对应机制重复项", "desc": "可以用\"不\"和\"没有\"来否定，并且\"没有……\"的肯定形式可以是\"……了\"和\"有……\"（重复规则按原量表要求保留）", "match_score": 10, "mismatch_score": 0}
+    "名动词": [
+        {"name": "NV1_可被\"不/没有\"否定且肯定形式-1", "desc": "可以用\"不\"和\"没有\"来否定，并且\"没有……\"的肯定形式可以是\"……了\"和\"有……\"(前一种情况中的\"没有\"是副词，后一种情况中的\"没有\"是动词)", "match_score": 10, "mismatch_score": -10},
+        {"name": "NV2_可附时体助词或进入\"……了没有\"格式", "desc": "可以后附时体助词\"着、了、过\"，或者可以进入\"………了没有\"格式", "match_score": 10, "mismatch_score": -10},
+        {"name": "NV3_可带真宾语且不受\"很\"修饰", "desc": "可以带真宾语，并且不能受程度副词\"很\"等修饰", "match_score": 10, "mismatch_score": -10},
+        {"name": "NV4_有重叠和正反重叠形式", "desc": "可以有\"VV、V一V、V了V、V不V\"等重叠和正反重叠形式", "match_score": 10, "mismatch_score": 0},
+        {"name": "NV5_可作多种句法成分且可作形式动词宾语", "desc": "既可以作谓语或谓语核心，又可以作主语或宾语，并且，可以作形式动词\"作、进行、加以、给予、受到\"等的宾语", "match_score": 10, "mismatch_score": -10},
+        {"name": "NV6_不能直接作状语", "desc": "不能直接作状语修饰动词性成分", "match_score": 10, "mismatch_score": -10},
+        {"name": "NV7_可修饰名词或受名词/数量词修饰", "desc": "可以修饰名词或者受名词修饰，或者可以受数量词修饰", "match_score": 10, "mismatch_score": 0},
+        {"name": "NV8_可跟在\"怎么/怎样/这么/这样/那么/那样\"之后", "desc": "可以跟在\"怎么、怎样\"之后，对动作的方式进行提问，并且可以跟在\"这么、这样、那么、那样\"之后，用以作出相应的回答", "match_score": 10, "mismatch_score": 0},
+        {"name": "NV9_不能跟在\"多/多么\"之后", "desc": "不能跟在\"多\"之后，对性质的程度进行提问，也不能跟在\"多么\"之后，表示感叹", "match_score": 10, "mismatch_score": -10},
+        {"name": "NV10_可被\"不/没有\"否定且肯定形式-2", "desc": "可以用\"不\"和\"没有\"来否定，并且\"没有……\"的肯定形式可以是\"……了\"和\"有……\"(前一种情况中的\"没有\"是副词，后一种情况中的\"没有\"是动词)", "match_score": 10, "mismatch_score": 0}
     ]
 }
 
@@ -341,7 +341,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 3. predicted_pos：
    - 请选择「名词」「动词」「名动词」之一，作为该词语最典型的词类。
 
-4. 最后输出时，先写详细的文字推理，最后单独给出一个 JSON 对象。
+4. 最后输出时，先写详细的文字推理，最后单独给出一段合法的 JSON（不要再加注释）。
 """
 
     # 用户提示：再强调一次
@@ -352,7 +352,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 - 在 JSON 的 scores 部分，只能用 true/false 表示“是否符合规则”，不能使用任何数字。
 - explanation 中必须对每一条规则写明“符合/不符合 + 理由 + 例句”。
 
-请先给出推理过程，然后在最后单独输出一个 JSON 对象。
+请先给出详细推理过程，然后在最后单独输出一个 JSON 对象。
 """
 
     with st.spinner("正在调用大模型进行分析，请稍候..."):
@@ -407,7 +407,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
             if rule_name not in scores_out[pos]:
                 scores_out[pos][rule_name] = 0
 
-    return scores_out, raw_text, predicted_pos, explanation
+    return scores_out, cleaned_json_text, predicted_pos, explanation
 
 # ===============================
 # 雷达图
