@@ -292,11 +292,13 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
 # ===============================
 # 词类判定主函数 (优化Prompt)
 # ===============================
-def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str, str]:
+def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str
+) -> Tuple[Dict[str, Dict[str, int]], str, str, str]:
+
     if not word:
         return {}, "", "未知", ""
 
-    # 规则文字说明（给模型看，让它老老实实按规则来判断）
+    # 规则说明：提供给模型判断
     full_rules_by_pos = {
         pos: "\n".join([
             f"- {r['name']}: {r['desc']}（符合: {r['match_score']} 分，不符合: {r['mismatch_score']} 分）"
@@ -305,14 +307,15 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         for pos, rules in RULE_SETS.items()
     }
 
-    # ===== 系统提示：只允许输出“符合/不符合”，禁止自己打数字分 =====
+    # ===== 系统提示：简化推理 =====
     system_msg = f"""你是一名中文词法与语法方面的专家。现在要分析词语「{word}」在下列词类中的表现：
 
 - 需要判断的词类：名词、动词、名动词
-- 评分规则已经由系统定义，你**不要**自己设计分值，也**不要**在 JSON 中给出具体数字分数
-- 你只需要判断每一条规则是“符合”还是“不符合”，程序会自动根据 match_score / mismatch_score 换算成正分或负分
+- 你只需要判断每一条规则是“符合”或“不符合”
+- JSON 中不能出现任何数字分数，只能用 true/false
+- 程序会自动根据规则的 match_score / mismatch_score 换算得分
 
-【各词类的规则说明（仅供你判断使用）】
+【各词类规则（供判断使用）】
 
 【名词】
 {full_rules_by_pos["名词"]}
@@ -325,31 +328,26 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 
 【输出要求】
 
-1. 在 explanation 字段中，必须**逐条规则**说明判断依据，并举例（可以自己造句）：
-   - 格式示例：
-     - 「名词-N1_可受数量词修饰：符合。理由：……。例句：……。」
-     - 「动词-V2_可后附/插入时体助词'着/了/过'：不符合。理由：……。例句：……。」
-   - explanation 里要覆盖 **三个词类的所有规则**，不能只写几条。
+1. explanation 字段中需给出**简要的推理说明**（不用特别详细）：
+   - 示例：「名词-N1_可受数量词修饰：符合。理由：……。」
 
-2. 在 JSON 中的 scores 字段里：
-   - 每一类下的每一条规则，只能给出 **布尔值 true / false**，表示是否符合该规则
-   - 严禁在 scores 里使用数值分数（例如 0, 5, 10 等）
-   - 如果你不确定，也必须做出判断（true 或 false），不要用 null、0 或其它值
+2. JSON 中：
+   - scores 字段下的每条规则只能是 true/false
+   - predicted_pos 需为「名词」「动词」或「名动词」
 
-3. predicted_pos：
-   - 请选择「名词」「动词」「名动词」之一，作为该词语最典型的词类。
-
-4. 最后输出时，先写详细的文字推理，最后单独给出一段合法的 JSON（不要再加注释）。
+3. 最后输出格式：
+   - 先写推理说明（简化版）
+   - 最后单独给出一个合法 JSON 对象（不要加注释）
 """
 
+    # 用户提示
     user_prompt = f"""
-请严格按照上述要求分析词语「{word}」。
+请根据上述规则，对词语「{word}」进行判断。
 
-特别注意：
-- 在 JSON 的 scores 部分，只能用 true/false 表示“是否符合规则”，不能使用任何数字。
-- explanation 中必须对每一条规则写明“符合/不符合 + 理由 + 例句”。
-
-请先给出详细推理过程，然后在最后单独输出一个 JSON 对象。
+要求：
+- explanation 只需给出**简要推理**
+- scores 中只能用 true/false
+- 必须覆盖所有规则
 """
 
     with st.spinner("正在调用大模型进行分析，请稍候..."):
@@ -370,62 +368,38 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     raw_text = extract_text_from_response(resp_json)
     parsed_json, cleaned_json_text = extract_json_from_text(raw_text)
 
-    # ========= 这块是关键：聪明一点去“捞解释” =========
-    explanation = ""
-    predicted_pos = "未知"
-    raw_scores = {}
-
     if parsed_json and isinstance(parsed_json, dict):
-        # 1）如果 JSON 里本身有 explanation，就直接用
-        explanation = parsed_json.get("explanation", "")
-        if isinstance(explanation, str):
-            explanation = explanation.strip()
-        else:
-            explanation = ""
-
+        explanation = parsed_json.get("explanation", "模型未提供简要推理过程。")
         predicted_pos = parsed_json.get("predicted_pos", "未知")
         raw_scores = parsed_json.get("scores", {})
-
-        # 2）如果 JSON 里没 explanation，就从原始文本里把 JSON 前后的自然语言部分当解释
-        if not explanation:
-            # 尝试用正则把 JSON 块剪掉
-            m = re.search(r"(\{[\s\S]*\})", raw_text)
-            if m:
-                explanation_text = (raw_text[:m.start()] + raw_text[m.end():]).strip()
-                # 如果剪出来有内容，就用它当推理过程
-                if explanation_text:
-                    explanation = explanation_text
-
-        # 3）最后兜底：还是空，就用一个“无法解析但把原文全给你看”的版本
-        if not explanation:
-            explanation = "模型未在 JSON 中提供 explanation 字段。以下为完整原始输出文本：\n\n" + raw_text
-
     else:
-        st.warning("未能从模型响应中解析出有效的JSON。")
+        st.warning("未能从模型响应中解析出有效JSON。")
         explanation = "无法解析模型输出。原始响应：\n" + raw_text
         predicted_pos = "未知"
         raw_scores = {}
-        cleaned_json_text = raw_text  # 展示原始文本
+        cleaned_json_text = raw_text
 
-    # --- 下面这部分保持不变：只负责把 true/false 映射成正负分 ---
+    # ===== 得分转换：根据 true/false → rule.match_score / mismatch_score =====
     scores_out = {pos: {} for pos in RULE_SETS.keys()}
 
     for pos, rules in RULE_SETS.items():
         raw_pos_scores = raw_scores.get(pos, {})
         if isinstance(raw_pos_scores, dict):
-            for k, v in raw_pos_scores.items():
-                normalized_key = normalize_key(k, rules)
+            for key, val in raw_pos_scores.items():
+                normalized_key = normalize_key(key, rules)
                 if normalized_key:
                     rule_def = next(r for r in rules if r["name"] == normalized_key)
-                    scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
+                    scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, val)
 
+    # 保障所有规则都有值
     for pos, rules in RULE_SETS.items():
         for rule in rules:
-            rule_name = rule["name"]
-            if rule_name not in scores_out[pos]:
-                scores_out[pos][rule_name] = 0
+            name = rule["name"]
+            if name not in scores_out[pos]:
+                scores_out[pos][name] = 0
 
-    return scores_out, cleaned_json_text, predicted_pos, explanation
+    # 返回 explanation_block（黑底），用于前端渲染
+    return scores_out, cleaned_json_text, predicted_pos, explanation_block
 
 # ===============================
 # 雷达图
@@ -543,13 +517,13 @@ def main():
         # --- 关键修复：将两个列的内容缩进，放入 if 语句块内 ---
         
         with col_results_1:
-            st.subheader("🏆 词类隶属度排名（前十）")
+            st.subheader("🏆 词类隶属度排名")
             top10 = get_top_10_positions(membership)
             top10_df = pd.DataFrame(top10, columns=["词类", "隶属度"])
             top10_df["隶属度"] = top10_df["隶属度"].apply(lambda x: f"{x:.4f}")
             st.table(top10_df)
             
-            st.subheader("📊 词类隶属度雷达图（前十）")
+            st.subheader("📊 词类隶属度雷达图")
             plot_radar_chart_streamlit(dict(top10), f"「{word}」的词类隶属度分布")
 
         with col_results_2:
@@ -598,7 +572,7 @@ def main():
             st.subheader("🔍 模型推理过程")
             # 将推理过程分行显示，提高可读性
             formatted_explanation = explanation.replace("\n", "<br>")
-            st.markdown(f"<div style='background-color: #f0f2f6; padding: 15px; border-radius: 5px; white-space: pre-wrap;'>{formatted_explanation}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='background-color: black; padding: 12px; border-radius: 5px; white-space: pre-wrap;'>{formatted_explanation}</div>", unsafe_allow_html=True)
             
             st.subheader("📥 模型原始响应")
             with st.expander("点击展开查看原始响应", expanded=False):
