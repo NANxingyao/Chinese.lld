@@ -309,20 +309,36 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         for pos, rules in RULE_SETS.items()
     }
 
-    # 优化3：分阶段提示词，直接基于规则判断
-    system_msg = f"""你是一位中文语言学专家。你的任务是根据提供的规则，为给定的词语「{word}」进行词类隶属度评分。请严格按以下步骤操作：
+    # 优化3：分阶段提示词，直接基于规则判断，强化详细推理过程
+    system_msg = f"""你是一位中文语言学专家。你的任务是根据提供的规则，为给定的词语「{word}」进行词类隶属度评分。请严格按以下步骤操作，并输出**详细的推理过程**：
 
-#### 步骤1：基于规则进行直接判断（必须包含此思考过程）
-1. 分析词语「{word}」的语法特征，对照以下核心规则进行匹配：
-{core_rules_text}
-2. 针对全部3个词类逐条规则判断匹配情况
-3. 说明判断依据（如："符合名词规则N1，能受数量词修饰；不符合动词规则V3，不能带宾语"）
+#### 步骤1：详细的规则匹配分析（必须输出完整推导过程）
+针对全部3个词类，逐条规则进行匹配分析，格式如下：
 
-#### 步骤2：对所有词类进行规则评分
-1. 针对全部3个词类，使用各类别的全部规则逐条判断
-2. 每条规则匹配则得对应match_score，不匹配则得mismatch_score（包括负分）
-3. 必须严格使用规则定义的分数，**不匹配时必须使用负分，绝对不能用0分代替**
-4. 所有词类的完整规则：
+**【名词分析】**
+- 规则N1（可受数量词修饰）：「{word}」{'' if word else '不'}能受数量词修饰（例如："三本{word}"{'' if word else '不'}成立）→ {'' if word else '不'}符合规则
+- 规则N2（能作主语/宾语）：「{word}」{'' if word else '不'}能作主语（例如："{word}很好"）{'' if word else '不'}成立→ {'' if word else '不'}符合规则
+- 规则N3（不能带宾语）：「{word}」{'' if word else '不'}能带宾语（例如："{word}书籍"{'' if word else '不'}成立）→ {'' if word else '不'}符合规则
+
+**【动词分析】**
+- 规则V1（能带宾语）：「{word}」{'' if word else '不'}能带宾语（例如："{word}作业"{'' if word else '不'}成立）→ {'' if word else '不'}符合规则
+- 规则V2（可受"没"修饰）：「{word}」{'' if word else '不'}能被"没"修饰（例如："没{word}"{'' if word else '不'}成立）→ {'' if word else '不'}符合规则
+- 规则V3（能作谓语）：「{word}」{'' if word else '不'}能作谓语（例如："我{word}"{'' if word else '不'}成立）→ {'' if word else '不'}符合规则
+
+**【形容词分析】**
+- 规则A1（可受"很"修饰）：「{word}」{'' if word else '不'}能被"很"修饰（例如："很{word}"{'' if word else '不'}成立）→ {'' if word else '不'}符合规则
+- 规则A2（能作定语）：「{word}」{'' if word else '不'}能作定语（例如："{word}的书"{'' if word else '不'}成立）→ {'' if word else '不'}符合规则
+- 规则A3（不能带宾语）：「{word}」{'' if word else '不'}能带宾语（例如："{word}问题"{'' if word else '不'}成立）→ {'' if word else '不'}符合规则
+
+#### 步骤2：规则评分计算（必须展示具体计算过程）
+基于步骤1的分析结果，对每个词类的每条规则进行评分：
+- 匹配规则：得对应match_score（例如：N1匹配得25分）
+- 不匹配规则：得对应mismatch_score（例如：V1不匹配得-20分）
+
+#### 步骤3：综合判断与结果输出
+根据评分结果，确定最可能的词类，并输出JSON格式结果。
+
+**所有词类的完整规则：**
 """
     # 拼接所有词类的完整规则（供模型在步骤2使用）
     for pos, rules_str in full_rules_by_pos.items():
@@ -330,27 +346,27 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     
     system_msg += f"""
 
-#### 步骤3：返回最终结果（仅输出JSON，无其他文字）
-请严格按照以下格式返回，确保JSON完整且格式正确：
+#### 输出要求：
+1. 必须先输出详细的推理过程（包括步骤1和步骤2的完整分析）
+2. 最后输出JSON结果，格式如下：
 {{
   "predicted_pos": "最可能的词类名称（从3个词类中选择）",
   "scores": {{
-    "词类1": {{ "规则1": 得分, "规则2": 得分, ... }},
-    "词类2": {{ "规则1": 得分, "规则2": 得分, ... }},
-    "词类3": {{ "规则1": 得分, "规则2": 得分, ... }}
+    "名词": {{ "规则1": 得分, "规则2": 得分, ... }},
+    "动词": {{ "规则1": 得分, "规则2": 得分, ... }},
+    "形容词": {{ "规则1": 得分, "规则2": 得分, ... }}
   }},
-  "explanation": "简要说明判定为最可能词类的主要依据（1-2句话）"
+  "explanation": "详细的判定依据，包括各词类总分对比和关键规则匹配情况"
 }}
 
 关键说明：
-1. 步骤1需基于规则直接判断，明确说明每个词类匹配或不匹配的具体规则
-2. 步骤2对全部3个词类进行完整评分，严格执行规则分数体系
-3. 确保"scores"中的规则名称与提供的完全一致
-4. 严格使用规则定义的mismatch_score（包括负分），禁止用0分替代
+1. 推理过程必须详细到每条规则的具体分析，包含实际例子
+2. 评分必须严格使用规则定义的match_score和mismatch_score（包括负分）
+3. explanation字段需要包含总分计算和关键规则的匹配情况说明
 """
 
-    # 用户提示仅需触发模型开始分析
-    user_prompt = f"请根据上述规则判断步骤，为词语「{word}」进行词类隶属度评分并返回JSON结果。"
+    # 用户提示强化详细推理要求
+    user_prompt = f"请按照上述要求，为词语「{word}」进行详细的词类分析，包括完整的推导过程、具体例子和评分计算，最后输出JSON结果。"
 
     # 显示加载状态
     with st.spinner("正在调用大模型进行分析，请稍候..."):
@@ -376,7 +392,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         raw_scores = parsed_json.get("scores", {})
     else:
         st.warning("未能从模型响应中解析出有效的JSON。")
-        explanation = "无法解析模型输出。"
+        explanation = "无法解析模型输出。原始响应：\n" + raw_text
         predicted_pos = "未知"
         raw_scores = {}
         cleaned_json_text = raw_text  # 展示原始文本
