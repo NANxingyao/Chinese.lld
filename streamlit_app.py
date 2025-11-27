@@ -339,7 +339,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 3. predicted_pos：
    - 请选择「名词」「动词」「名动词」之一，作为该词语最典型的词类。
 
-4. 最后输出时，写明详细的文字推理。
+4. 最后输出时，先写详细的文字推理，最后单独给出一个 JSON 对象。
 """
 
     # 用户提示：再强调一次
@@ -349,7 +349,8 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 特别注意：
 - 在 JSON 的 scores 部分，只能用 true/false 表示“是否符合规则”，不能使用任何数字。
 - explanation 中必须对每一条规则写明“符合/不符合 + 理由 + 例句”。
-给出详细推理过程。
+
+请先给出推理过程，然后在最后单独输出一个 JSON 对象。
 """
 
     with st.spinner("正在调用大模型进行分析，请稍候..."):
