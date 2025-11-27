@@ -523,17 +523,17 @@ def main():
         # --- 关键修复：将两个列的内容缩进，放入 if 语句块内 ---
         
         with col_results_1:
-            st.subheader("🏆 词类隶属度排名（前十）")
+            st.subheader("🏆 词类隶属度排名")
             top10 = get_top_10_positions(membership)
             top10_df = pd.DataFrame(top10, columns=["词类", "隶属度"])
             top10_df["隶属度"] = top10_df["隶属度"].apply(lambda x: f"{x:.4f}")
             st.table(top10_df)
             
-            st.subheader("📊 词类隶属度雷达图（前十）")
+            st.subheader("📊 词类隶属度雷达图")
             plot_radar_chart_streamlit(dict(top10), f"「{word}」的词类隶属度分布")
 
         with col_results_2:
-            st.subheader("📋 各词类详细得分（按总分排名前10）")
+            st.subheader("📋 各词类详细得分")
             
             # 1. 计算所有词类的总分并排序，取前10名
             pos_total_scores = {pos: sum(scores_all[pos].values()) for pos in RULE_SETS.keys()}
