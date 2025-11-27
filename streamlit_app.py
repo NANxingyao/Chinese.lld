@@ -1,3 +1,4 @@
+
 import streamlit as st
 import requests
 import json
@@ -136,8 +137,7 @@ RULE_SETS = {
     ],
     # 4.6 名动词
     "名动词": [
-        {"name": "NV1_可被\"不/没有\"否定且肯定形式", "desc": "可以用\"不\"和\"没有\"来否定，并且\"没有……\"的肯定形式可以是\"……了\"和\"有……\"(前一种情况中的\"没有\"是副词，后一种情况中的\"没有\"是动词)", "match_score": 10, "mismatch_score": -10},            
-        {"name": "NV2_可附时体助词或进入\"……了没有\"格式", "desc": "可以后附时体助词\"着、了、过\"，或者可以进入\"………了没有\"格式", "match_score": 10, "mismatch_score": -10},
+        {"name": "NV1_可被\"不/没有\"否定且肯定形式", "desc": "可以用\"不\"和\"没有\"来否定，并且\"没有……\"的肯定形式可以是\"……了\"和\"有……\"(前一种情况中的\"没有\"是副词，后一种情况中的\"没有\"是动词)", "match_score": 10, "mismatch_score": -10},            {"name": "NV2_可附时体助词或进入\"……了没有\"格式", "desc": "可以后附时体助词\"着、了、过\"，或者可以进入\"………了没有\"格式", "match_score": 10, "mismatch_score": -10},
         {"name": "NV3_可带真宾语且不受\"很\"修饰", "desc": "可以带真宾语，并且不能受程度副词\"很\"等修饰", "match_score": 10, "mismatch_score": -10},
         {"name": "NV4_有重叠和正反重叠形式", "desc": "可以有\"VV、V一V、V了V、V不V\"等重叠和正反重叠形式", "match_score": 10, "mismatch_score": 0},
         {"name": "NV5_可作多种句法成分且可作形式动词宾语", "desc": "既可以作谓语或谓语核心，又可以作主语或宾语，并且，可以作形式动词\"作、进行、加以、给予、受到\"等的宾语", "match_score": 10, "mismatch_score": -10},
@@ -523,13 +523,13 @@ def main():
         # --- 关键修复：将两个列的内容缩进，放入 if 语句块内 ---
         
         with col_results_1:
-            st.subheader("🏆 词类隶属度排名")
+            st.subheader("🏆 词类隶属度排名（前十）")
             top10 = get_top_10_positions(membership)
             top10_df = pd.DataFrame(top10, columns=["词类", "隶属度"])
             top10_df["隶属度"] = top10_df["隶属度"].apply(lambda x: f"{x:.4f}")
             st.table(top10_df)
             
-            st.subheader("📊 词类隶属度雷达图")
+            st.subheader("📊 词类隶属度雷达图（前十）")
             plot_radar_chart_streamlit(dict(top10), f"「{word}」的词类隶属度分布")
 
         with col_results_2:
@@ -554,20 +554,18 @@ def main():
                         rule_data.append({
                             "规则代码": rule["name"],
                             "规则描述": rule["desc"],
-                            "得分": rule_score,
-                            "得分类型": "符合" if rule_score == rule["match_score"] else "不符合" if rule_score == rule["mismatch_score"] else "默认"
+                            "得分": rule_score
                         })
                     
                     # 按得分降序排序规则，让高分规则排在前面
                     rule_data_sorted = sorted(rule_data, key=lambda x: x["得分"], reverse=True)
                     rule_df = pd.DataFrame(rule_data_sorted)
                     
-                    # 负分标红，高分标绿
-                    def color_negative(val):
-                        color = '#ff4b4b' if val < 0 else '#2ecc71' if val > 0 else '#666'
-                        return f'color: {color}; font-weight: bold'
-                    
-                    styled_df = rule_df.style.applymap(color_negative, subset=["得分"])
+                    # 负分标红
+                    styled_df = rule_df.style.applymap(
+                        lambda x: "color: #ff4b4b; font-weight: bold" if isinstance(x, int) and x < 0 else "",
+                        subset=["得分"]
+                    )
                     
                     st.dataframe(
                         styled_df,
@@ -577,7 +575,7 @@ def main():
             
             st.subheader("📥 模型原始响应")
             with st.expander("点击展开查看原始响应", expanded=False):
-                st.text_area("原始文本", raw_text, height=300)
+                st.code(raw_text, language="json")
 
     # --- if 语句块结束 ---
 
