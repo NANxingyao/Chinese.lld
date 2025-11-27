@@ -1,4 +1,3 @@
-
 import streamlit as st
 import requests
 import json
@@ -137,7 +136,8 @@ RULE_SETS = {
     ],
     # 4.6 名动词
     "名动词": [
-        {"name": "NV1_可被\"不/没有\"否定且肯定形式", "desc": "可以用\"不\"和\"没有\"来否定，并且\"没有……\"的肯定形式可以是\"……了\"和\"有……\"(前一种情况中的\"没有\"是副词，后一种情况中的\"没有\"是动词)", "match_score": 10, "mismatch_score": -10},            {"name": "NV2_可附时体助词或进入\"……了没有\"格式", "desc": "可以后附时体助词\"着、了、过\"，或者可以进入\"………了没有\"格式", "match_score": 10, "mismatch_score": -10},
+        {"name": "NV1_可被\"不/没有\"否定且肯定形式", "desc": "可以用\"不\"和\"没有\"来否定，并且\"没有……\"的肯定形式可以是\"……了\"和\"有……\"(前一种情况中的\"没有\"是副词，后一种情况中的\"没有\"是动词)", "match_score": 10, "mismatch_score": -10},            
+        {"name": "NV2_可附时体助词或进入\"……了没有\"格式", "desc": "可以后附时体助词\"着、了、过\"，或者可以进入\"………了没有\"格式", "match_score": 10, "mismatch_score": -10},
         {"name": "NV3_可带真宾语且不受\"很\"修饰", "desc": "可以带真宾语，并且不能受程度副词\"很\"等修饰", "match_score": 10, "mismatch_score": -10},
         {"name": "NV4_有重叠和正反重叠形式", "desc": "可以有\"VV、V一V、V了V、V不V\"等重叠和正反重叠形式", "match_score": 10, "mismatch_score": 0},
         {"name": "NV5_可作多种句法成分且可作形式动词宾语", "desc": "既可以作谓语或谓语核心，又可以作主语或宾语，并且，可以作形式动词\"作、进行、加以、给予、受到\"等的宾语", "match_score": 10, "mismatch_score": -10},
@@ -296,48 +296,86 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     if not word:
         return {}, "", "未知", ""
 
-    # 优化1：筛选每个词类的核心规则（match_score≥20），减少传输量
-    core_rules_text = "\n".join([
-        f'"{pos}": {{' + ', '.join([f'"{r["name"]}": {r["match_score"]}' for r in rules if r["match_score"] >= 20]) + '}' 
-        for pos, rules in RULE_SETS.items()
-    ])
-    core_rules_text = "{\n" + core_rules_text + "\n}"
+    # 构建详细的规则说明（包含具体分数）
+    detailed_rules_text = ""
+    for pos, rules in RULE_SETS.items():
+        detailed_rules_text += f"\n### {pos}规则详情：\n"
+        for rule in rules:
+            detailed_rules_text += f"- {rule['name']}：{rule['desc']}\n"
+            detailed_rules_text += f"  - 符合得分：{rule['match_score']}分\n"
+            detailed_rules_text += f"  - 不符合得分：{rule['mismatch_score']}分\n"
 
-    # 优化2：完整规则展示（包含正负分规则）
-    full_rules_by_pos = {
-        pos: "\n".join([f'- {r["name"]}: 符合得{r["match_score"]}分，不符合扣{abs(r.get("mismatch_score", -20))}分（{r.get("mismatch_score", -20)}分）' for r in rules])
-        for pos, rules in RULE_SETS.items()
-    }
+    # 优化提示词：更明确的指令和格式要求
+    system_msg = f"""你是专业的中文语言学专家，严格按照以下要求分析词语「{word}」的词类：
 
-    # 优化3：简洁提示词，强调规则匹配和详细推理
-    system_msg = f"""你是中文语言学专家，请按以下要求为词语「{word}」进行词类分析：
+# 核心要求：
+1. **必须使用负分**：不符合规则时必须使用规定的负分，绝对不能用0分
+2. **详细举例说明**：每条规则判断都要举例佐证
+3. **严格按规则打分**：必须使用规则中定义的具体分数
 
-1. **规则匹配判断**：对名词、动词、形容词三类，逐条规则判断匹配情况
-2. **评分规则**：符合规则得对应分数，不符合必须用负分（禁止用0分）
-3. **推理要求**：详细说明每条规则的判断依据，举例佐证
-4. **最终输出**：先展示详细推理过程，最后输出JSON结果
+# 分析步骤：
+## 步骤1：逐条规则详细分析
+对名词、动词、名动词三类，逐条规则进行判断，格式如下：
 
-**各词类规则说明：**
-"""
-    # 拼接规则说明
-    for pos, rules_str in full_rules_by_pos.items():
-        system_msg += f'\n【{pos}】\n{rules_str}\n'
-    
-    system_msg += f"""
+### 【名词分析】
+- N1_可受数量词修饰：符合/不符合，得分：10/0分
+  分析：「{word}」能/不能受数量词修饰，例如："三本{word}"成立/不成立
+- N2_不能受副词修饰：符合/不符合，得分：20/-20分
+  分析：「{word}」能/不能受副词修饰，例如："很{word}"成立/不成立
+...（其他规则同理）
 
-JSON输出格式：
+### 【动词分析】
+- V1_可受否定'不/没有'修饰：符合/不符合，得分：10/0分
+  分析：「{word}」能/不能被"不/没有"修饰，例如："不{word}"成立/不成立
+- V2_可后附/插入时体助词'着/了/过'：符合/不符合，得分：10/0分
+  分析：「{word}」能/不能加"着/了/过"，例如："{word}了"成立/不成立
+...（其他规则同理）
+
+### 【名动词分析】
+- NV1_可被"不/没有"否定且肯定形式：符合/不符合，得分：10/-10分
+  分析：「{word}」能/不能被"不/没有"否定，例如："不{word}"成立/不成立
+...（其他规则同理）
+
+## 步骤2：计算总分
+- 名词总分：各项得分相加（显示具体计算过程）
+- 动词总分：各项得分相加（显示具体计算过程）
+- 名动词总分：各项得分相加（显示具体计算过程）
+
+## 步骤3：确定最终词类
+根据总分高低确定最可能的词类
+
+{detailed_rules_text}
+
+# 输出格式要求：
+1. 首先输出详细的分析过程（包含所有规则的判断、举例和得分）
+2. 最后输出JSON格式的结果，严格按照以下结构：
 {{
   "predicted_pos": "最可能词类",
   "scores": {{
-    "名词": {{"规则名": 得分, ...}},
-    "动词": {{"规则名": 得分, ...}},
-    "形容词": {{"规则名": 得分, ...}}
+    "名词": {{
+      "N1_可受数量词修饰": 具体得分,
+      "N2_不能受副词修饰": 具体得分,
+      ...所有名词规则
+    }},
+    "动词": {{
+      "V1_可受否定'不/没有'修饰": 具体得分,
+      ...所有动词规则
+    }},
+    "名动词": {{
+      "NV1_可被\"不/没有\"否定且肯定形式": 具体得分,
+      ...所有名动词规则
+    }}
   }},
-  "explanation": "判定依据"
-}}"""
+  "explanation": "详细的判定依据，包括各词类总分对比和关键规则分析"
+}}
 
-    # 用户提示简洁明了
-    user_prompt = f"请分析词语「{word}」，详细说明每条规则的匹配情况并举例，严格按规则打分（含负分），最后输出JSON。"
+重要提醒：
+- 不符合规则时必须使用负分（如-20、-10），禁止用0分
+- JSON中的scores必须包含所有规则的得分
+- explanation字段要详细说明总分计算和关键规则匹配情况"""
+
+    # 用户提示
+    user_prompt = f"请严格按照要求分析词语「{word}」，确保使用负分并详细举例。"
 
     # 显示加载状态
     with st.spinner("正在调用大模型进行分析，请稍候..."):
@@ -385,13 +423,13 @@ JSON输出格式：
                     # 关键修改：使用 map_to_allowed_score 函数处理得分，保留负分
                     scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
     
-    # 循环结束后，确保所有规则都有一个得分（未被模型评分的规则，其得分为0）
+    # 循环结束后，确保所有规则都有一个得分（未被模型评分的规则，使用规则定义的默认分）
     for pos, rules in RULE_SETS.items():
         for rule in rules:
             rule_name = rule["name"]
-            # 如果规则在 scores_out 中没有得分，则默认为0
+            # 如果规则在 scores_out 中没有得分，则使用不匹配得分（可能为负分）
             if rule_name not in scores_out[pos]:
-                scores_out[pos][rule_name] = 0
+                scores_out[pos][rule_name] = rule["mismatch_score"]
     
     return scores_out, cleaned_json_text, predicted_pos, explanation
 # ===============================
@@ -541,18 +579,20 @@ def main():
                         rule_data.append({
                             "规则代码": rule["name"],
                             "规则描述": rule["desc"],
-                            "得分": rule_score
+                            "得分": rule_score,
+                            "得分类型": "符合" if rule_score == rule["match_score"] else "不符合" if rule_score == rule["mismatch_score"] else "默认"
                         })
                     
                     # 按得分降序排序规则，让高分规则排在前面
                     rule_data_sorted = sorted(rule_data, key=lambda x: x["得分"], reverse=True)
                     rule_df = pd.DataFrame(rule_data_sorted)
                     
-                    # 负分标红
-                    styled_df = rule_df.style.applymap(
-                        lambda x: "color: #ff4b4b; font-weight: bold" if isinstance(x, int) and x < 0 else "",
-                        subset=["得分"]
-                    )
+                    # 负分标红，高分标绿
+                    def color_negative(val):
+                        color = '#ff4b4b' if val < 0 else '#2ecc71' if val > 0 else '#666'
+                        return f'color: {color}; font-weight: bold'
+                    
+                    styled_df = rule_df.style.applymap(color_negative, subset=["得分"])
                     
                     st.dataframe(
                         styled_df,
@@ -561,11 +601,13 @@ def main():
                     )
             
             st.subheader("🔍 模型推理过程")
-            st.text_area("推理详情", explanation, height=200, disabled=True)
+            # 将推理过程分行显示，提高可读性
+            formatted_explanation = explanation.replace("\n", "<br>")
+            st.markdown(f"<div style='background-color: #f0f2f6; padding: 15px; border-radius: 5px; white-space: pre-wrap;'>{formatted_explanation}</div>", unsafe_allow_html=True)
             
             st.subheader("📥 模型原始响应")
             with st.expander("点击展开查看原始响应", expanded=False):
-                st.code(raw_text, language="json")
+                st.text_area("原始文本", raw_text, height=300)
 
     # --- if 语句块结束 ---
 
