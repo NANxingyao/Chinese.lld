@@ -296,95 +296,72 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     if not word:
         return {}, "", "未知", ""
 
-    # 构建详细的规则说明（包含具体分数）
-    detailed_rules_text = ""
-    for pos, rules in RULE_SETS.items():
-        detailed_rules_text += f"\n### {pos}规则详情：\n"
-        for rule in rules:
-            detailed_rules_text += f"- {rule['name']}：{rule['desc']}\n"
-            detailed_rules_text += f"  - 符合得分：{rule['match_score']}分\n"
-            detailed_rules_text += f"  - 不符合得分：{rule['mismatch_score']}分\n"
+    # 规则文字说明（给模型看，让它老老实实按规则来判断）
+    full_rules_by_pos = {
+        pos: "\n".join([
+            f"- {r['name']}: {r['desc']}（符合: {r['match_score']} 分，不符合: {r['mismatch_score']} 分）"
+            for r in rules
+        ])
+        for pos, rules in RULE_SETS.items()
+    }
 
-    # 优化提示词：更明确的指令和格式要求
-    system_msg = f"""你是专业的中文语言学专家，严格按照以下要求分析词语「{word}」的词类：
+    # ===== 系统提示：只允许输出“符合/不符合”，禁止自己打数字分 =====
+    system_msg = f"""你是一名中文词法与语法方面的专家。现在要分析词语「{word}」在下列词类中的表现：
 
-# 核心要求：
-1. **必须使用负分**：不符合规则时必须使用规定的负分，绝对不能用0分
-2. **详细举例说明**：每条规则判断都要举例佐证
-3. **严格按规则打分**：必须使用规则中定义的具体分数
+- 需要判断的词类：名词、动词、名动词
+- 评分规则已经由系统定义，你**不要**自己设计分值，也**不要**在 JSON 中给出具体数字分数
+- 你只需要判断每一条规则是“符合”还是“不符合”，程序会自动根据 match_score / mismatch_score 换算成正分或负分
 
-# 分析步骤：
-## 步骤1：逐条规则详细分析
-对名词、动词、名动词三类，逐条规则进行判断，格式如下：
+【各词类的规则说明（仅供你判断使用）】
 
-### 【名词分析】
-- N1_可受数量词修饰：符合/不符合，得分：10/0分
-  分析：「{word}」能/不能受数量词修饰，例如："三本{word}"成立/不成立
-- N2_不能受副词修饰：符合/不符合，得分：20/-20分
-  分析：「{word}」能/不能受副词修饰，例如："很{word}"成立/不成立
-...（其他规则同理）
+【名词】
+{full_rules_by_pos["名词"]}
 
-### 【动词分析】
-- V1_可受否定'不/没有'修饰：符合/不符合，得分：10/0分
-  分析：「{word}」能/不能被"不/没有"修饰，例如："不{word}"成立/不成立
-- V2_可后附/插入时体助词'着/了/过'：符合/不符合，得分：10/0分
-  分析：「{word}」能/不能加"着/了/过"，例如："{word}了"成立/不成立
-...（其他规则同理）
+【动词】
+{full_rules_by_pos["动词"]}
 
-### 【名动词分析】
-- NV1_可被"不/没有"否定且肯定形式：符合/不符合，得分：10/-10分
-  分析：「{word}」能/不能被"不/没有"否定，例如："不{word}"成立/不成立
-...（其他规则同理）
+【名动词】
+{full_rules_by_pos["名动词"]}
 
-## 步骤2：计算总分
-- 名词总分：各项得分相加（显示具体计算过程）
-- 动词总分：各项得分相加（显示具体计算过程）
-- 名动词总分：各项得分相加（显示具体计算过程）
+【输出要求】
 
-## 步骤3：确定最终词类
-根据总分高低确定最可能的词类
+1. 在 explanation 字段中，必须**逐条规则**说明判断依据，并举例（可以自己造句）：
+   - 格式示例：
+     - 「名词-N1_可受数量词修饰：符合。理由：……。例句：……。」
+     - 「动词-V2_可后附/插入时体助词'着/了/过'：不符合。理由：……。例句：……。」
+   - explanation 里要覆盖 **三个词类的所有规则**，不能只写几条。
 
-{detailed_rules_text}
+2. 在 JSON 中的 scores 字段里：
+   - 每一类下的每一条规则，只能给出 **布尔值 true / false**，表示是否符合该规则
+   - 严禁在 scores 里使用数值分数（例如 0, 5, 10 等）
+   - 如果你不确定，也必须做出判断（true 或 false），不要用 null、0 或其它值
 
-# 输出格式要求：
-1. 首先输出详细的分析过程（包含所有规则的判断、举例和得分）
-2. 最后输出JSON格式的结果，严格按照以下结构：
-{{
-  "predicted_pos": "最可能词类",
-  "scores": {{
-    "名词": {{
-      "N1_可受数量词修饰": 具体得分,
-      "N2_不能受副词修饰": 具体得分,
-      ...所有名词规则
-    }},
-    "动词": {{
-      "V1_可受否定'不/没有'修饰": 具体得分,
-      ...所有动词规则
-    }},
-    "名动词": {{
-      "NV1_可被\"不/没有\"否定且肯定形式": 具体得分,
-      ...所有名动词规则
-    }}
-  }},
-  "explanation": "详细的判定依据，包括各词类总分对比和关键规则分析"
-}}
+3. predicted_pos：
+   - 请选择「名词」「动词」「名动词」之一，作为该词语最典型的词类。
 
-重要提醒：
-- 不符合规则时必须使用负分（如-20、-10），禁止用0分
-- JSON中的scores必须包含所有规则的得分
-- explanation字段要详细说明总分计算和关键规则匹配情况"""
+4. 最后输出时，先写详细的文字推理，最后单独给出一段合法的 JSON（不要再加注释）。
+"""
 
-    # 用户提示
-    user_prompt = f"请严格按照要求分析词语「{word}」，确保使用负分并详细举例。"
+    # 用户提示：再强调一次
+    user_prompt = f"""
+请严格按照上述要求分析词语「{word}」。
 
-    # 显示加载状态
+特别注意：
+- 在 JSON 的 scores 部分，只能用 true/false 表示“是否符合规则”，不能使用任何数字。
+- explanation 中必须对每一条规则写明“符合/不符合 + 理由 + 例句”。
+
+请先给出详细推理过程，然后在最后单独输出一个 JSON 对象。
+"""
+
     with st.spinner("正在调用大模型进行分析，请稍候..."):
-        # 使用缓存调用API
         ok, resp_json, err_msg = call_llm_api_cached(
             _provider=provider,
             _model=model,
             _api_key=api_key,
-            messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": user_prompt}]
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_prompt}
+            ]
         )
 
     if not ok:
@@ -393,9 +370,9 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 
     raw_text = extract_text_from_response(resp_json)
     parsed_json, cleaned_json_text = extract_json_from_text(raw_text)
-    
-    # 处理解析结果
-    if parsed_json:
+
+    # 解析 JSON
+    if parsed_json and isinstance(parsed_json, dict):
         explanation = parsed_json.get("explanation", "模型未提供详细推理过程。")
         predicted_pos = parsed_json.get("predicted_pos", "未知")
         raw_scores = parsed_json.get("scores", {})
@@ -406,32 +383,30 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         raw_scores = {}
         cleaned_json_text = raw_text  # 展示原始文本
 
-    # --- 关键修复：在循环开始前，初始化 scores_out ---
-    # 为了避免 KeyError，先为每个词类（pos）在 scores_out 中创建一个空字典
+    # --- 关键：初始化所有词类的得分字典 ---
     scores_out = {pos: {} for pos in RULE_SETS.keys()}
 
-    # 格式化得分（确保所有词类的规则都有对应条目，未评分的规则填0）
-    # 改为：认可匹配得分或不匹配得分（包括负分）
+    # 只把“符合/不符合”转成具体分值（正分 / 负分）
     for pos, rules in RULE_SETS.items():
         raw_pos_scores = raw_scores.get(pos, {})
         if isinstance(raw_pos_scores, dict):
             for k, v in raw_pos_scores.items():
                 normalized_key = normalize_key(k, rules)
                 if normalized_key:
-                    # 查找当前规则的定义
+                    # 找到当前规则的定义
                     rule_def = next(r for r in rules if r["name"] == normalized_key)
-                    # 关键修改：使用 map_to_allowed_score 函数处理得分，保留负分
+                    # 使用 map_to_allowed_score：true/false/“是/否”等 → match_score / mismatch_score
                     scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
-    
-    # 循环结束后，确保所有规则都有一个得分（未被模型评分的规则，使用规则定义的默认分）
+
+    # 保证每条规则都有得分，没有就默认 0 分（说明模型完全没提到）
     for pos, rules in RULE_SETS.items():
         for rule in rules:
             rule_name = rule["name"]
-            # 如果规则在 scores_out 中没有得分，则使用不匹配得分（可能为负分）
             if rule_name not in scores_out[pos]:
-                scores_out[pos][rule_name] = rule["mismatch_score"]
-    
+                scores_out[pos][rule_name] = 0
+
     return scores_out, cleaned_json_text, predicted_pos, explanation
+
 # ===============================
 # 雷达图
 # ===============================
