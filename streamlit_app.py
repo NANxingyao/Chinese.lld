@@ -1,3 +1,4 @@
+
 import streamlit as st
 import requests
 import json
@@ -291,9 +292,9 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
 # ===============================
 # 词类判定主函数 (优化Prompt)
 # ===============================
-def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str, str, str]:
+def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str, str]:
     if not word:
-        return {}, "", "未知", "", ""
+        return {}, "", "未知", ""
 
     # 规则文字说明（给模型看，让它老老实实按规则来判断）
     full_rules_by_pos = {
@@ -338,18 +339,17 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 3. predicted_pos：
    - 请选择「名词」「动词」「名动词」之一，作为该词语最典型的词类。
 
-4. 最后输出时，先写详细的文字推理，最后单独给出一个 JSON（不要再加注释）。
+4. 最后输出时，先写详细的文字推理，最后单独给出一段合法的 JSON（不要再加注释）。
 """
 
-    # 用户提示
+    # 用户提示：再强调一次
     user_prompt = f"""
 请严格按照上述要求分析词语「{word}」。
 
 特别注意：
 - 在 JSON 的 scores 部分，只能用 true/false 表示“是否符合规则”，不能使用任何数字。
 - explanation 中必须对每一条规则写明“符合/不符合 + 理由 + 例句”。
-
-请先给出详细推理过程，然后在最后单独输出一个 JSON 对象。
+给出详细推理过程。
 """
 
     with st.spinner("正在调用大模型进行分析，请稍候..."):
@@ -365,15 +365,10 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 
     if not ok:
         st.error(f"模型调用失败: {err_msg}")
-        return {}, f"调用失败: {err_msg}", "未知", f"调用失败: {err_msg}", ""
+        return {}, f"调用失败: {err_msg}", "未知", f"调用失败: {err_msg}"
 
     raw_text = extract_text_from_response(resp_json)
     parsed_json, cleaned_json_text = extract_json_from_text(raw_text)
-
-    # ============ 新增：提取“推理部分” ============
-    reasoning_text = raw_text.replace(cleaned_json_text, "").strip()
-    if not reasoning_text:
-        reasoning_text = "模型未提供推理过程。"
 
     # 解析 JSON
     if parsed_json and isinstance(parsed_json, dict):
@@ -387,28 +382,29 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         raw_scores = {}
         cleaned_json_text = raw_text  # 展示原始文本
 
-    # --- 初始化所有词类的得分字典 ---
+    # --- 关键：初始化所有词类的得分字典 ---
     scores_out = {pos: {} for pos in RULE_SETS.keys()}
 
-    # 将 true/false 转成 match_score / mismatch_score
+    # 只把“符合/不符合”转成具体分值（正分 / 负分）
     for pos, rules in RULE_SETS.items():
         raw_pos_scores = raw_scores.get(pos, {})
         if isinstance(raw_pos_scores, dict):
             for k, v in raw_pos_scores.items():
                 normalized_key = normalize_key(k, rules)
                 if normalized_key:
+                    # 找到当前规则的定义
                     rule_def = next(r for r in rules if r["name"] == normalized_key)
+                    # 使用 map_to_allowed_score：true/false/“是/否”等 → match_score / mismatch_score
                     scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
 
-    # 保证每条规则都存在
+    # 保证每条规则都有得分，没有就默认 0 分（说明模型完全没提到）
     for pos, rules in RULE_SETS.items():
         for rule in rules:
             rule_name = rule["name"]
             if rule_name not in scores_out[pos]:
                 scores_out[pos][rule_name] = 0
 
-    # ⭐ 返回新增的 reasoning_text（推理过程）
-    return scores_out, cleaned_json_text, predicted_pos, explanation, reasoning_text
+    return scores_out, cleaned_json_text, predicted_pos, explanation
 
 # ===============================
 # 雷达图
@@ -521,15 +517,6 @@ def main():
         membership = calculate_membership(scores_all)
         st.success(f'**分析完成**：词语「{word}」最可能的词类是 【{predicted_pos}】，隶属度为 {membership.get(predicted_pos, 0):.4f}')
         
-        # 新增：显示推理过程
-        st.subheader("🔍 模型推理过程")
-        st.markdown(f"""
-        <div style="background-color: #f0f2f6; padding: 15px; border-radius: 8px; font-size: 14px; line-height: 1.6;">
-            {explanation.replace('。', '。<br><br>').replace('，', '，<br>')}
-        </div>
-        """, unsafe_allow_html=True)
-        st.markdown("---")
-        
         col_results_1, col_results_2 = st.columns(2)
         
         # --- 关键修复：将两个列的内容缩进，放入 if 语句块内 ---
@@ -584,14 +571,7 @@ def main():
                         use_container_width=True,
                         height=min(len(rule_df) * 30 + 50, 800)
                     )
-
-
-
-            scores_all, json_text, predicted_pos, explanation, reasoning_text = ask_model_for_pos_and_scores(...)
-
-            st.markdown("### 🔍 模型推理过程")
-            st.markdown(reasoning_text)
-
+            
             st.subheader("📥 模型原始响应")
             with st.expander("点击展开查看原始响应", expanded=False):
                 st.code(raw_text, language="json")
