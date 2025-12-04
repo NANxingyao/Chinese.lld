@@ -1,4 +1,3 @@
-
 import streamlit as st
 import requests
 import json
@@ -8,7 +7,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from typing import Tuple, Dict, Any, List
 
-# ===============================
+# =============================== 
 # 页面配置
 # ===============================
 st.set_page_config(
@@ -43,7 +42,7 @@ footer {visibility: hidden;}
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 # ===============================
-# 模型配置 (仅从环境变量获取API Key)
+# 模型配置（简化API请求方式）
 # ===============================
 MODEL_CONFIGS = {
     "deepseek": {
@@ -80,7 +79,7 @@ MODEL_CONFIGS = {
     },
 }
 
-# 模型选项（仅从环境变量获取API Key，不提供手动输入）
+# 模型选项
 MODEL_OPTIONS = {
     "DeepSeek Chat": {
         "provider": "deepseek", 
@@ -157,52 +156,26 @@ MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in R
 # 工具函数
 # ===============================
 def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
-    if not isinstance(resp_json, dict): return ""
+    """从响应中提取文本"""
     try:
-        # --- 新增：处理通义千问 (Qwen) 的响应格式 ---
         if "output" in resp_json and "text" in resp_json["output"]:
             return resp_json["output"]["text"]
-            
-        # --- 原有的：处理 OpenAI 系列的响应格式 ---
         if "choices" in resp_json and len(resp_json["choices"]) > 0:
             choice = resp_json["choices"][0]
             if "message" in choice and "content" in choice["message"]:
                 return choice["message"]["content"]
-            for k in ("content", "text"):
-                if k in choice: return choice[k]
-    except Exception: 
-        pass
-    # 如果以上都失败，返回整个响应的字符串形式，用于调试
-    return json.dumps(resp_json, ensure_ascii=False)
-    
+    except Exception:
+        return json.dumps(resp_json, ensure_ascii=False)
+
 def extract_json_from_text(text: str) -> Tuple[dict, str]:
-    if not text: return None, ""
-    text = text.strip()
-    # 尝试直接解析
-    try: return json.loads(text), text
-    except: pass
-    
-    # 尝试提取文本中的JSON块
-    match = re.search(r"(\{[\s\S]*\})", text)
-    if not match: return None, text
-    
-    json_str = match.group(1)
-    # 清理常见的格式问题
-    json_str = json_str.replace("：", ":").replace("，", ",").replace("“", '"').replace("”", '"')
-    json_str = re.sub(r"'(\s*[^']+?\s*)'\s*:", r'"\1":', json_str)
-    json_str = re.sub(r":\s*'([^']*?)'", r': "\1"', json_str)
-    json_str = re.sub(r",\s*([}\]])", r"\1", json_str) # 去除 trailing commas
-    json_str = re.sub(r"\bTrue\b", "true", json_str)
-    json_str = re.sub(r"\bFalse\b", "false", json_str)
-    json_str = re.sub(r"\bNone\b", "null", json_str)
-    
-    try: return json.loads(json_str), json_str
+    """从文本中提取JSON"""
+    try:
+        return json.loads(text), text
     except Exception as e:
-        st.warning(f"解析JSON失败: {e}")
         return None, text
 
 def normalize_key(k: str, pos_rules: list) -> str:
-    if not isinstance(k, str): return None
+    """标准化词类规则"""
     k_upper = re.sub(r'\s+', '', k).upper()
     for r in pos_rules:
         if re.sub(r'\s+', '', r["name"]).upper() == k_upper:
@@ -210,56 +183,25 @@ def normalize_key(k: str, pos_rules: list) -> str:
     return None
 
 def map_to_allowed_score(rule: dict, raw_val) -> int:
+    """将原始值映射到允许的得分"""
     match_score, mismatch_score = rule["match_score"], rule["mismatch_score"]
-    # 强制保留原始得分中的负分（如果是有效规则分）
-    if isinstance(raw_val, (int, float)):
-        # 允许匹配得分或不匹配得分（包括负分）
-        if raw_val == match_score or raw_val == mismatch_score:
-            return int(raw_val)
     if isinstance(raw_val, bool):
         return match_score if raw_val else mismatch_score
-    if isinstance(raw_val, str):
-        s = raw_val.strip().lower()
-        if s in ("yes", "y", "true", "是", "√", "符合"):
-            return match_score
-        if s in ("no", "n", "false", "否", "×", "不符合"):
-            return mismatch_score
-    # 无效值时返回不匹配得分（保留负分）
     return mismatch_score
 
 def calculate_membership(scores_all: Dict[str, Dict[str, int]]) -> Dict[str, float]:
+    """计算词类隶属度"""
     membership = {}
     for pos, scores in scores_all.items():
         total_score = sum(scores.values())
-        # 改为：总得分除以100得到隶属度（几十分对应零点几）
-        # 同时限制在 [0, 1] 区间内
-        # 负分可降低隶属度，保留原始计算逻辑但不强制截断为0（可选调整）
-        normalized = total_score / 100
-        # 若需允许隶属度为负（更准确反映负分影响），可改为：
-        # membership[pos] = normalized
-        # 若需限制在[-1, 1]区间：
-        membership[pos] = max(-1.0, min(1.0, normalized))
+        membership[pos] = total_score / 100
     return membership
 
-def get_top_10_positions(membership: Dict[str, float]) -> List[Tuple[str, float]]:
-    return sorted(membership.items(), key=lambda x: x[1], reverse=True)[:10]
-
-def prepare_detailed_scores_df(scores_all: Dict[str, Dict[str, int]]) -> pd.DataFrame:
-    rows = []
-    for pos, rules in RULE_SETS.items():
-        for rule in rules:
-            rows.append({
-                "词类": pos,
-                "规则代码": rule["name"],
-                "规则描述": rule["desc"],
-                "得分": scores_all[pos].get(rule["name"], 0)
-            })
-    return pd.DataFrame(rows)
-
 # ===============================
-# 安全的 LLM 调用函数 (增加超时)
+# LLM API 调用函数
 # ===============================
 def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, temperature=0.0):
+    """调用LLM API并缓存响应"""
     if not _api_key: return False, {"error": "API Key 为空"}, "API Key 未提供"
     if _provider not in MODEL_CONFIGS: return False, {"error": f"未知提供商 {_provider}"}, f"未知提供商 {_provider}"
 
@@ -269,170 +211,12 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
     payload = cfg["payload"](_model, messages, max_tokens=max_tokens, temperature=temperature)
 
     try:
-        # 增加超时设置到120秒
         response = requests.post(url, headers=headers, json=payload, timeout=120)
         response.raise_for_status()
         return True, response.json(), ""
-    except requests.exceptions.Timeout:
-        error_msg = "请求超时。模型可能正忙或网络连接较慢。建议尝试其他模型或稍后再试。"
-        return False, {"error": error_msg}, error_msg
     except requests.exceptions.RequestException as e:
-        # 对于4xx和5xx错误，提取更多信息
         error_msg = f"API请求失败: {str(e)}"
-        if hasattr(e, 'response') and e.response is not None:
-            try:
-                error_details = e.response.json()
-                if 'error' in error_details:
-                    error_msg += f" 详情: {error_details['error']['message']}"
-            except:
-                error_msg += f" 响应内容: {e.response.text[:200]}..." # 只显示部分内容
         return False, {"error": error_msg}, error_msg
-    except Exception as e:
-        error_msg = f"发生未知错误: {str(e)}"
-        return False, {"error": error_msg}, error_msg
-
-# ===============================
-# 词类判定主函数 (优化Prompt)
-# ===============================
-def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str, str]:
-    if not word:
-        return {}, "", "未知", ""
-
-    # 规则文字说明（给模型看，让它老老实实按规则来判断）
-    full_rules_by_pos = {
-        pos: "\n".join([
-            f"- {r['name']}: {r['desc']}（符合: {r['match_score']} 分，不符合: {r['mismatch_score']} 分）"
-            for r in rules
-        ])
-        for pos, rules in RULE_SETS.items()
-    }
-
-    # ===== 系统提示：只允许输出“符合/不符合”，禁止自己打数字分 =====
-    system_msg = f"""你是一名中文词法与语法方面的专家。现在要分析词语「{word}」在下列词类中的表现：
-
-- 需要判断的词类：名词、动词、名动词
-- 评分规则已经由系统定义，你**不要**自己设计分值，也**不要**在 JSON 中给出具体数字分数
-- 你只需要判断每一条规则是“符合”还是“不符合”，程序会自动根据 match_score / mismatch_score 换算成正分或负分
-
-【各词类的规则说明（仅供你判断使用）】
-
-【名词】
-{full_rules_by_pos["名词"]}
-
-【动词】
-{full_rules_by_pos["动词"]}
-
-【名动词】
-{full_rules_by_pos["名动词"]}
-
-【输出要求】
-
-1. 在 explanation 字段中，必须**逐条规则**说明判断依据，并举例（可以自己造句）：
-   - 格式示例：
-     - 「名词-N1_可受数量词修饰：符合。理由：……。例句：……。」
-     - 「动词-V2_可后附/插入时体助词'着/了/过'：不符合。理由：……。例句：……。」
-   - explanation 里要覆盖 **三个词类的所有规则**，不能只写几条。
-
-2. 在 JSON 中的 scores 字段里：
-   - 每一类下的每一条规则，只能给出 **布尔值 true / false**，表示是否符合该规则
-   - 严禁在 scores 里使用数值分数（例如 0, 5, 10 等）
-   - 如果你不确定，也必须做出判断（true 或 false），不要用 null、0 或其它值
-
-3. predicted_pos：
-   - 请选择「名词」「动词」「名动词」之一，作为该词语最典型的词类。
-
-4. 最后输出时，先写详细的文字推理，最后单独给出一段合法的 JSON（不要再加注释）。
-"""
-
-    # 用户提示：再强调一次
-    user_prompt = f"""
-请严格按照上述要求分析词语「{word}」。
-
-特别注意：
-- 在 JSON 的 scores 部分，只能用 true/false 表示“是否符合规则”，不能使用任何数字。
-- explanation 中必须对每一条规则写明“符合/不符合 + 理由 + 例句”。
-
-请先给出详细推理过程，然后在最后单独输出一个 JSON 对象。
-"""
-
-    with st.spinner("正在调用大模型进行分析，请稍候..."):
-        ok, resp_json, err_msg = call_llm_api_cached(
-            _provider=provider,
-            _model=model,
-            _api_key=api_key,
-            messages=[
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_prompt}
-            ]
-        )
-
-    if not ok:
-        st.error(f"模型调用失败: {err_msg}")
-        return {}, f"调用失败: {err_msg}", "未知", f"调用失败: {err_msg}"
-
-    raw_text = extract_text_from_response(resp_json)
-    parsed_json, cleaned_json_text = extract_json_from_text(raw_text)
-
-    # 解析 JSON
-    if parsed_json and isinstance(parsed_json, dict):
-        explanation = parsed_json.get("explanation", "模型未提供详细推理过程。")
-        predicted_pos = parsed_json.get("predicted_pos", "未知")
-        raw_scores = parsed_json.get("scores", {})
-    else:
-        st.warning("未能从模型响应中解析出有效的JSON。")
-        explanation = "无法解析模型输出。原始响应：\n" + raw_text
-        predicted_pos = "未知"
-        raw_scores = {}
-        cleaned_json_text = raw_text  # 展示原始文本
-
-    # --- 关键：初始化所有词类的得分字典 ---
-    scores_out = {pos: {} for pos in RULE_SETS.keys()}
-
-    # 只把“符合/不符合”转成具体分值（正分 / 负分）
-    for pos, rules in RULE_SETS.items():
-        raw_pos_scores = raw_scores.get(pos, {})
-        if isinstance(raw_pos_scores, dict):
-            for k, v in raw_pos_scores.items():
-                normalized_key = normalize_key(k, rules)
-                if normalized_key:
-                    # 找到当前规则的定义
-                    rule_def = next(r for r in rules if r["name"] == normalized_key)
-                    # 使用 map_to_allowed_score：true/false/“是/否”等 → match_score / mismatch_score
-                    scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
-
-    # 保证每条规则都有得分，没有就默认 0 分（说明模型完全没提到）
-    for pos, rules in RULE_SETS.items():
-        for rule in rules:
-            rule_name = rule["name"]
-            if rule_name not in scores_out[pos]:
-                scores_out[pos][rule_name] = 0
-
-    return scores_out, raw_text, predicted_pos, explanation
-
-# ===============================
-# 雷达图
-# ===============================
-def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
-    if not scores_norm:
-        st.warning("无法绘制雷达图：没有有效数据。")
-        return
-    categories = list(scores_norm.keys())
-    if not categories:
-        st.warning("无法绘制雷达图：没有有效词类。")
-        return
-    values = list(scores_norm.values())
-    
-    # 闭合雷达图
-    categories += [categories[0]]
-    values += [values[0]]
-
-    fig = go.Figure(data=[go.Scatterpolar(r=values, theta=categories, fill="toself", name="隶属度")])
-    fig.update_layout(
-        polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
-        showlegend=False,
-        title=dict(text=title, x=0.5, font=dict(size=16))
-    )
-    st.plotly_chart(fig, use_container_width=True)
 
 # ===============================
 # 主页面逻辑
@@ -440,158 +224,46 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
 def main():
     st.title("📰 汉语词类隶属度检测划类")
     
-    # --- 顶部固定控制区 ---
-    control_container = st.container()
-    with control_container:
-        col1, col2, col3 = st.columns([2, 1, 3])
-        
-        with col1:
-            st.subheader("⚙️ 模型设置")
-            selected_model_display_name = st.selectbox("选择大模型", list(MODEL_OPTIONS.keys()), key="model_select")
-            selected_model_info = MODEL_OPTIONS[selected_model_display_name]
-            
-            # 检查API Key是否存在
-            if not selected_model_info["api_key"]:
-                st.error(f"❌ 未找到 {selected_model_display_name} 的API Key")
-                st.info(f"请设置环境变量 **{selected_model_info['env_var']}** 后重试")
-                st.code(f"# Linux/Mac\n export {selected_model_info['env_var']}='你的API Key'\n\n# Windows\n set {selected_model_info['env_var']}='你的API Key'", language="bash")
-        
-        with col2:
-            st.subheader("🔗 连接测试")
-            if not selected_model_info["api_key"]:
-                st.disabled(True)
-                st.button("测试模型链接", type="secondary", disabled=True)
-            else:
-                if st.button("测试模型链接", type="secondary"):
-                    with st.spinner("正在测试连接..."):
-                        # 使用一个简单的ping请求来测试连接
-                        ok, _, err_msg = call_llm_api_cached(
-                            _provider=selected_model_info["provider"],
-                            _model=selected_model_info["model"],
-                            _api_key=selected_model_info["api_key"],
-                            messages=[{"role": "user", "content": "请回复'pong'"}],
-                            max_tokens=10
-                        )
-                    if ok:
-                        st.success("✅ 模型链接测试成功！")
-                    else:
-                        st.error(f"❌ 模型链接测试失败: {err_msg}")
+    # --- 模型设置 ---
+    selected_model_display_name = st.selectbox("选择大模型", list(MODEL_OPTIONS.keys()), key="model_select")
+    selected_model_info = MODEL_OPTIONS[selected_model_display_name]
 
-        with col3:
-            st.subheader("🔤 词语输入")
-            word = st.text_input("请输入要分析的汉语词语", placeholder="例如：苹果、跑、美丽...", key="word_input")
-            
-            # 开始分析按钮（API Key为空时禁用）
-            analyze_button = st.button(
-                "🚀 开始分析", 
-                type="primary",
-                disabled=not (selected_model_info["api_key"] and word)
-            )
-
-    st.markdown("---")
-
+    # 检查API Key
+    if not selected_model_info["api_key"]:
+        st.error(f"❌ 未找到 {selected_model_display_name} 的API Key")
+        return
     
-    # --- 使用说明 ---
-    info_container = st.container()
-    with info_container:
-        with st.expander("ℹ️ 使用说明", expanded=False):
-            st.info("""
-            1. 在上方的“词语输入”框中输入一个汉语词。
-            2. （可选）在模型选择区域点击向下箭头展开，可以选择不同的大语言模型。
-            3. （可选）点击“测试模型链接”按钮，确认所选模型可以正常访问。
-            4. 点击“开始分析”按钮，系统将使用选定的大模型分析该词语的词类隶属度。
-            5. 分析结果将显示在下方，包括隶属度排名、详细得分、推理过程和原始响应。
-            """)
+    # --- 词语输入 ---
+    word = st.text_input("请输入要分析的汉语词语", placeholder="例如：苹果、跑、美丽...")
+    analyze_button = st.button("🚀 开始分析", type="primary", disabled=not (selected_model_info["api_key"] and word))
 
-     # --- 结果显示区 ---
-    if analyze_button and word and selected_model_info["api_key"]:
+    if analyze_button and word:
         status_placeholder = st.empty()
         status_placeholder.info(f"正在为词语「{word}」启动分析...")
 
-        scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
-            word=word,
-            provider=selected_model_info["provider"],
-            model=selected_model_info["model"],
-            api_key=selected_model_info["api_key"]
-        )
-        
-        status_placeholder.empty()
-        
+        # 获取分析结果
+        scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(word, selected_model_info["provider"], selected_model_info["model"], selected_model_info["api_key"])
+
+        # 计算隶属度
         membership = calculate_membership(scores_all)
         st.success(f'**分析完成**：词语「{word}」最可能的词类是 【{predicted_pos}】，隶属度为 {membership.get(predicted_pos, 0):.4f}')
         
+        # --- 显示结果 ---
         col_results_1, col_results_2 = st.columns(2)
-        
-        # --- 关键修复：将两个列的内容缩进，放入 if 语句块内 ---
         
         with col_results_1:
             st.subheader("🏆 词类隶属度排名")
-            top10 = get_top_10_positions(membership)
+            top10 = sorted(membership.items(), key=lambda x: x[1], reverse=True)[:10]
             top10_df = pd.DataFrame(top10, columns=["词类", "隶属度"])
-            top10_df["隶属度"] = top10_df["隶属度"].apply(lambda x: f"{x:.4f}")
             st.table(top10_df)
             
-            st.subheader("📊 词类隶属度雷达图")
-            plot_radar_chart_streamlit(dict(top10), f"「{word}」的词类隶属度分布")
-
         with col_results_2:
             st.subheader("📋 各词类详细得分")
-            
-            # 1. 计算所有词类的总分并排序，取前10名
-            pos_total_scores = {pos: sum(scores_all[pos].values()) for pos in RULE_SETS.keys()}
-            # 按总分降序排序，取前10
-            top10_pos = sorted(pos_total_scores.items(), key=lambda x: x[1], reverse=True)[:10]
-            
-            # 2. 只显示排名前10的词类
-            for pos, total_score in top10_pos:
-                # 找到该词类下得分最高的规则
-                max_rule = max(scores_all[pos].items(), key=lambda x: x[1], default=("无", 0))
-                
-                # 创建expander，显示词类名称、总分和最高分规则
-                with st.expander(f"**{pos}** (总分: {total_score}, 最高分规则: {max_rule[0]} - {max_rule[1]}分)"):
-                    # 显示该词类下的所有规则得分（按规则得分降序排列）
-                    rule_data = []
-                    for rule in RULE_SETS[pos]:
-                        rule_score = scores_all[pos][rule["name"]]
-                        rule_data.append({
-                            "规则代码": rule["name"],
-                            "规则描述": rule["desc"],
-                            "得分": rule_score
-                        })
-                    
-                    # 按得分降序排序规则，让高分规则排在前面
-                    rule_data_sorted = sorted(rule_data, key=lambda x: x["得分"], reverse=True)
-                    rule_df = pd.DataFrame(rule_data_sorted)
-                    
-                    # 负分标红
-                    styled_df = rule_df.style.applymap(
-                        lambda x: "color: #ff4b4b; font-weight: bold" if isinstance(x, int) and x < 0 else "",
-                        subset=["得分"]
-                    )
-                    
-                    st.dataframe(
-                        styled_df,
-                        use_container_width=True,
-                        height=min(len(rule_df) * 30 + 50, 800)
-                    )
-            
-            st.subheader("📥 模型原始响应")
-            with st.expander("点击展开查看原始响应", expanded=False):
-                st.code(raw_text, language="json")
+            st.dataframe(scores_all)
 
-    # --- if 语句块结束 ---
-
-
+        # 显示模型原始响应
+        st.subheader("📥 模型原始响应")
+        st.code(raw_text, language="json")
 
 if __name__ == "__main__":
     main()
-# ===============================
-# 页面底部说明
-# ===============================
-st.markdown("---")
-st.markdown(
-    "<div style='text-align:center; color:#666;'>"
-    "© 2025 汉语词类隶属度检测划类 "
-    "</div>",
-    unsafe_allow_html=True
-)
