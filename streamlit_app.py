@@ -85,7 +85,7 @@ MODEL_OPTIONS = {
     "DeepSeek Chat": {
         "provider": "deepseek", 
         "model": "deepseek-chat", 
-        "api_key": os.getenv("DEEPSEEK_API_KEY", "sk-1f346646d29947d0a5e29dbaa37476b8"),
+        "api_key": os.getenv("DEEPSEEK_API_KEY", "sk-4ca7492cb99b451ca53a508e3fc412b0"),
         "env_var": "DEEPSEEK_API_KEY"
     },
     "OpenAI GPT-4o（尚不支持）": {
