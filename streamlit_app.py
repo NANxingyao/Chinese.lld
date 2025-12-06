@@ -472,7 +472,7 @@ def main():
                         )
                     if ok:
                         st.success("✅ 模型链接测试成功！")
-                   if not ok:
+                    if not ok:
                         st.error(f"模型调用失败: {err_msg}")
                         st.info("请确保API密钥有效，网络连接正常，或者稍后重试。")
                         return {}, f"调用失败: {err_msg}", "未知", f"调用失败: {err_msg}"
