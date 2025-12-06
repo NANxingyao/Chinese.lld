@@ -191,39 +191,32 @@ MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in R
 # ===============================
 # 工具函数
 # ===============================
-def extract_json_from_text(text: str) -> Tuple[dict, str]:
-    if not text:
-        return None, ""
-    text = text.strip()
-    
-    # Try directly parsing the text as JSON
+def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
+    if not isinstance(resp_json, dict):
+        print("Error: Response is not a valid dictionary")
+        return ""
     try:
-        return json.loads(text), text
-    except Exception:
-        pass
-    
-    # Try to extract JSON from embedded JSON-like blocks in the text (e.g., the part after "scores" or "explanation")
-    match = re.search(r"(\{[\s\S]*\})", text)
-    if not match:
-        return None, text
-    
-    json_str = match.group(1)
-    
-    # Clean common formatting issues (e.g., replace Chinese punctuation with English, and fix common errors)
-    json_str = json_str.replace("：", ":").replace("，", ",").replace("“", '"').replace("”", '"')
-    json_str = re.sub(r"'(\s*[^']+?\s*)'\s*:", r'"\1":', json_str)
-    json_str = re.sub(r":\s*'([^']*?)'", r': "\1"', json_str)
-    json_str = re.sub(r",\s*([}\]])", r"\1", json_str)  # Remove trailing commas
-    json_str = re.sub(r"\bTrue\b", "true", json_str)
-    json_str = re.sub(r"\bFalse\b", "false", json_str)
-    json_str = re.sub(r"\bNone\b", "null", json_str)
-    
-    # Attempt to parse the cleaned JSON string
-    try:
-        return json.loads(json_str), json_str
+        # Check if the response follows the "Qwen" format
+        if "output" in resp_json and "text" in resp_json["output"]:
+            return resp_json["output"]["text"]
+        
+        # Check if the response follows OpenAI's format
+        if "choices" in resp_json and len(resp_json["choices"]) > 0:
+            choice = resp_json["choices"][0]
+            if "message" in choice and "content" in choice["message"]:
+                return choice["message"]["content"]
+            for k in ("content", "text"):
+                if k in choice:
+                    return choice[k]
+
+        # If no known format is matched, print the response for debugging
+        print("Unexpected response format:", resp_json)
     except Exception as e:
-        st.warning(f"解析JSON失败: {e}")
-        return None, text
+        print("Error while extracting text:", e)
+    
+    # If parsing fails, return the entire response as a JSON string for debugging
+    return json.dumps(resp_json, ensure_ascii=False)
+
 
 def normalize_key(k: str, pos_rules: list) -> str:
     if not isinstance(k, str): return None
