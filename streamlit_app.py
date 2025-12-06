@@ -156,49 +156,38 @@ MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in R
 # ===============================
 # 工具函数
 # ===============================
-def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
-    if not isinstance(resp_json, dict): return ""
-    try:
-        # --- 新增：处理通义千问 (Qwen) 的响应格式 ---
-        if "output" in resp_json and "text" in resp_json["output"]:
-            return resp_json["output"]["text"]
-            
-        # --- 原有的：处理 OpenAI 系列的响应格式 ---
-        if "choices" in resp_json and len(resp_json["choices"]) > 0:
-            choice = resp_json["choices"][0]
-            if "message" in choice and "content" in choice["message"]:
-                return choice["message"]["content"]
-            for k in ("content", "text"):
-                if k in choice: return choice[k]
-    except Exception: 
-        pass
-    # 如果以上都失败，返回整个响应的字符串形式，用于调试
-    return json.dumps(resp_json, ensure_ascii=False)
-    
 def extract_json_from_text(text: str) -> Tuple[dict, str]:
     if not text: return None, ""
     text = text.strip()
+
     # 尝试直接解析
-    try: return json.loads(text), text
-    except: pass
+    try:
+        return json.loads(text), text
+    except json.JSONDecodeError as e:
+        st.warning(f"JSON 解析失败: {e}")
     
-    # 尝试提取文本中的JSON块
+    # 提取 JSON 块
     match = re.search(r"(\{[\s\S]*\})", text)
-    if not match: return None, text
-    
+    if not match:
+        st.warning(f"无法从文本中提取有效的 JSON 块：{text[:500]}...")  # 只显示部分内容进行调试
+        return None, text
+
     json_str = match.group(1)
-    # 清理常见的格式问题
+
+    # 清理格式问题
     json_str = json_str.replace("：", ":").replace("，", ",").replace("“", '"').replace("”", '"')
     json_str = re.sub(r"'(\s*[^']+?\s*)'\s*:", r'"\1":', json_str)
     json_str = re.sub(r":\s*'([^']*?)'", r': "\1"', json_str)
-    json_str = re.sub(r",\s*([}\]])", r"\1", json_str) # 去除 trailing commas
+    json_str = re.sub(r",\s*([}\]])", r"\1", json_str)  # 去除 trailing commas
     json_str = re.sub(r"\bTrue\b", "true", json_str)
     json_str = re.sub(r"\bFalse\b", "false", json_str)
     json_str = re.sub(r"\bNone\b", "null", json_str)
-    
-    try: return json.loads(json_str), json_str
-    except Exception as e:
-        st.warning(f"解析JSON失败: {e}")
+
+    # 再次尝试解析 JSON
+    try:
+        return json.loads(json_str), json_str
+    except json.JSONDecodeError as e:
+        st.warning(f"再次解析 JSON 失败: {e}")
         return None, text
 
 def normalize_key(k: str, pos_rules: list) -> str:
@@ -300,8 +289,10 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 
     # 规则文字说明（给模型看，让它老老实实按规则来判断）
     full_rules_by_pos = {
-        pos: "\n".join([f"- {r['name']}: {r['desc']}（符合: {r['match_score']} 分，不符合: {r['mismatch_score']} 分）"
-                        for r in rules])
+        pos: "\n".join([
+            f"- {r['name']}: {r['desc']}（符合: {r['match_score']} 分，不符合: {r['mismatch_score']} 分）"
+            for r in rules
+        ])
         for pos, rules in RULE_SETS.items()
     }
 
@@ -339,7 +330,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 3. predicted_pos：
    - 请选择「名词」「动词」「名动词」之一，作为该词语最典型的词类。
 
-4. 最后输出时，先写详细的文字推理，最后单独给出一个合法的 JSON（不要再加注释）。
+4. 最后输出时，先写详细的文字推理，最后单独给出一段合法的 JSON（不要再加注释）。
 """
 
     # 用户提示：再强调一次
@@ -358,7 +349,10 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
             _provider=provider,
             _model=model,
             _api_key=api_key,
-            messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": user_prompt}]
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_prompt}
+            ]
         )
 
     if not ok:
@@ -366,34 +360,43 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         return {}, f"调用失败: {err_msg}", "未知", f"调用失败: {err_msg}"
 
     raw_text = extract_text_from_response(resp_json)
-    
-    # Debugging output: Show raw response in case of failure
-    st.warning(f"未能从模型响应中解析出有效的JSON。\n原始响应内容：\n{raw_text}")
+    parsed_json, cleaned_json_text = extract_json_from_text(raw_text)
 
-    # 通过字符串查找“符合”和“不符合”，转换为1和0
-    scores_out = {}
-    for pos in RULE_SETS.keys():
-        scores_out[pos] = {}
-        for rule in RULE_SETS[pos]:
+    # 解析 JSON
+    if parsed_json and isinstance(parsed_json, dict):
+        explanation = parsed_json.get("explanation", "模型未提供详细推理过程。")
+        predicted_pos = parsed_json.get("predicted_pos", "未知")
+        raw_scores = parsed_json.get("scores", {})
+    else:
+        st.warning("未能从模型响应中解析出有效的JSON。")
+        explanation = "无法解析模型输出。原始响应：\n" + raw_text
+        predicted_pos = "未知"
+        raw_scores = {}
+        cleaned_json_text = raw_text  # 展示原始文本
+
+    # --- 关键：初始化所有词类的得分字典 ---
+    scores_out = {pos: {} for pos in RULE_SETS.keys()}
+
+    # 只把“符合/不符合”转成具体分值（正分 / 负分）
+    for pos, rules in RULE_SETS.items():
+        raw_pos_scores = raw_scores.get(pos, {})
+        if isinstance(raw_pos_scores, dict):
+            for k, v in raw_pos_scores.items():
+                normalized_key = normalize_key(k, rules)
+                if normalized_key:
+                    # 找到当前规则的定义
+                    rule_def = next(r for r in rules if r["name"] == normalized_key)
+                    # 使用 map_to_allowed_score：true/false/“是/否”等 → match_score / mismatch_score
+                    scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
+
+    # 保证每条规则都有得分，没有就默认 0 分（说明模型完全没提到）
+    for pos, rules in RULE_SETS.items():
+        for rule in rules:
             rule_name = rule["name"]
-            # 通过正则表达式或字符串匹配“符合”与“不符合”
-            if "符合" in raw_text:  # 匹配“符合”
-                scores_out[pos][rule_name] = 1
-            else:
+            if rule_name not in scores_out[pos]:
                 scores_out[pos][rule_name] = 0
 
-    explanation = "无法解析模型输出。原始响应：\n" + raw_text
-    predicted_pos = "未知"
-
-    # 构造一个有效的JSON结构，确保推理结果能够成功展示
-    result_json = {
-        "explanation": explanation,
-        "predicted_pos": predicted_pos,
-        "scores": scores_out
-    }
-
-    # 确保返回的 JSON 结构是正确的
-    return scores_out, raw_text, predicted_pos, json.dumps(result_json, ensure_ascii=False)
+    return scores_out, raw_text, predicted_pos, explanation
 
 # ===============================
 # 雷达图
@@ -581,4 +584,3 @@ st.markdown(
     "</div>",
     unsafe_allow_html=True
 )
-
