@@ -372,7 +372,9 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 
     raw_text = extract_text_from_response(resp_json)
     
-    # 增强容错处理：尝试多种方式解析
+    # Debugging output: Show raw response in case of failure
+    st.warning(f"未能从模型响应中解析出有效的JSON。\n原始响应内容：\n{raw_text}")
+
     parsed_json, cleaned_json_text = extract_json_from_text(raw_text)
 
     if parsed_json and isinstance(parsed_json, dict):
@@ -380,12 +382,11 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         predicted_pos = parsed_json.get("predicted_pos", "未知")
         raw_scores = parsed_json.get("scores", {})
     else:
-        # 加强调试输出，帮助用户看到原始文本
-        st.warning(f"未能从模型响应中解析出有效的JSON。\n原始响应内容：\n{raw_text}")
+        # If the JSON parsing failed, display the raw response as fallback
         explanation = "无法解析模型输出。原始响应：\n" + raw_text
         predicted_pos = "未知"
         raw_scores = {}
-        cleaned_json_text = raw_text  # 展示原始文本
+        cleaned_json_text = raw_text  # Display the raw output
 
     # --- 关键：初始化所有词类的得分字典 ---
     scores_out = {pos: {} for pos in RULE_SETS.keys()}
@@ -410,6 +411,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
                 scores_out[pos][rule_name] = 0
 
     return scores_out, raw_text, predicted_pos, explanation
+
 # ===============================
 # 雷达图
 # ===============================
