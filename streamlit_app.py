@@ -156,38 +156,49 @@ MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in R
 # ===============================
 # 工具函数
 # ===============================
+def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
+    if not isinstance(resp_json, dict): return ""
+    try:
+        # --- 新增：处理通义千问 (Qwen) 的响应格式 ---
+        if "output" in resp_json and "text" in resp_json["output"]:
+            return resp_json["output"]["text"]
+            
+        # --- 原有的：处理 OpenAI 系列的响应格式 ---
+        if "choices" in resp_json and len(resp_json["choices"]) > 0:
+            choice = resp_json["choices"][0]
+            if "message" in choice and "content" in choice["message"]:
+                return choice["message"]["content"]
+            for k in ("content", "text"):
+                if k in choice: return choice[k]
+    except Exception: 
+        pass
+    # 如果以上都失败，返回整个响应的字符串形式，用于调试
+    return json.dumps(resp_json, ensure_ascii=False)
+    
 def extract_json_from_text(text: str) -> Tuple[dict, str]:
     if not text: return None, ""
     text = text.strip()
-
     # 尝试直接解析
-    try:
-        return json.loads(text), text
-    except json.JSONDecodeError as e:
-        st.warning(f"JSON 解析失败: {e}")
+    try: return json.loads(text), text
+    except: pass
     
-    # 提取 JSON 块
+    # 尝试提取文本中的JSON块
     match = re.search(r"(\{[\s\S]*\})", text)
-    if not match:
-        st.warning(f"无法从文本中提取有效的 JSON 块：{text[:500]}...")  # 只显示部分内容进行调试
-        return None, text
-
+    if not match: return None, text
+    
     json_str = match.group(1)
-
-    # 清理格式问题
+    # 清理常见的格式问题
     json_str = json_str.replace("：", ":").replace("，", ",").replace("“", '"').replace("”", '"')
     json_str = re.sub(r"'(\s*[^']+?\s*)'\s*:", r'"\1":', json_str)
     json_str = re.sub(r":\s*'([^']*?)'", r': "\1"', json_str)
-    json_str = re.sub(r",\s*([}\]])", r"\1", json_str)  # 去除 trailing commas
+    json_str = re.sub(r",\s*([}\]])", r"\1", json_str) # 去除 trailing commas
     json_str = re.sub(r"\bTrue\b", "true", json_str)
     json_str = re.sub(r"\bFalse\b", "false", json_str)
     json_str = re.sub(r"\bNone\b", "null", json_str)
-
-    # 再次尝试解析 JSON
-    try:
-        return json.loads(json_str), json_str
-    except json.JSONDecodeError as e:
-        st.warning(f"再次解析 JSON 失败: {e}")
+    
+    try: return json.loads(json_str), json_str
+    except Exception as e:
+        st.warning(f"解析JSON失败: {e}")
         return None, text
 
 def normalize_key(k: str, pos_rules: list) -> str:
@@ -584,3 +595,4 @@ st.markdown(
     "</div>",
     unsafe_allow_html=True
 )
+
