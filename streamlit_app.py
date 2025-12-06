@@ -197,11 +197,19 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
         return ""
     
     try:
-        # 增强容错性: 处理 Qwen 格式的响应
+        # --- 处理通义千问 (Qwen) 的响应格式 ---
         if "output" in resp_json and "text" in resp_json["output"]:
             return resp_json["output"]["text"]
         
-        # 增强容错性: 处理 OpenAI 格式的响应
+        # --- 处理 DeepSeek 的响应格式 ---
+        if "data" in resp_json and "text" in resp_json["data"]:
+            return resp_json["data"]["text"]
+
+        # --- 处理 Kimi 的响应格式 ---
+        if "response" in resp_json and "result" in resp_json["response"]:
+            return resp_json["response"]["result"]
+        
+        # --- 处理 OpenAI 系列的响应格式 ---
         if "choices" in resp_json and len(resp_json["choices"]) > 0:
             choice = resp_json["choices"][0]
             if "message" in choice and "content" in choice["message"]:
@@ -218,6 +226,7 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
     
     # 返回响应的原始字符串以便进一步调试
     return json.dumps(resp_json, ensure_ascii=False)
+
 
 def normalize_key(k: str, pos_rules: list) -> str:
     if not isinstance(k, str): return None
