@@ -1,3 +1,4 @@
+
 import streamlit as st
 import requests
 import json
@@ -155,13 +156,23 @@ MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in R
 # ===============================
 # 工具函数
 # ===============================
+import json
+import re
+from typing import Dict, Any, Tuple
+import streamlit as st
+
 def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
-    if not isinstance(resp_json, dict): return ""
+    if not isinstance(resp_json, dict):
+        return ""
     try:
         # --- 新增：处理通义千问 (Qwen) 的响应格式 ---
         if "output" in resp_json and "text" in resp_json["output"]:
             return resp_json["output"]["text"]
-            
+        
+        # --- 新增：处理 Kimi 的响应格式 ---
+        if "kimi_output" in resp_json and "message" in resp_json["kimi_output"]:
+            return resp_json["kimi_output"]["message"]
+        
         # --- 原有的：处理 OpenAI 系列的响应格式 ---
         if "choices" in resp_json and len(resp_json["choices"]) > 0:
             choice = resp_json["choices"][0]
@@ -171,85 +182,43 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
                 if k in choice: return choice[k]
     except Exception: 
         pass
+    
     # 如果以上都失败，返回整个响应的字符串形式，用于调试
     return json.dumps(resp_json, ensure_ascii=False)
 
-# ========== 核心优化：增强JSON提取函数 ==========
 def extract_json_from_text(text: str) -> Tuple[dict, str]:
     if not text:
         return None, ""
+    text = text.strip()
     
-    original_text = text.strip()
-    working_text = original_text
+    # 尝试直接解析
+    try:
+        return json.loads(text), text
+    except Exception:
+        pass
     
-    # 步骤1：移除Markdown代码块（```json ... ```）
-    code_block_pattern = re.compile(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', re.IGNORECASE)
-    code_block_match = code_block_pattern.search(working_text)
-    if code_block_match:
-        working_text = code_block_match.group(1).strip()
+    # 尝试提取文本中的JSON块
+    match = re.search(r"(\{[\s\S]*\})", text)
+    if not match:
+        return None, text
     
-    # 步骤2：提取最外层的JSON对象（处理多行情况）
-    # 匹配从第一个{到最后一个}的完整JSON块
-    json_pattern = re.compile(r'\{[\s\S]*\}', re.MULTILINE)
-    json_matches = json_pattern.findall(working_text)
+    json_str = match.group(1)
     
-    if not json_matches:
-        return None, original_text
+    # 清理常见的格式问题
+    json_str = json_str.replace("：", ":").replace("，", ",").replace("“", '"').replace("”", '"')
+    json_str = re.sub(r"'(\s*[^']+?\s*)'\s*:", r'"\1":', json_str)
+    json_str = re.sub(r":\s*'([^']*?)'", r': "\1"', json_str)
+    json_str = re.sub(r",\s*([}\]])", r"\1", json_str)  # 去除 trailing commas
+    json_str = re.sub(r"\bTrue\b", "true", json_str)
+    json_str = re.sub(r"\bFalse\b", "false", json_str)
+    json_str = re.sub(r"\bNone\b", "null", json_str)
     
-    # 取最长的JSON块（最可能是完整的）
-    json_str = max(json_matches, key=len)
-    
-    # 步骤3：批量清理常见格式问题
-    cleanup_steps = [
-        # 替换中文标点为英文
-        (r'：', ':'),
-        (r'，', ','),
-        (r'“', '"'),
-        (r'”', '"'),
-        (r'‘', "'"),
-        (r'’', "'"),
-        (r'（', '('),
-        (r'）', ')'),
-        # 移除注释
-        (r'//.*?$', ''),
-        (r'/\*[\s\S]*?\*/', ''),
-        # 处理单引号转双引号（仅当单引号包围键/值时）
-        (r"'(\w+?)'\s*:", r'"\1":'),
-        # 修正：用双引号包裹正则，避免单引号转义冲突
-        (r":\s*'([^']*?)'", r': "\1"'),
-        # 移除末尾多余的逗号
-        (r',\s*([}\]])', r'\1'),
-        # 处理Python布尔值
-        (r'\bTrue\b', 'true'),
-        (r'\bFalse\b', 'false'),
-        (r'\bNone\b', 'null'),
-        # 移除多余的空白字符
-        (r'\s+', ' '),
-        # 修复换行符导致的语法错误
-        (r'\n', ' '),
-    ]
-    
-    for pattern, replacement in cleanup_steps:
-        json_str = re.sub(pattern, replacement, json_str, flags=re.MULTILINE)
-    
-    # 步骤4：多轮解析重试（处理残留小问题）
-    parse_attempts = [
-        json_str,
-        # 尝试移除首尾空白
-        json_str.strip(),
-        # 尝试修复键名未加引号的情况（简单场景）
-        re.sub(r'(\w+)\s*:', r'"\1":', json_str)
-    ]
-    
-    for attempt in parse_attempts:
-        try:
-            parsed = json.loads(attempt)
-            return parsed, original_text
-        except json.JSONDecodeError:
-            continue
-    
-    # 所有尝试失败，返回None和原始文本
-    return None, original_text
+    try:
+        return json.loads(json_str), json_str
+    except Exception as e:
+        st.warning(f"解析JSON失败: {e}")
+        return None, text
+
 
 def normalize_key(k: str, pos_rules: list) -> str:
     if not isinstance(k, str): return None
@@ -631,9 +600,10 @@ def main():
 
     # --- if 语句块结束 ---
 
+
+
 if __name__ == "__main__":
     main()
-
 # ===============================
 # 页面底部说明
 # ===============================
