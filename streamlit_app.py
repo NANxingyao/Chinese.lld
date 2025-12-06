@@ -8,6 +8,41 @@ import pandas as pd
 import plotly.graph_objects as go
 from typing import Tuple, Dict, Any, List
 
+def extract_json_from_text(text: str) -> Tuple[dict, str]:
+    if not text:
+        return None, ""
+    text = text.strip()
+    
+    # Try directly parsing the text as JSON
+    try:
+        return json.loads(text), text
+    except Exception:
+        pass
+    
+    # Try to extract JSON from embedded JSON-like blocks in the text (e.g., the part after "scores" or "explanation")
+    match = re.search(r"(\{[\s\S]*\})", text)
+    if not match:
+        return None, text
+    
+    json_str = match.group(1)
+    
+    # Clean common formatting issues (e.g., replace Chinese punctuation with English, and fix common errors)
+    json_str = json_str.replace("：", ":").replace("，", ",").replace("“", '"').replace("”", '"')
+    json_str = re.sub(r"'(\s*[^']+?\s*)'\s*:", r'"\1":', json_str)
+    json_str = re.sub(r":\s*'([^']*?)'", r': "\1"', json_str)
+    json_str = re.sub(r",\s*([}\]])", r"\1", json_str)  # Remove trailing commas
+    json_str = re.sub(r"\bTrue\b", "true", json_str)
+    json_str = re.sub(r"\bFalse\b", "false", json_str)
+    json_str = re.sub(r"\bNone\b", "null", json_str)
+    
+    # Attempt to parse the cleaned JSON string
+    try:
+        return json.loads(json_str), json_str
+    except Exception as e:
+        st.warning(f"解析JSON失败: {e}")
+        return None, text
+
+
 # ===============================
 # 页面配置
 # ===============================
@@ -156,69 +191,39 @@ MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in R
 # ===============================
 # 工具函数
 # ===============================
-import json
-import re
-from typing import Dict, Any, Tuple
-import streamlit as st
-
-def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
-    if not isinstance(resp_json, dict):
-        return ""
-    try:
-        # --- 新增：处理通义千问 (Qwen) 的响应格式 ---
-        if "output" in resp_json and "text" in resp_json["output"]:
-            return resp_json["output"]["text"]
-        
-        # --- 新增：处理 Kimi 的响应格式 ---
-        if "kimi_output" in resp_json and "message" in resp_json["kimi_output"]:
-            return resp_json["kimi_output"]["message"]
-        
-        # --- 原有的：处理 OpenAI 系列的响应格式 ---
-        if "choices" in resp_json and len(resp_json["choices"]) > 0:
-            choice = resp_json["choices"][0]
-            if "message" in choice and "content" in choice["message"]:
-                return choice["message"]["content"]
-            for k in ("content", "text"):
-                if k in choice: return choice[k]
-    except Exception: 
-        pass
-    
-    # 如果以上都失败，返回整个响应的字符串形式，用于调试
-    return json.dumps(resp_json, ensure_ascii=False)
-
 def extract_json_from_text(text: str) -> Tuple[dict, str]:
     if not text:
         return None, ""
     text = text.strip()
     
-    # 尝试直接解析
+    # Try directly parsing the text as JSON
     try:
         return json.loads(text), text
     except Exception:
         pass
     
-    # 尝试提取文本中的JSON块
+    # Try to extract JSON from embedded JSON-like blocks in the text (e.g., the part after "scores" or "explanation")
     match = re.search(r"(\{[\s\S]*\})", text)
     if not match:
         return None, text
     
     json_str = match.group(1)
     
-    # 清理常见的格式问题
+    # Clean common formatting issues (e.g., replace Chinese punctuation with English, and fix common errors)
     json_str = json_str.replace("：", ":").replace("，", ",").replace("“", '"').replace("”", '"')
     json_str = re.sub(r"'(\s*[^']+?\s*)'\s*:", r'"\1":', json_str)
     json_str = re.sub(r":\s*'([^']*?)'", r': "\1"', json_str)
-    json_str = re.sub(r",\s*([}\]])", r"\1", json_str)  # 去除 trailing commas
+    json_str = re.sub(r",\s*([}\]])", r"\1", json_str)  # Remove trailing commas
     json_str = re.sub(r"\bTrue\b", "true", json_str)
     json_str = re.sub(r"\bFalse\b", "false", json_str)
     json_str = re.sub(r"\bNone\b", "null", json_str)
     
+    # Attempt to parse the cleaned JSON string
     try:
         return json.loads(json_str), json_str
     except Exception as e:
         st.warning(f"解析JSON失败: {e}")
         return None, text
-
 
 def normalize_key(k: str, pos_rules: list) -> str:
     if not isinstance(k, str): return None
