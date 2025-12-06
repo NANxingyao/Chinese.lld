@@ -195,12 +195,13 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
     if not isinstance(resp_json, dict):
         print("Error: Response is not a valid dictionary")
         return ""
+    
     try:
-        # Check if the response follows the "Qwen" format
+        # 增强容错性: 处理 Qwen 格式的响应
         if "output" in resp_json and "text" in resp_json["output"]:
             return resp_json["output"]["text"]
         
-        # Check if the response follows OpenAI's format
+        # 增强容错性: 处理 OpenAI 格式的响应
         if "choices" in resp_json and len(resp_json["choices"]) > 0:
             choice = resp_json["choices"][0]
             if "message" in choice and "content" in choice["message"]:
@@ -208,15 +209,15 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
             for k in ("content", "text"):
                 if k in choice:
                     return choice[k]
-
-        # If no known format is matched, print the response for debugging
-        print("Unexpected response format:", resp_json)
+        
+        # 处理未定义格式的响应
+        print("Unexpected response format:", json.dumps(resp_json, ensure_ascii=False, indent=2))
     except Exception as e:
-        print("Error while extracting text:", e)
+        print(f"Error while extracting text: {e}")
+        print("Response content:", json.dumps(resp_json, ensure_ascii=False, indent=2))
     
-    # If parsing fails, return the entire response as a JSON string for debugging
+    # 返回响应的原始字符串以便进一步调试
     return json.dumps(resp_json, ensure_ascii=False)
-
 
 def normalize_key(k: str, pos_rules: list) -> str:
     if not isinstance(k, str): return None
