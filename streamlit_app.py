@@ -1,4 +1,3 @@
-
 import streamlit as st
 import requests
 import json
@@ -7,6 +6,13 @@ import os
 import pandas as pd
 import plotly.graph_objects as go
 from typing import Tuple, Dict, Any, List
+# 增加宽松的JSON解析库（需先安装：pip install demjson）
+try:
+    import demjson
+    DEMJSON_AVAILABLE = True
+except ImportError:
+    DEMJSON_AVAILABLE = False
+    st.warning("未安装demjson库，JSON解析容错能力会降低。建议执行：pip install demjson")
 
 # ===============================
 # 页面配置
@@ -159,11 +165,11 @@ MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in R
 def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
     if not isinstance(resp_json, dict): return ""
     try:
-        # --- 新增：处理通义千问 (Qwen) 的响应格式 ---
+        # --- 处理通义千问 (Qwen) 的响应格式 ---
         if "output" in resp_json and "text" in resp_json["output"]:
             return resp_json["output"]["text"]
             
-        # --- 原有的：处理 OpenAI 系列的响应格式 ---
+        # --- 处理 OpenAI 系列的响应格式 ---
         if "choices" in resp_json and len(resp_json["choices"]) > 0:
             choice = resp_json["choices"][0]
             if "message" in choice and "content" in choice["message"]:
@@ -174,33 +180,88 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
         pass
     # 如果以上都失败，返回整个响应的字符串形式，用于调试
     return json.dumps(resp_json, ensure_ascii=False)
-    
-def extract_json_from_text(text: str) -> Tuple[dict, str]:
-    if not text: return None, ""
-    text = text.strip()
-    # 尝试直接解析
-    try: return json.loads(text), text
-    except: pass
-    
-    # 尝试提取文本中的JSON块
-    match = re.search(r"(\{[\s\S]*\})", text)
-    if not match: return None, text
-    
-    json_str = match.group(1)
-    # 清理常见的格式问题
-    json_str = json_str.replace("：", ":").replace("，", ",").replace("“", '"').replace("”", '"')
+
+def safe_json_parse(json_str: str) -> Tuple[dict, str]:
+    """
+    安全的JSON解析函数，支持多种容错方式
+    返回：(解析后的字典, 最终尝试的JSON字符串)
+    """
+    # 第一步：基础清理
+    json_str = json_str.strip()
+    # 移除注释
+    json_str = re.sub(r'//.*?$', '', json_str, flags=re.MULTILINE)
+    json_str = re.sub(r'/\*.*?\*/', '', json_str, flags=re.DOTALL)
+    # 替换中文标点
+    json_str = json_str.replace("：", ":").replace("，", ",").replace("“", '"').replace("”", '"').replace("’", "'")
+    # 处理单引号
     json_str = re.sub(r"'(\s*[^']+?\s*)'\s*:", r'"\1":', json_str)
     json_str = re.sub(r":\s*'([^']*?)'", r': "\1"', json_str)
-    json_str = re.sub(r",\s*([}\]])", r"\1", json_str) # 去除 trailing commas
+    # 移除末尾逗号
+    json_str = re.sub(r",\s*([}\]])", r"\1", json_str)
+    # 处理布尔值
     json_str = re.sub(r"\bTrue\b", "true", json_str)
     json_str = re.sub(r"\bFalse\b", "false", json_str)
     json_str = re.sub(r"\bNone\b", "null", json_str)
     
-    try: return json.loads(json_str), json_str
-    except Exception as e:
-        st.warning(f"解析JSON失败: {e}")
-        return None, text
+    # 第二步：尝试标准解析
+    try:
+        return json.loads(json_str), json_str
+    except Exception as e1:
+        # 第三步：尝试demjson宽松解析（如果可用）
+        if DEMJSON_AVAILABLE:
+            try:
+                parsed = demjson.decode(json_str)
+                if isinstance(parsed, dict):
+                    return parsed, json_str
+            except Exception as e2:
+                st.warning(f"demjson解析失败: {e2}")
+        
+        # 第四步：尝试提取最外层的{}内容
+        match = re.search(r'\{[\s\S]*\}', json_str)
+        if match:
+            try:
+                inner_str = match.group(0)
+                return json.loads(inner_str), inner_str
+            except:
+                pass
+        
+        # 所有方法都失败
+        return None, json_str
 
+def extract_json_from_text(text: str) -> Tuple[dict, str]:
+    """
+    增强版JSON提取函数
+    优先提取```json```代码块，再尝试其他方式
+    """
+    if not text:
+        return None, ""
+    
+    # 第一步：优先提取```json```代码块
+    json_block_pattern = re.compile(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', re.IGNORECASE)
+    json_block_matches = json_block_pattern.findall(text)
+    if json_block_matches:
+        for json_str in json_block_matches:
+            parsed, final_str = safe_json_parse(json_str)
+            if parsed is not None:
+                return parsed, final_str
+    
+    # 第二步：提取所有{}包裹的内容
+    all_json_matches = re.findall(r'\{[\s\S]*\}', text)
+    if all_json_matches:
+        for json_str in all_json_matches:
+            parsed, final_str = safe_json_parse(json_str)
+            if parsed is not None:
+                return parsed, final_str
+    
+    # 第三步：尝试直接解析整个文本
+    parsed, final_str = safe_json_parse(text)
+    if parsed is not None:
+        return parsed, final_str
+    
+    # 所有方法都失败
+    st.warning("无法从文本中提取有效的JSON结构")
+    return None, text
+    
 def normalize_key(k: str, pos_rules: list) -> str:
     if not isinstance(k, str): return None
     k_upper = re.sub(r'\s+', '', k).upper()
@@ -307,7 +368,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         for pos, rules in RULE_SETS.items()
     }
 
-    # ===== 系统提示：只允许输出“符合/不符合”，禁止自己打数字分 =====
+    # ===== 增强版系统提示：强制规范输出 =====
     system_msg = f"""你是一名中文词法与语法方面的专家。现在要分析词语「{word}」在下列词类中的表现：
 
 - 需要判断的词类：名词、动词、名动词
@@ -325,23 +386,40 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 【名动词】
 {full_rules_by_pos["名动词"]}
 
-【输出要求】
-
-1. 在 explanation 字段中，必须**逐条规则**说明判断依据，并举例（可以自己造句）：
+【输出要求 - 必须严格遵守】
+1. 首先输出详细的推理过程：
+   - 逐条规则说明判断依据，并举例（可以自己造句）
    - 格式示例：
      - 「名词-N1_可受数量词修饰：符合。理由：……。例句：……。」
      - 「动词-V2_可后附/插入时体助词'着/了/过'：不符合。理由：……。例句：……。」
-   - explanation 里要覆盖 **三个词类的所有规则**，不能只写几条。
+   - 必须覆盖三个词类的所有规则，不能遗漏
 
-2. 在 JSON 中的 scores 字段里：
-   - 每一类下的每一条规则，只能给出 **布尔值 true / false**，表示是否符合该规则
-   - 严禁在 scores 里使用数值分数（例如 0, 5, 10 等）
-   - 如果你不确定，也必须做出判断（true 或 false），不要用 null、0 或其它值
+2. 推理过程结束后，单独输出一个```json```代码块，包含以下结构：
+{{
+  "explanation": "完整的推理过程文本",
+  "predicted_pos": "名词/动词/名动词（选择其一）",
+  "scores": {{
+    "名词": {{
+      "N1_可受数量词修饰": true/false,
+      "N2_不能受副词修饰": true/false,
+      // 其他名词规则...
+    }},
+    "动词": {{
+      "V1_可受否定'不/没有'修饰": true/false,
+      // 其他动词规则...
+    }},
+    "名动词": {{
+      "NV1_可被\"不/没有\"否定且肯定形式-1": true/false,
+      // 其他名动词规则...
+    }}
+  }}
+}}
 
-3. predicted_pos：
-   - 请选择「名词」「动词」「名动词」之一，作为该词语最典型的词类。
-
-4. 最后输出时，先写详细的文字推理，最后单独给出一段合法的 JSON（不要再加注释）。
+3. 特别注意：
+   - JSON中scores字段下的所有值只能是true或false，严禁使用数字、中文或其他值
+   - JSON必须是合法的，不能有语法错误
+   - JSON必须用```json```代码块包裹，且单独成行
+   - 不要在JSON中添加任何注释
 """
 
     # 用户提示：再强调一次
@@ -349,10 +427,11 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 请严格按照上述要求分析词语「{word}」。
 
 特别注意：
-- 在 JSON 的 scores 部分，只能用 true/false 表示“是否符合规则”，不能使用任何数字。
+- 在 JSON 的 scores 部分，只能用 true/false 表示“是否符合规则”，不能使用任何数字、中文或其他值。
 - explanation 中必须对每一条规则写明“符合/不符合 + 理由 + 例句”。
+- 最终的JSON必须用```json```代码块包裹，确保可以被程序正确提取。
 
-请先给出详细推理过程，然后在最后单独输出一个 JSON 对象。
+请先给出详细推理过程，然后在最后单独输出JSON代码块。
 """
 
     with st.spinner("正在调用大模型进行分析，请稍候..."):
@@ -378,12 +457,15 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         explanation = parsed_json.get("explanation", "模型未提供详细推理过程。")
         predicted_pos = parsed_json.get("predicted_pos", "未知")
         raw_scores = parsed_json.get("scores", {})
+        st.success("✅ 成功解析模型输出的JSON结构")
     else:
-        st.warning("未能从模型响应中解析出有效的JSON。")
+        st.warning("⚠️ 未能从模型响应中解析出有效的JSON，将使用默认得分")
+        # 调试信息：显示清理后的JSON文本
+        with st.expander("📝 解析失败的JSON文本（调试用）", expanded=False):
+            st.code(cleaned_json_text, language="json")
         explanation = "无法解析模型输出。原始响应：\n" + raw_text
         predicted_pos = "未知"
         raw_scores = {}
-        cleaned_json_text = raw_text  # 展示原始文本
 
     # --- 关键：初始化所有词类的得分字典 ---
     scores_out = {pos: {} for pos in RULE_SETS.keys()}
@@ -522,8 +604,6 @@ def main():
         
         col_results_1, col_results_2 = st.columns(2)
         
-        # --- 关键修复：将两个列的内容缩进，放入 if 语句块内 ---
-        
         with col_results_1:
             st.subheader("🏆 词类隶属度排名")
             top10 = get_top_10_positions(membership)
@@ -577,14 +657,15 @@ def main():
             
             st.subheader("📥 模型原始响应")
             with st.expander("点击展开查看原始响应", expanded=False):
-                st.code(raw_text, language="json")
-
-    # --- if 语句块结束 ---
-
-
+                st.code(raw_text, language="text")
+            
+            st.subheader("🔍 模型推理过程")
+            with st.expander("点击展开查看推理过程", expanded=False):
+                st.markdown(explanation)
 
 if __name__ == "__main__":
     main()
+
 # ===============================
 # 页面底部说明
 # ===============================
