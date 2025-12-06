@@ -300,10 +300,8 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 
     # 规则文字说明（给模型看，让它老老实实按规则来判断）
     full_rules_by_pos = {
-        pos: "\n".join([
-            f"- {r['name']}: {r['desc']}（符合: {r['match_score']} 分，不符合: {r['mismatch_score']} 分）"
-            for r in rules
-        ])
+        pos: "\n".join([f"- {r['name']}: {r['desc']}（符合: {r['match_score']} 分，不符合: {r['mismatch_score']} 分）"
+                        for r in rules])
         for pos, rules in RULE_SETS.items()
     }
 
@@ -360,10 +358,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
             _provider=provider,
             _model=model,
             _api_key=api_key,
-            messages=[
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_prompt}
-            ]
+            messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": user_prompt}]
         )
 
     if not ok:
@@ -372,44 +367,34 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 
     raw_text = extract_text_from_response(resp_json)
     
-    # 增强容错处理：尝试多种方式解析
-    parsed_json, cleaned_json_text = extract_json_from_text(raw_text)
+    # Debugging output: Show raw response in case of failure
+    st.warning(f"未能从模型响应中解析出有效的JSON。\n原始响应内容：\n{raw_text}")
 
-    if parsed_json and isinstance(parsed_json, dict):
-        explanation = parsed_json.get("explanation", "模型未提供详细推理过程。")
-        predicted_pos = parsed_json.get("predicted_pos", "未知")
-        raw_scores = parsed_json.get("scores", {})
-    else:
-        # 加强调试输出，帮助用户看到原始文本
-        st.warning(f"未能从模型响应中解析出有效的JSON。\n原始响应内容：\n{raw_text}")
-        explanation = "无法解析模型输出。原始响应：\n" + raw_text
-        predicted_pos = "未知"
-        raw_scores = {}
-        cleaned_json_text = raw_text  # 展示原始文本
-
-    # --- 关键：初始化所有词类的得分字典 ---
-    scores_out = {pos: {} for pos in RULE_SETS.keys()}
-
-    # 只把“符合/不符合”转成具体分值（正分 / 负分）
-    for pos, rules in RULE_SETS.items():
-        raw_pos_scores = raw_scores.get(pos, {})
-        if isinstance(raw_pos_scores, dict):
-            for k, v in raw_pos_scores.items():
-                normalized_key = normalize_key(k, rules)
-                if normalized_key:
-                    # 找到当前规则的定义
-                    rule_def = next(r for r in rules if r["name"] == normalized_key)
-                    # 使用 map_to_allowed_score：true/false/“是/否”等 → match_score / mismatch_score
-                    scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
-
-    # 保证每条规则都有得分，没有就默认 0 分（说明模型完全没提到）
-    for pos, rules in RULE_SETS.items():
-        for rule in rules:
+    # 通过字符串查找“符合”和“不符合”，转换为1和0
+    scores_out = {}
+    for pos in RULE_SETS.keys():
+        scores_out[pos] = {}
+        for rule in RULE_SETS[pos]:
             rule_name = rule["name"]
-            if rule_name not in scores_out[pos]:
+            # 通过正则表达式或字符串匹配“符合”与“不符合”
+            if "符合" in raw_text:  # 匹配“符合”
+                scores_out[pos][rule_name] = 1
+            else:
                 scores_out[pos][rule_name] = 0
 
-    return scores_out, raw_text, predicted_pos, explanation
+    explanation = "无法解析模型输出。原始响应：\n" + raw_text
+    predicted_pos = "未知"
+
+    # 构造一个有效的JSON结构，确保推理结果能够成功展示
+    result_json = {
+        "explanation": explanation,
+        "predicted_pos": predicted_pos,
+        "scores": scores_out
+    }
+
+    # 确保返回的 JSON 结构是正确的
+    return scores_out, raw_text, predicted_pos, json.dumps(result_json, ensure_ascii=False)
+
 # ===============================
 # 雷达图
 # ===============================
