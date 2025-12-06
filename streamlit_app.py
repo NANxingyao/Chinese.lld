@@ -1,3 +1,4 @@
+
 import streamlit as st
 import requests
 import json
@@ -158,11 +159,11 @@ MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in R
 def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
     if not isinstance(resp_json, dict): return ""
     try:
-        # --- 处理通义千问 (Qwen) 的响应格式 ---
+        # --- 新增：处理通义千问 (Qwen) 的响应格式 ---
         if "output" in resp_json and "text" in resp_json["output"]:
             return resp_json["output"]["text"]
             
-        # --- 处理 OpenAI 系列的响应格式 ---
+        # --- 原有的：处理 OpenAI 系列的响应格式 ---
         if "choices" in resp_json and len(resp_json["choices"]) > 0:
             choice = resp_json["choices"][0]
             if "message" in choice and "content" in choice["message"]:
@@ -173,82 +174,32 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
         pass
     # 如果以上都失败，返回整个响应的字符串形式，用于调试
     return json.dumps(resp_json, ensure_ascii=False)
-
-def fix_common_json_errors(json_str: str) -> str:
-    """自动修复常见的JSON格式错误（无需依赖外部库）"""
-    # 1. 给无引号的键加双引号（比如 key: → "key":）
-    json_str = re.sub(r'([{,]\s*)([\w_]+)(\s*:)', r'\1"\2"\3', json_str)
-    # 2. 把单引号键改成双引号（比如 'key': → "key":）
-    json_str = re.sub(r"([{,]\s*)'([\w_]+)'(\s*:)", r'\1"\2"\3', json_str)
-    # 3. 补全键值对后的缺失逗号（比如 "a":true "b":false → "a":true, "b":false）
-    json_str = re.sub(r'("[\w_]+":\s*[^,}]+)\s+("[\w_]+":)', r'\1,\2', json_str)
-    # 4. 移除末尾多余的逗号（比如 {"a":1,} → {"a":1}）
-    json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
-    # 5. 把大写布尔值改成小写（True→true, False→false）
-    json_str = re.sub(r'\bTrue\b', 'true', json_str)
-    json_str = re.sub(r'\bFalse\b', 'false', json_str)
-    # 6. 替换中文标点为英文
-    json_str = json_str.replace("：", ":").replace("，", ",").replace("“", '"').replace("”", '"')
-    return json_str
-
+    
 def extract_json_from_text(text: str) -> Tuple[dict, str]:
-    """
-    增强版JSON提取函数：
-    1. 优先用专属分隔符提取
-    2. 自动修复常见格式错误
-    3. 多层级容错
-    """
-    if not text:
-        return None, ""
-
-    # 第一步：用专属分隔符精准提取JSON块（最优先）
-    start_marker = "====JSON_BEGIN===="
-    end_marker = "====JSON_END===="
-    start_idx = text.find(start_marker)
-    end_idx = text.find(end_marker)
-    if start_idx != -1 and end_idx > start_idx:
-        # 提取分隔符之间的内容
-        json_str = text[start_idx + len(start_marker):end_idx].strip()
-        # 修复常见错误
-        json_str = fix_common_json_errors(json_str)
-        # 尝试解析
-        try:
-            parsed = json.loads(json_str)
-            st.success("✅ 通过专属分隔符成功解析JSON")
-            return parsed, json_str
-        except Exception as e:
-            st.warning(f"分隔符提取的JSON解析失败，错误：{str(e)[:100]}")
-            st.code(f"修复后的JSON：\n{json_str}", language="json")
-
-    # 第二步：fallback到代码块提取
-    json_block_pattern = re.compile(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', re.IGNORECASE)
-    json_block_matches = json_block_pattern.findall(text)
-    for json_str in json_block_matches:
-        json_str = fix_common_json_errors(json_str.strip())
-        try:
-            parsed = json.loads(json_str)
-            st.success("✅ 通过代码块成功解析JSON")
-            return parsed, json_str
-        except Exception as e:
-            continue
-
-    # 第三步：最后尝试提取所有大括号内容
-    all_json_matches = re.findall(r'\{[\s\S]*\}', text)
-    for json_str in all_json_matches:
-        json_str = fix_common_json_errors(json_str.strip())
-        try:
-            parsed = json.loads(json_str)
-            st.success("✅ 通过大括号匹配成功解析JSON")
-            return parsed, json_str
-        except Exception as e:
-            continue
-
-    # 所有方法失败
-    st.warning("⚠️ 无法提取有效JSON，将使用默认得分")
-    # 显示原始文本供调试
-    with st.expander("📝 原始响应文本（调试用）", expanded=False):
-        st.code(text, language="text")
-    return None, text
+    if not text: return None, ""
+    text = text.strip()
+    # 尝试直接解析
+    try: return json.loads(text), text
+    except: pass
+    
+    # 尝试提取文本中的JSON块
+    match = re.search(r"(\{[\s\S]*\})", text)
+    if not match: return None, text
+    
+    json_str = match.group(1)
+    # 清理常见的格式问题
+    json_str = json_str.replace("：", ":").replace("，", ",").replace("“", '"').replace("”", '"')
+    json_str = re.sub(r"'(\s*[^']+?\s*)'\s*:", r'"\1":', json_str)
+    json_str = re.sub(r":\s*'([^']*?)'", r': "\1"', json_str)
+    json_str = re.sub(r",\s*([}\]])", r"\1", json_str) # 去除 trailing commas
+    json_str = re.sub(r"\bTrue\b", "true", json_str)
+    json_str = re.sub(r"\bFalse\b", "false", json_str)
+    json_str = re.sub(r"\bNone\b", "null", json_str)
+    
+    try: return json.loads(json_str), json_str
+    except Exception as e:
+        st.warning(f"解析JSON失败: {e}")
+        return None, text
 
 def normalize_key(k: str, pos_rules: list) -> str:
     if not isinstance(k, str): return None
@@ -280,8 +231,13 @@ def calculate_membership(scores_all: Dict[str, Dict[str, int]]) -> Dict[str, flo
     membership = {}
     for pos, scores in scores_all.items():
         total_score = sum(scores.values())
-        # 总得分除以100得到隶属度，限制在[-1, 1]区间
+        # 改为：总得分除以100得到隶属度（几十分对应零点几）
+        # 同时限制在 [0, 1] 区间内
+        # 负分可降低隶属度，保留原始计算逻辑但不强制截断为0（可选调整）
         normalized = total_score / 100
+        # 若需允许隶属度为负（更准确反映负分影响），可改为：
+        # membership[pos] = normalized
+        # 若需限制在[-1, 1]区间：
         membership[pos] = max(-1.0, min(1.0, normalized))
     return membership
 
@@ -336,13 +292,13 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
         return False, {"error": error_msg}, error_msg
 
 # ===============================
-# 词类判定主函数 (超严格Prompt)
+# 词类判定主函数 (优化Prompt)
 # ===============================
 def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str, str]:
     if not word:
         return {}, "", "未知", ""
 
-    # 规则文字说明（给模型看）
+    # 规则文字说明（给模型看，让它老老实实按规则来判断）
     full_rules_by_pos = {
         pos: "\n".join([
             f"- {r['name']}: {r['desc']}（符合: {r['match_score']} 分，不符合: {r['mismatch_score']} 分）"
@@ -351,70 +307,53 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         for pos, rules in RULE_SETS.items()
     }
 
-    # ===== 超严格Prompt：强制模板+专属分隔符 =====
-    system_msg = f"""你是中文词法与语法领域的专家，需严格按照以下要求分析词语「{word}」的词类隶属度，格式错误会导致任务完全失败！
+    # ===== 系统提示：只允许输出“符合/不符合”，禁止自己打数字分 =====
+    system_msg = f"""你是一名中文词法与语法方面的专家。现在要分析词语「{word}」在下列词类中的表现：
 
-【分析范围】
-仅分析以下三类词类：名词、动词、名动词，每条规则仅需判断“符合（true）”或“不符合（false）”。
+- 需要判断的词类：名词、动词、名动词
+- 评分规则已经由系统定义，你**不要**自己设计分值，也**不要**在 JSON 中给出具体数字分数
+- 你只需要判断每一条规则是“符合”还是“不符合”，程序会自动根据 match_score / mismatch_score 换算成正分或负分
 
-【输出格式（必须100%遵守，缺一不可）】
-1. 首先输出**详细推理过程**：
-   - 逐条规则说明判断结果（符合/不符合）+ 理由 + 例句
-   - 格式示例：「名词-N1_可受数量词修饰：符合。理由：苹果可以说“一个苹果”，受数量词修饰。例句：我买了一个苹果。」
-   - 必须覆盖名词（8条）、动词（9条）、名动词（10条）的所有规则，不能遗漏任何一条
+【各词类的规则说明（仅供你判断使用）】
 
-2. 推理过程结束后，单独输出**专属分隔符包裹的JSON**（分隔符必须单独成行，不能修改）：
-====JSON_BEGIN====
-{{
-  "explanation": "这里填写完整的推理过程文本（包含所有规则的判断理由和例句）",
-  "predicted_pos": "从名词/动词/名动词中选择一个作为最终判定结果",
-  "scores": {{
-    "名词": {{
-      "N1_可受数量词修饰": true,
-      "N2_不能受副词修饰": true,
-      "N3_可作主宾语": true,
-      "N4_可作中心语或作定语": true,
-      "N5_可后附的字结构": true,
-      "N6_可后附方位词构处所": true,
-      "N7_不能作谓语核心": true,
-      "N8_不能作补语/一般不作状语": true
-    }},
-    "动词": {{
-      "V1_可受否定'不/没有'修饰": true,
-      "V2_可后附/插入时体助词'着/了/过'": true,
-      "V3_可带真宾语或通过介词引导论元": true,
-      "V4_程度副词与带宾语的关系": true,
-      "V5_可有重叠/正反重叠形式": true,
-      "V6_可做谓语或谓语核心": true,
-      "V7_不能作状语修饰动词性成分": true,
-      "V8_可作'怎么/怎样'提问或'这么/这样/那么'回答": true,
-      "V9_不能跟在'多/多么'之后提问或表示感叹": true
-    }},
-    "名动词": {{
-      "NV1_可被\"不/没有\"否定且肯定形式-1": true,
-      "NV2_可附时体助词或进入\"……了没有\"格式": true,
-      "NV3_可带真宾语且不受\"很\"修饰": true,
-      "NV4_有重叠和正反重叠形式": true,
-      "NV5_可作多种句法成分且可作形式动词宾语": true,
-      "NV6_不能直接作状语": true,
-      "NV7_可修饰名词或受名词/数量词修饰": true,
-      "NV8_可跟在\"怎么/怎样/这么/这样/那么/那样\"之后": true,
-      "NV9_不能跟在\"多/多么\"之后": true,
-      "NV10_可后附方位词构成处所结构": true
-    }}
-  }}
-}}
-====JSON_END====
+【名词】
+{full_rules_by_pos["名词"]}
 
-【强制要求】
-- JSON必须和上述模板结构完全一致（不能增删字段、不能修改规则名称），仅替换true/false和文本内容
-- JSON中所有键必须用双引号包裹，布尔值必须是小写的true/false，不能使用数字/中文/其他值
-- 分隔符====JSON_BEGIN====和====JSON_END====必须单独成行，且前后不能有其他内容
-- 推理过程必须包含所有规则的判断理由和例句，不能省略
-- 若违反以上任何一条，本次分析视为无效
+【动词】
+{full_rules_by_pos["动词"]}
+
+【名动词】
+{full_rules_by_pos["名动词"]}
+
+【输出要求】
+
+1. 在 explanation 字段中，必须**逐条规则**说明判断依据，并举例（可以自己造句）：
+   - 格式示例：
+     - 「名词-N1_可受数量词修饰：符合。理由：……。例句：……。」
+     - 「动词-V2_可后附/插入时体助词'着/了/过'：不符合。理由：……。例句：……。」
+   - explanation 里要覆盖 **三个词类的所有规则**，不能只写几条。
+
+2. 在 JSON 中的 scores 字段里：
+   - 每一类下的每一条规则，只能给出 **布尔值 true / false**，表示是否符合该规则
+   - 严禁在 scores 里使用数值分数（例如 0, 5, 10 等）
+   - 如果你不确定，也必须做出判断（true 或 false），不要用 null、0 或其它值
+
+3. predicted_pos：
+   - 请选择「名词」「动词」「名动词」之一，作为该词语最典型的词类。
+
+4. 最后输出时，先写详细的文字推理，最后单独给出一个合法的 JSON（不要再加注释）。
 """
 
-    user_prompt = f"""请严格按照上述要求，分析汉语词语「{word}」的词类隶属度，输出推理过程和规范的JSON。"""
+    # 用户提示：再强调一次
+    user_prompt = f"""
+请严格按照上述要求分析词语「{word}」。
+
+特别注意：
+- 在 JSON 的 scores 部分，只能用 true/false 表示“是否符合规则”，不能使用任何数字。
+- explanation 中必须对每一条规则写明“符合/不符合 + 理由 + 例句”。
+
+请先给出详细推理过程，然后在最后单独输出一个 JSON 对象。
+"""
 
     with st.spinner("正在调用大模型进行分析，请稍候..."):
         ok, resp_json, err_msg = call_llm_api_cached(
@@ -432,44 +371,38 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         return {}, f"调用失败: {err_msg}", "未知", f"调用失败: {err_msg}"
 
     raw_text = extract_text_from_response(resp_json)
+    
+    # 增强容错处理：尝试多种方式解析
     parsed_json, cleaned_json_text = extract_json_from_text(raw_text)
 
-    # 解析JSON并补全缺失的规则
     if parsed_json and isinstance(parsed_json, dict):
         explanation = parsed_json.get("explanation", "模型未提供详细推理过程。")
         predicted_pos = parsed_json.get("predicted_pos", "未知")
         raw_scores = parsed_json.get("scores", {})
-        
-        # 关键：补全所有缺失的词类和规则（兜底）
-        for pos in RULE_SETS.keys():
-            if pos not in raw_scores:
-                raw_scores[pos] = {}
-            # 补全当前词类的所有规则（默认false）
-            for rule in RULE_SETS[pos]:
-                rule_name = rule["name"]
-                if rule_name not in raw_scores[pos]:
-                    raw_scores[pos][rule_name] = False
     else:
-        # 完全解析失败时，初始化所有规则为默认值
-        explanation = "模型输出格式错误，使用默认得分。"
+        # 加强调试输出，帮助用户看到原始文本
+        st.warning(f"未能从模型响应中解析出有效的JSON。\n原始响应内容：\n{raw_text}")
+        explanation = "无法解析模型输出。原始响应：\n" + raw_text
         predicted_pos = "未知"
-        raw_scores = {
-            pos: {rule["name"]: False for rule in RULE_SETS[pos]} 
-            for pos in RULE_SETS.keys()
-        }
+        raw_scores = {}
+        cleaned_json_text = raw_text  # 展示原始文本
 
-    # 映射得分（true/false → 具体分值）
+    # --- 关键：初始化所有词类的得分字典 ---
     scores_out = {pos: {} for pos in RULE_SETS.keys()}
+
+    # 只把“符合/不符合”转成具体分值（正分 / 负分）
     for pos, rules in RULE_SETS.items():
         raw_pos_scores = raw_scores.get(pos, {})
         if isinstance(raw_pos_scores, dict):
             for k, v in raw_pos_scores.items():
                 normalized_key = normalize_key(k, rules)
                 if normalized_key:
+                    # 找到当前规则的定义
                     rule_def = next(r for r in rules if r["name"] == normalized_key)
+                    # 使用 map_to_allowed_score：true/false/“是/否”等 → match_score / mismatch_score
                     scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
 
-    # 保证每条规则都有得分（最终兜底）
+    # 保证每条规则都有得分，没有就默认 0 分（说明模型完全没提到）
     for pos, rules in RULE_SETS.items():
         for rule in rules:
             rule_name = rule["name"]
@@ -477,7 +410,6 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
                 scores_out[pos][rule_name] = 0
 
     return scores_out, raw_text, predicted_pos, explanation
-
 # ===============================
 # 雷达图
 # ===============================
@@ -559,6 +491,7 @@ def main():
 
     st.markdown("---")
 
+    
     # --- 使用说明 ---
     info_container = st.container()
     with info_container:
@@ -571,7 +504,7 @@ def main():
             5. 分析结果将显示在下方，包括隶属度排名、详细得分、推理过程和原始响应。
             """)
 
-    # --- 结果显示区 ---
+     # --- 结果显示区 ---
     if analyze_button and word and selected_model_info["api_key"]:
         status_placeholder = st.empty()
         status_placeholder.info(f"正在为词语「{word}」启动分析...")
@@ -589,6 +522,8 @@ def main():
         st.success(f'**分析完成**：词语「{word}」最可能的词类是 【{predicted_pos}】，隶属度为 {membership.get(predicted_pos, 0):.4f}')
         
         col_results_1, col_results_2 = st.columns(2)
+        
+        # --- 关键修复：将两个列的内容缩进，放入 if 语句块内 ---
         
         with col_results_1:
             st.subheader("🏆 词类隶属度排名")
@@ -643,15 +578,14 @@ def main():
             
             st.subheader("📥 模型原始响应")
             with st.expander("点击展开查看原始响应", expanded=False):
-                st.code(raw_text, language="text")
-            
-            st.subheader("🔍 模型推理过程")
-            with st.expander("点击展开查看推理过程", expanded=False):
-                st.markdown(explanation)
+                st.code(raw_text, language="json")
+
+    # --- if 语句块结束 ---
+
+
 
 if __name__ == "__main__":
     main()
-
 # ===============================
 # 页面底部说明
 # ===============================
