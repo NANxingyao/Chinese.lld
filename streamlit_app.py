@@ -156,33 +156,16 @@ MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in R
 # ===============================
 # 工具函数
 # ===============================
-import json
-
-def extract_text_from_response(resp_json: dict) -> str:
-    """
-    解析不同模型（如 DeepSeek、Kimi、Qwen、OpenAI）的响应数据，
-    保证原始响应的结构不变，仅提取文本内容。
-    """
-
-    # 判断输入是否为字典类型
+def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
     if not isinstance(resp_json, dict):
         print("Error: Response is not a valid dictionary")
         return ""
-    
     try:
-        # --- 处理 Qwen 的响应格式 ---
+        # Check if the response follows the "Qwen" format
         if "output" in resp_json and "text" in resp_json["output"]:
             return resp_json["output"]["text"]
         
-        # --- 处理 DeepSeek 的响应格式 ---
-        if "data" in resp_json and "text" in resp_json["data"]:
-            return resp_json["data"]["text"]
-
-        # --- 处理 Kimi 的响应格式 ---
-        if "response" in resp_json and "result" in resp_json["response"]:
-            return resp_json["response"]["result"]
-
-        # --- 处理 OpenAI 系列的响应格式 ---
+        # Check if the response follows OpenAI's format
         if "choices" in resp_json and len(resp_json["choices"]) > 0:
             choice = resp_json["choices"][0]
             if "message" in choice and "content" in choice["message"]:
@@ -191,16 +174,13 @@ def extract_text_from_response(resp_json: dict) -> str:
                 if k in choice:
                     return choice[k]
 
-        # 如果没有匹配到任何已知的模型格式，返回原始响应
-        print("Unexpected response format:", json.dumps(resp_json, ensure_ascii=False, indent=2))
-        return json.dumps(resp_json, ensure_ascii=False)
-        
+        # If no known format is matched, print the response for debugging
+        print("Unexpected response format:", resp_json)
     except Exception as e:
-        print(f"Error while extracting text: {e}")
-        # 如果解析失败，返回原始响应的字符串内容
-        print("Response content:", json.dumps(resp_json, ensure_ascii=False, indent=2))
-        return json.dumps(resp_json, ensure_ascii=False)
-
+        print("Error while extracting text:", e)
+    
+    # If parsing fails, return the entire response as a JSON string for debugging
+    return json.dumps(resp_json, ensure_ascii=False)
 
 
 def normalize_key(k: str, pos_rules: list) -> str:
@@ -262,10 +242,8 @@ def prepare_detailed_scores_df(scores_all: Dict[str, Dict[str, int]]) -> pd.Data
 # 安全的 LLM 调用函数 (增加超时)
 # ===============================
 def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, temperature=0.0):
-    if not _api_key:
-        return False, {"error": "API Key 为空"}, "API Key 未提供"
-    if _provider not in MODEL_CONFIGS:
-        return False, {"error": f"未知提供商 {_provider}"}, f"未知提供商 {_provider}"
+    if not _api_key: return False, {"error": "API Key 为空"}, "API Key 未提供"
+    if _provider not in MODEL_CONFIGS: return False, {"error": f"未知提供商 {_provider}"}, f"未知提供商 {_provider}"
 
     cfg = MODEL_CONFIGS[_provider]
     url = f"{cfg['base_url'].rstrip('/')}{cfg['endpoint']}"
@@ -273,20 +251,27 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
     payload = cfg["payload"](_model, messages, max_tokens=max_tokens, temperature=temperature)
 
     try:
+        # 增加超时设置到120秒
         response = requests.post(url, headers=headers, json=payload, timeout=120)
         response.raise_for_status()
-
-        if response.status_code != 200:
-            return False, {"error": f"请求失败，状态码: {response.status_code}"}, f"请求失败，状态码: {response.status_code}"
-
         return True, response.json(), ""
-
     except requests.exceptions.Timeout:
-        return False, {"error": "请求超时"}, "请求超时"
+        error_msg = "请求超时。模型可能正忙或网络连接较慢。建议尝试其他模型或稍后再试。"
+        return False, {"error": error_msg}, error_msg
     except requests.exceptions.RequestException as e:
-        return False, {"error": f"请求错误: {str(e)}"}, f"请求错误: {str(e)}"
+        # 对于4xx和5xx错误，提取更多信息
+        error_msg = f"API请求失败: {str(e)}"
+        if hasattr(e, 'response') and e.response is not None:
+            try:
+                error_details = e.response.json()
+                if 'error' in error_details:
+                    error_msg += f" 详情: {error_details['error']['message']}"
+            except:
+                error_msg += f" 响应内容: {e.response.text[:200]}..." # 只显示部分内容
+        return False, {"error": error_msg}, error_msg
     except Exception as e:
-        return False, {"error": f"未知错误: {str(e)}"}, f"未知错误: {str(e)}"
+        error_msg = f"发生未知错误: {str(e)}"
+        return False, {"error": error_msg}, error_msg
 
 # ===============================
 # 词类判定主函数 (优化Prompt)
@@ -418,7 +403,7 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
         st.warning("无法绘制雷达图：没有有效词类。")
         return
     values = list(scores_norm.values())
-
+    
     # 闭合雷达图
     categories += [categories[0]]
     values += [values[0]]
@@ -427,8 +412,7 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
     fig.update_layout(
         polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
         showlegend=False,
-        title=dict(text=title, x=0.5, font=dict(size=16)),
-        template="plotly_dark"  # 使用黑色主题增强可视化效果
+        title=dict(text=title, x=0.5, font=dict(size=16))
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -472,11 +456,8 @@ def main():
                         )
                     if ok:
                         st.success("✅ 模型链接测试成功！")
-                    if not ok:
-                        st.error(f"模型调用失败: {err_msg}")
-                        st.info("请确保API密钥有效，网络连接正常，或者稍后重试。")
-                        return {}, f"调用失败: {err_msg}", "未知", f"调用失败: {err_msg}"
-
+                    else:
+                        st.error(f"❌ 模型链接测试失败: {err_msg}")
 
         with col3:
             st.subheader("🔤 词语输入")
@@ -596,3 +577,4 @@ st.markdown(
     "</div>",
     unsafe_allow_html=True
 )
+
