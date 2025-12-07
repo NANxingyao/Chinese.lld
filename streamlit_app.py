@@ -156,10 +156,11 @@ MAX_SCORES = {pos: sum(abs(r["match_score"]) for r in rules) for pos, rules in R
 # ===============================
 # 工具函数
 # ===============================
-def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
+def extract_json_from_text(resp_json: Dict[str, Any]) -> str:
     if not isinstance(resp_json, dict):
         print("Error: Response is not a valid dictionary")
         return ""
+    
     try:
         # Check if the response follows the "Qwen" format
         if "output" in resp_json and "text" in resp_json["output"]:
@@ -180,6 +181,7 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
         print("Error while extracting text:", e)
     
     # If parsing fails, return the entire response as a JSON string for debugging
+    print("Returning raw response:", resp_json)  # Log raw response
     return json.dumps(resp_json, ensure_ascii=False)
 
 
