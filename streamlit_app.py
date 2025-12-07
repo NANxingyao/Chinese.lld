@@ -582,11 +582,6 @@ def main():
             
             st.success(f'**分析完成**：词语「{word}」最可能的词类是 **【{predicted_pos}】**，隶属度为 **{final_membership:.4f}**')
             
-            # --- 详细推理过程 ---
-            st.subheader("💡 模型详细推理过程")
-            st.markdown(explanation)
-            st.markdown("---")
-            
             col_results_1, col_results_2 = st.columns(2)
             
             with col_results_1:
