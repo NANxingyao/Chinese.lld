@@ -599,7 +599,9 @@ def main():
                 
                 # 1. 计算所有词类的总分
                 pos_total_scores = {pos: sum(scores_all[pos].values()) for pos in RULE_SETS.keys()}
-               
+                
+                # 按总分降序排序
+                sorted_pos_names = sorted(pos_total_scores.keys(), key=lambda pos: pos_total_scores[pos], reverse=True)
                 
                 # 2. 依次显示所有词类（而不是只显示前10，让用户可以看全部）
                 for pos in sorted_pos_names:
