@@ -549,117 +549,142 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
     st.plotly_chart(fig, use_container_width=True)
 
 # ===============================
-# 【最终增强版】批量处理（实时存档 + 断点生成）
+# 【智能续传版】批量处理（跳过已跑过的词 + 实时入库）
 # ===============================
 def process_and_style_excel(df, selected_model_info, target_col_name):
     output = io.BytesIO()
-    
     processed_rows = []
+    
     progress_bar = st.progress(0)
     status_text = st.empty()
-    backup_msg = st.empty() # 用于显示备份状态
     
     total = len(df)
     
-    # 定义本地备份文件名 (在脚本同级目录下)
-    backup_file = "process_backup.csv"
+    # --- 1. 定义本地持久化存储文件 (相当于你的“总账本”) ---
+    # 这个文件会生成在你的脚本同级目录下
+    db_file = "history_database.csv"
     
-    # 如果存在旧的备份文件，先删除，避免数据混淆
-    if os.path.exists(backup_file):
+    # --- 2. 加载已有历史数据 ---
+    existing_data = {} # 格式: {'苹果': {row_data}, '发展': {row_data}}
+    
+    if os.path.exists(db_file):
         try:
-            os.remove(backup_file)
-        except:
-            pass # 如果删不掉就算了
+            # 读取历史记录
+            history_df = pd.read_csv(db_file)
+            # 确保全是字符串以避免匹配错误
+            history_df['词语'] = history_df['词语'].astype(str).str.strip()
+            
+            # 将历史数据转为字典，方便快速查询
+            # orient='index' 会以索引为key，所以我们手动遍历
+            for _, row in history_df.iterrows():
+                w = row['词语']
+                existing_data[w] = row.to_dict()
+            
+            st.info(f"📚 已加载本地历史记录：发现 {len(existing_data)} 个已分析过的词。本次将自动跳过这些词！")
+        except Exception as e:
+            st.warning(f"读取历史文件失败 (可能是格式问题)，本次将重新分析: {e}")
 
-    # --- 使用 try-except 块包裹循环 ---
-    # 这样即使中途报错，也能执行最后的 Excel 生成步骤
     try:
         for index, row in df.iterrows():
             word = str(row[target_col_name]).strip()
             
-            # --- 重试机制 ---
-            max_retries = 3
-            success = False
-            scores_all = {}
-            raw_text = ""
-            predicted_pos = "请求失败"
-            explanation = "多次重试后仍无法获取结果"
-            
-            for attempt in range(max_retries):
-                try:
-                    status_text.text(f"正在处理 ({index + 1}/{total}): {word} ... (第 {attempt + 1} 次尝试)")
-                    
-                    scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
-                        word=word,
-                        provider=selected_model_info["provider"],
-                        model=selected_model_info["model"],
-                        api_key=selected_model_info["api_key"]
-                    )
-                    
-                    if scores_all:
-                        success = True
-                        break 
-                    else:
+            # --- 3. 检查：这个词以前跑过吗？ ---
+            if word in existing_data:
+                # A. 【已存在】直接使用历史数据，不调 API，速度极快
+                status_text.text(f"♻️ 使用历史缓存 ({index + 1}/{total}): {word}")
+                # 从历史字典里拿数据
+                cached_row = existing_data[word]
+                # 确保字段对其（防止历史文件版本不同）
+                new_row = {
+                    "词语": word,
+                    "动词": cached_row.get("动词", 0),
+                    "名词": cached_row.get("名词", 0),
+                    "名动词": cached_row.get("名动词", 0),
+                    "差值/距离": cached_row.get("差值/距离", 0),
+                    "原始响应": cached_row.get("原始响应", ""),
+                    "_predicted_pos": cached_row.get("_predicted_pos", "未知")
+                }
+                processed_rows.append(new_row)
+                # 稍微延时一点点让进度条动画顺滑，不需要 sleep 1秒
+                time.sleep(0.01) 
+                
+            else:
+                # B. 【新词】需要调用 API
+                # --- API 调用逻辑 (带重试) ---
+                max_retries = 3
+                success = False
+                scores_all = {}
+                raw_text = ""
+                predicted_pos = "请求失败"
+                explanation = "多次重试失败"
+                
+                for attempt in range(max_retries):
+                    try:
+                        status_text.text(f"🚀 正在分析新词 ({index + 1}/{total}): {word} ...")
+                        
+                        scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
+                            word=word,
+                            provider=selected_model_info["provider"],
+                            model=selected_model_info["model"],
+                            api_key=selected_model_info["api_key"]
+                        )
+                        if scores_all:
+                            success = True
+                            break 
+                        else:
+                            time.sleep(2)
+                    except Exception as e:
+                        print(f"Err: {e}")
                         time.sleep(2)
+                
+                # --- 数据计算 ---
+                membership = calculate_membership(scores_all) if success and scores_all else {}
+                score_v = membership.get("动词", 0.0)
+                score_n = membership.get("名词", 0.0)
+                score_nv = membership.get("名动词", 0.0)
+                diff_val = round(abs(score_v - score_n), 4)
+                
+                new_row = {
+                    "词语": word,
+                    "动词": score_v,
+                    "名词": score_n,
+                    "名动词": score_nv,
+                    "差值/距离": diff_val,
+                    "原始响应": raw_text if success else f"错误: {explanation}",
+                    "_predicted_pos": predicted_pos
+                }
+                
+                processed_rows.append(new_row)
+                
+                # --- 4. 【核心】新结果立刻追加写入本地数据库 ---
+                try:
+                    temp_df = pd.DataFrame([new_row])
+                    # 如果文件不存在，写入表头；如果存在，不写表头直接追加
+                    write_header = not os.path.exists(db_file)
+                    temp_df.to_csv(db_file, mode='a', header=write_header, index=False, encoding='utf-8-sig')
                 except Exception as e:
-                    print(f"Error: {e}")
-                    time.sleep(2)
-            
-            # --- 数据处理 ---
-            membership = calculate_membership(scores_all) if success and scores_all else {}
-            score_v = membership.get("动词", 0.0)
-            score_n = membership.get("名词", 0.0)
-            score_nv = membership.get("名动词", 0.0)
-            diff_val = round(abs(score_v - score_n), 4)
-            
-            new_row = {
-                "词语": word,
-                "动词": score_v,
-                "名词": score_n,
-                "名动词": score_nv,
-                "差值/距离": diff_val,
-                "原始响应": raw_text if success else f"错误: {explanation}",
-                "_predicted_pos": predicted_pos
-            }
-            
-            # 1. 加入内存列表（用于最后生成漂亮Excel）
-            processed_rows.append(new_row)
-            
-            # 2. 【核心修改】实时写入本地 CSV 备份
-            # mode='a' 表示追加模式，header 只有在文件不存在时才写入
-            try:
-                temp_df = pd.DataFrame([new_row])
-                write_header = not os.path.exists(backup_file)
-                temp_df.to_csv(backup_file, mode='a', header=write_header, index=False, encoding='utf-8-sig')
-                backup_msg.info(f"💾 已实时备份 {index + 1} 条数据到本地文件: `{backup_file}` (位于脚本同目录下)")
-            except Exception as e:
-                print(f"备份失败: {e}")
+                    print(f"写入数据库失败: {e}")
+                
+                # 调用完 API 后强制休息，防止封号
+                time.sleep(1)
 
-            # 更新进度
+            # 更新进度条
             progress_bar.progress((index + 1) / total)
-            
-            # 强制降速
-            time.sleep(1)
 
     except Exception as e:
-        st.error(f"⚠️ 发生意外中断: {e}")
-        st.warning("🛑 正在为您抢救已完成的数据...")
-    
+        st.error(f"意外中断: {e}")
+        st.warning("已保留现有进度，正在生成结果...")
+
     # ==========================================
-    # 无论循环是否完成，或者是中途报错跳出
-    # 下面的代码都会执行，为您生成 Excel
+    # 生成最终的 Excel 报表 (带标黄)
     # ==========================================
-    
     if not processed_rows:
-        st.error("❌ 没有成功处理任何数据。")
         return None
 
-    st.info(f"正在生成结果文件，共包含 {len(processed_rows)} 条有效数据...")
+    st.success(f"✅ 处理完成！(其中 {len(processed_rows) - (total - len(existing_data))} 个词使用了历史缓存，未消耗 Token)")
 
-    # 生成 DataFrame
     result_df = pd.DataFrame(processed_rows)
     
-    # 导出 Excel 并标黄
     try:
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             cols = ["词语", "动词", "名词", "名动词", "差值/距离", "原始响应"]
@@ -667,7 +692,6 @@ def process_and_style_excel(df, selected_model_info, target_col_name):
             
             workbook = writer.book
             worksheet = writer.sheets['分析结果']
-            
             yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
             
             for i, data_row in enumerate(processed_rows):
@@ -682,11 +706,9 @@ def process_and_style_excel(df, selected_model_info, target_col_name):
                 if target_idx:
                     worksheet.cell(row=row_num, column=target_idx).fill = yellow_fill
     except Exception as e:
-        st.error(f"生成 Excel 文件时出错: {e}")
-        # 如果Excel生成失败，至少返回CSV备份的内容
+        st.error(f"Excel生成错误: {e}")
         return None
 
-    status_text.success(f"✅ 处理结束！成功获取 {len(processed_rows)}/{total} 个词语。")
     return output.getvalue()
     
 # ===============================
