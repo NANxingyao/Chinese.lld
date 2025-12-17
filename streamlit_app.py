@@ -143,11 +143,38 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
     except Exception: return json.dumps(resp_json, ensure_ascii=False)
 
 def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
-    match = re.search(r"(\{.*\})", text.strip(), re.DOTALL)
-    if not match: return None, text
-    json_text = match.group(1).strip()
-    try: return json.loads(json_text), json_text
-    except json.JSONDecodeError: return None, json_text
+    """
+    【强力修复版】
+    1. 优先提取 ```json ... ``` 代码块
+    2. 其次提取最外层 {...}
+    3. 提取失败时返回 None，但保留原始文本用于兜底显示
+    """
+    if not text: return None, ""
+    
+    json_str = ""
+    # 策略1: 找 Markdown 代码块
+    code_match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
+    if code_match:
+        json_str = code_match.group(1).strip()
+    
+    # 策略2: 找最外层大括号 (如果策略1失败)
+    if not json_str:
+        match = re.search(r"(\{.*\})", text.strip(), re.DOTALL)
+        if match: json_str = match.group(1).strip()
+    
+    if not json_str: return None, text
+
+    try:
+        # 尝试标准解析
+        return json.loads(json_str), json_str
+    except json.JSONDecodeError:
+        try:
+            # 策略3: 简单的容错处理 (比如末尾多了逗号)
+            # 这是一个简单的尝试，如果还不行就放弃
+            fixed_str = re.sub(r",\s*\}", "}", json_str)
+            return json.loads(fixed_str), json_str
+        except:
+            return None, text
 
 def normalize_key(k: str, pos_rules: list) -> str:
     if not isinstance(k, str): return None
@@ -290,10 +317,13 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
     fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[-1, 1])), showlegend=False, title=dict(text=title, x=0.5))
     st.plotly_chart(fig, use_container_width=True)
 
-# ===============================
-# 【增强版】Excel 批量处理 + 本地数据库
-# ===============================
 def process_and_style_excel(df, selected_model_info, target_col_name):
+    """
+    【最终稳定版】
+    1. 实时保存：每跑一个词，立刻存入 history_database.csv
+    2. 智能跳过：自动读取本地历史，跳过已跑过的词
+    3. 兜底显示：如果JSON解析失败，强制保留原始文本作为推理过程
+    """
     output = io.BytesIO()
     processed_rows = []
     
@@ -301,117 +331,130 @@ def process_and_style_excel(df, selected_model_info, target_col_name):
     status_text = st.empty()
     
     total = len(df)
+    db_file = "history_database.csv" # 本地数据库文件
     
-    # 1. 定义本地数据库文件 (自动在当前目录下生成)
-    db_file = "history_database.csv"
-    
-    # 2. 读取已有历史
+    # --- A. 加载历史数据 (用于跳过) ---
     existing_data = {}
     if os.path.exists(db_file):
         try:
-            history_df = pd.read_csv(db_file)
-            history_df['词语'] = history_df['词语'].astype(str).str.strip()
-            for _, row in history_df.iterrows():
-                existing_data[row['词语']] = row.to_dict()
-            st.info(f"📚 已加载 {len(existing_data)} 条历史记录，将自动跳过已分析词语。")
-        except:
-            pass
+            # 读取时强制转为字符串，避免匹配错误
+            hist_df = pd.read_csv(db_file)
+            hist_df['词语'] = hist_df['词语'].astype(str).str.strip()
+            # 建立索引
+            for _, r in hist_df.iterrows():
+                existing_data[r['词语']] = r.to_dict()
+            st.info(f"📚 已加载 {len(existing_data)} 条本地历史记录，将自动跳过这些词。")
+        except Exception as e:
+            st.warning(f"历史记录读取警告: {e}")
 
-    try:
-        for index, row in df.iterrows():
-            word = str(row[target_col_name]).strip()
-            
-            # 3. 检查是否在历史记录中
-            if word in existing_data:
-                status_text.text(f"♻️ 使用缓存 ({index + 1}/{total}): {word}")
-                cached_row = existing_data[word]
-                new_row = {
-                    "词语": word,
-                    "动词": cached_row.get("动词", 0),
-                    "名词": cached_row.get("名词", 0),
-                    "名动词": cached_row.get("名动词", 0),
-                    "差值/距离": cached_row.get("差值/距离", 0),
-                    "原始响应": cached_row.get("原始响应", ""),
-                    "_predicted_pos": cached_row.get("_predicted_pos", "未知")
-                }
-                processed_rows.append(new_row)
-                time.sleep(0.01) # UI刷新
-            else:
-                # 跑新词
-                max_retries = 3
-                success = False
-                scores_all = {}
-                raw_text = ""
-                predicted_pos = "请求失败"
-                explanation = "重试失败"
-                
-                for attempt in range(max_retries):
-                    try:
-                        status_text.text(f"🚀 分析新词 ({index + 1}/{total}): {word} ...")
-                        scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
-                            word=word,
-                            provider=selected_model_info["provider"],
-                            model=selected_model_info["model"],
-                            api_key=selected_model_info["api_key"]
-                        )
-                        if scores_all:
-                            success = True
-                            break 
-                        else:
-                            time.sleep(2)
-                    except Exception as e:
-                        time.sleep(2)
-                
-                membership = calculate_membership(scores_all) if success and scores_all else {}
-                score_v = membership.get("动词", 0.0)
-                score_n = membership.get("名词", 0.0)
-                score_nv = membership.get("名动词", 0.0)
-                diff_val = round(abs(score_v - score_n), 4)
-                
-                new_row = {
-                    "词语": word,
-                    "动词": score_v,
-                    "名词": score_n,
-                    "名动词": score_nv,
-                    "差值/距离": diff_val,
-                    "原始响应": raw_text if success else f"错误: {explanation}",
-                    "_predicted_pos": predicted_pos
-                }
-                
-                processed_rows.append(new_row)
-                
-                # 4. 实时写入数据库
-                try:
-                    temp_df = pd.DataFrame([new_row])
-                    write_header = not os.path.exists(db_file)
-                    temp_df.to_csv(db_file, mode='a', header=write_header, index=False, encoding='utf-8-sig')
-                except:
-                    pass
-                
-                time.sleep(1) # 降速
-
+    # --- B. 循环处理 ---
+    for index, row in df.iterrows():
+        word = str(row[target_col_name]).strip()
+        
+        # 1. 检查历史 (跳过逻辑)
+        if word in existing_data:
+            status_text.text(f"♻️ 使用本地历史 ({index + 1}/{total}): {word}")
+            # 直接复用历史数据
+            processed_rows.append(existing_data[word])
+            time.sleep(0.01) # UI刷新
             progress_bar.progress((index + 1) / total)
+            continue # 跳过 API 调用
 
-    except Exception as e:
-        st.error(f"中断: {e}")
+        # 2. 调用 API (新词逻辑)
+        max_retries = 3
+        success = False
+        scores_all = {}
+        raw_text = ""
+        predicted_pos = "请求失败"
+        explanation = "多次重试后无响应" # 默认值
 
-    # 生成 Excel
-    if not processed_rows: return None
+        for attempt in range(max_retries):
+            try:
+                status_text.text(f"🚀 正在分析 ({index + 1}/{total}): {word} ...")
+                scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
+                    word=word,
+                    provider=selected_model_info["provider"],
+                    model=selected_model_info["model"],
+                    api_key=selected_model_info["api_key"]
+                )
+                
+                # 只要拿到原始文本就算通信成功，哪怕 JSON 解析失败
+                if raw_text: 
+                    success = True
+                    break
+                time.sleep(2)
+            except Exception as e:
+                time.sleep(2)
+
+        # 3. 结果处理 (即使解析失败，也要保存原始文本)
+        # 如果 scores_all 为空(解析失败)，则隶属度均为 0
+        if success and scores_all:
+            membership = calculate_membership(scores_all)
+            score_v = membership.get("动词", 0.0)
+            score_n = membership.get("名词", 0.0)
+            score_nv = membership.get("名动词", 0.0)
+        else:
+            score_v, score_n, score_nv = 0.0, 0.0, 0.0
+        
+        diff_val = round(abs(score_v - score_n), 4)
+
+        # 关键：如果 explanation 为空（解析失败），则使用 raw_text（原始响应）填充
+        final_explanation = explanation if (explanation and len(explanation) > 5) else raw_text
+        if not final_explanation: final_explanation = "模型未返回任何内容"
+
+        new_row = {
+            "词语": word,
+            "动词": score_v,
+            "名词": score_n,
+            "名动词": score_nv,
+            "差值/距离": diff_val,
+            "原始响应": final_explanation, # 这里确保了内容不会消失
+            "_predicted_pos": predicted_pos
+        }
+        
+        processed_rows.append(new_row)
+
+        # 4. 【核心】实时写入硬盘 (断点保护)
+        try:
+            temp_df = pd.DataFrame([new_row])
+            # 如果文件不存在写表头，存在则追加
+            write_hdr = not os.path.exists(db_file)
+            temp_df.to_csv(db_file, mode='a', header=write_hdr, index=False, encoding='utf-8-sig')
+        except Exception as e:
+            print(f"写入失败: {e}")
+
+        # 降速防封
+        time.sleep(1)
+        progress_bar.progress((index + 1) / total)
+
+    # --- C. 生成最终 Excel ---
+    if not processed_rows:
+        return None
+    
+    status_text.success("✅ 处理完成！所有结果已保存。")
     result_df = pd.DataFrame(processed_rows)
     
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         cols = ["词语", "动词", "名词", "名动词", "差值/距离", "原始响应"]
-        result_df[cols].to_excel(writer, index=False, sheet_name='分析结果')
-        ws = writer.sheets['分析结果']
-        fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-        for i, r in enumerate(processed_rows):
-            target = None
-            if r["_predicted_pos"] == "动词": target = 2
-            elif r["_predicted_pos"] == "名词": target = 3
-            elif r["_predicted_pos"] == "名动词": target = 4
-            if target: ws.cell(row=i+2, column=target).fill = fill
+        # 确保列存在，防止报错
+        valid_cols = [c for c in cols if c in result_df.columns]
+        result_df[valid_cols].to_excel(writer, index=False, sheet_name='分析结果')
+        
+        # 标黄逻辑
+        try:
+            ws = writer.sheets['分析结果']
+            fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+            for i, r in enumerate(processed_rows):
+                if "_predicted_pos" not in r: continue
+                pred = r["_predicted_pos"]
+                target = None
+                if pred == "动词": target = 2
+                elif pred == "名词": target = 3
+                elif pred == "名动词": target = 4
+                if target: ws.cell(row=i+2, column=target).fill = fill
+        except:
+            pass
 
-    status_text.success(f"✅ 完成！")
     return output.getvalue()
 
 # ===============================
@@ -477,7 +520,31 @@ def main():
                 st.error("未找到'词'列")
 
         st.markdown("---")
+        st.subheader("📚 历史数据保险箱")
+        st.caption("这里保存了所有跑过的数据。如果程序中断，请直接下载此文件，不要重新跑。")
         
+        db_file = "history_database.csv"
+        if os.path.exists(db_file):
+            # 读取并去重显示
+            hist_df = pd.read_csv(db_file)
+            st.write(f"当前库中共有 **{len(hist_df)}** 条记录")
+            
+            col_d1, col_d2 = st.columns([1, 4])
+            with col_d1:
+                st.download_button(
+                    label="💾 下载历史记录 (CSV)",
+                    data=hist_df.to_csv(index=False).encode('utf-8-sig'),
+                    file_name="history_rescue.csv",
+                    mime="text/csv",
+                    type="primary"
+                )
+            with col_d2:
+                 if st.button("🗑️ 清空历史 (慎用)"):
+                     os.remove(db_file)
+                     st.rerun()
+            
+            with st.expander("预览历史数据"):
+                st.dataframe(hist_df)
         # ===============================
         # 【新增】历史记录管理区域
         # ===============================
