@@ -15,7 +15,7 @@ from openpyxl.styles import PatternFill
 # 1. 页面配置
 # ===============================
 st.set_page_config(
-    page_title="汉语词类隶属度检测 (批量增强版)",
+    page_title="汉语词类隶属度检测 ",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="collapsed"
