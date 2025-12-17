@@ -302,9 +302,8 @@ for pos, rules in RULE_SETS.items():
         scores_out[pos][r["name"]] = map_to_allowed_score(r, val)
         
 return scores_out, raw, pred, expl
-==========================================
-7. 批量处理逻辑 (核心：实时落盘+智能跳过)
-==========================================
+
+
 def process_batch(df, model_info, col_name): """ 核心机制： 1. 实时追加写入 'history_database.csv'。 2. Try-Except 包裹整个单次循环，报错也继续。 3. 启动时读取 CSV，跳过已存在的词。 """ db_file = "history_database.csv" output = io.BytesIO()
 
 # A. 读取历史，构建跳过列表
@@ -452,9 +451,8 @@ except:
     pass
     
 return output.getvalue()
-===============================
-8. 主程序
-===============================
+
+
 def main(): st.title("📰 汉语词类隶属度检测 (批量旗舰版)")
 
 with st.container():
