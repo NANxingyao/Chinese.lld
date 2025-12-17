@@ -216,66 +216,98 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
         return False, {"error": str(e)}, str(e)
 
 # ===============================
-# 6. 单个词分析逻辑
+# 6. 单个词分析逻辑 (Prompt 深度优化版)
 # ===============================
 def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str):
+    # 1. 准备规则文本
     full_rules = {p: "\n".join([f"- {r['name']}: {r['desc']}" for r in rs]) for p, rs in RULE_SETS.items()}
     
-    system = f"""你是一名汉语词法专家。分析词语「{word}」。
-任务：
-1. 详细分析该词是否符合【名词】【动词】【名动词】的各项规则。
-2. 给出明确的"符合/不符合"判断。
-3. 最后输出符合规范的 JSON。
+    # 2. 构建强约束 Prompt
+    system = f"""你是一名资深的汉语语言学专家。请对词语「{word}」进行严格的句法和词法分析。
 
-规则参考：
-{json.dumps(full_rules, ensure_ascii=False, indent=2)}
+【输出要求】
+请严格按照以下两部分顺序输出：
 
-JSON格式要求：
-{{
-  "explanation": "这里写详细的推理过程...",
-  "predicted_pos": "名词/动词/名动词",
-  "scores": {{
-    "名词": {{ "N1_...": true, ... }},
-    "动词": {{ "V1_...": false, ... }},
-    "名动词": {{ "NV1_...": true, ... }}
-  }}
-}}
+第一部分：详细推理过程 (Markdown格式)
+请完全参照以下格式模板输出，不要省略任何一条规则：
+
+### 详细推理过程
+
+#### 名词
+- **规则名**：符合/不符合。理由：……。例句：……。
+(请对名词的所有规则 N1-N8 逐一分析)
+
+#### 动词
+- **规则名**：符合/不符合。理由：……。例句：……。
+(请对动词的所有规则 V1-V9 逐一分析)
+
+#### 名动词
+- **规则名**：符合/不符合。理由：……。例句：……。
+(请对名动词的所有规则 NV1-NV10 逐一分析)
+
+第二部分：结构化结果 (JSON格式)
+在推理结束后，输出一个 Markdown JSON 代码块。
+- explanation: 将上述推理过程的纯文本汇总填入。
+- predicted_pos: 判定结果 (名词/动词/名动词)。
+- scores: 对应上述每一条规则的布尔值 (true/false)。
+
+【规则参考列表】
+名词规则：
+{full_rules['名词']}
+
+动词规则：
+{full_rules['动词']}
+
+名动词规则：
+{full_rules['名动词']}
 """
+
+    user_prompt = f"开始分析词语「{word}」。请先输出推理文本，最后输出 JSON。"
+
+    # 3. 调用 API
     ok, resp, err = call_llm_api_cached(provider, model, api_key, [
         {"role": "system", "content": system},
-        {"role": "user", "content": f"分析「{word}」"}
+        {"role": "user", "content": user_prompt}
     ])
     
     if not ok: return {}, "", "失败", err
     
+    # 4. 解析结果
     raw = extract_text_from_response(resp)
     data, _ = extract_json_from_text(raw)
     
-    # 兜底：如果JSON解析失败，explanation就是raw文本
+    # 5. 兜底逻辑
     if data:
-        expl = data.get("explanation", raw)
+        # 如果模型很听话把推理写进了 JSON 的 explanation，就用它的
+        # 如果没写，或者太短，就直接用 raw (包含了Markdown文本) 作为 explanation
+        json_expl = data.get("explanation", "")
+        expl = json_expl if len(json_expl) > 50 else raw 
+        
         pred = data.get("predicted_pos", "未知")
         raw_scores = data.get("scores", {})
     else:
-        expl = "解析JSON失败，原始输出如下：\n" + raw
+        expl = raw # 解析失败时，保留原始文本供人工查看
         pred = "未知"
         raw_scores = {}
         
-    # 分数标准化
+    # 6. 分数映射 (模糊匹配键名，防止模型由细微的格式错误)
     scores_out = {p: {} for p in RULE_SETS}
     for pos, rules in RULE_SETS.items():
         s_map = raw_scores.get(pos, {})
         for r in rules:
             val = False
-            # 模糊匹配键名
+            # 尝试匹配：移除空格、下划线后对比
+            target_key = r["name"].replace(" ", "").replace("_", "").upper()
+            
             for k, v in s_map.items():
-                if k.replace(" ", "").upper() == r["name"].replace(" ", "").upper():
+                current_key = k.replace(" ", "").replace("_", "").upper()
+                # 只要规则代码 (如 N1, V2) 包含在键名中即可
+                if target_key in current_key or current_key in target_key:
                     val = v
                     break
             scores_out[pos][r["name"]] = map_to_allowed_score(r, val)
             
     return scores_out, raw, pred, expl
-
 # ===============================
 # 7. 批量处理逻辑 (实时保存 + 增量更新)
 # ===============================
