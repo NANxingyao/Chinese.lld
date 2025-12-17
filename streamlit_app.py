@@ -42,39 +42,62 @@ footer {visibility: hidden;}
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 # ===============================
-# 模型配置 (仅从环境变量获取API Key，移除所有硬编码的API Key默认值)
+# 模型配置 (修改版：启用流式 Stream)
 # ===============================
 MODEL_CONFIGS = {
     "deepseek": {
         "base_url": "https://api.deepseek.com/v1",
         "endpoint": "/chat/completions",
         "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        # 修改点：添加 "stream": True
         "payload": lambda model, messages, **kw: {
-            "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), "temperature": kw.get("temperature", 0.0), "stream": False,
+            "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), 
+            "temperature": kw.get("temperature", 0.0), 
+            "stream": True, 
         },
     },
     "openai": {
         "base_url": "https://api.openai.com/v1",
         "endpoint": "/chat/completions",
         "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        # 修改点：添加 "stream": True
         "payload": lambda model, messages, **kw: {
-            "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), "temperature": kw.get("temperature", 0.0), "stream": False,
+            "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), 
+            "temperature": kw.get("temperature", 0.0), 
+            "stream": True,
         },
     },
     "moonshot": {
         "base_url": "https://api.moonshot.cn/v1",
         "endpoint": "/chat/completions",
         "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        # 修改点：添加 "stream": True
         "payload": lambda model, messages, **kw: {
-            "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), "temperature": kw.get("temperature", 0.0), "stream": False,
+            "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), 
+            "temperature": kw.get("temperature", 0.0), 
+            "stream": True,
         },
     },
     "qwen": {
         "base_url": "https://dashscope.aliyuncs.com/api/v1",
         "endpoint": "/services/aigc/text-generation/generation",
-        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        # 修改点：Qwen Native API 需要 Accept: text/event-stream 来触发 SSE
+        "headers": lambda key: {
+            "Authorization": f"Bearer {key}", 
+            "Content-Type": "application/json",
+            "X-DashScope-SSE": "enable",  # 显式开启 SSE
+            "Accept": "text/event-stream" # 关键：告诉服务器我们要流式
+        },
         "payload": lambda model, messages, **kw: {
-            "model": model, "input": {"messages": messages}, "parameters": {"max_tokens": kw.get("max_tokens", 4096), "temperature": kw.get("temperature", 0.0)},
+            "model": model, 
+            "input": {"messages": messages}, 
+            # 修改点：result_format 设为 message，并且开启 incremental_output 以获得增量更新
+            "parameters": {
+                "max_tokens": kw.get("max_tokens", 4096), 
+                "temperature": kw.get("temperature", 0.0),
+                "result_format": "message",
+                "incremental_output": True 
+            },
         },
     },
 }
@@ -266,10 +289,13 @@ def get_top_10_positions(membership: Dict[str, float]) -> List[Tuple[str, float]
     return sorted(membership.items(), key=lambda x: x[1], reverse=True)[:10]
 
 # ===============================
-# 安全的 LLM 调用函数 (增加超时)
+# 安全的 LLM 调用函数 (流式版)
 # ===============================
 def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, temperature=0.0):
-    """封装请求逻辑，增加超时处理和错误信息提取。"""
+    """
+    封装请求逻辑，使用流式传输 (Streaming) 解决超时问题。
+    逐步接收数据并拼接，最后返回完整的响应结构。
+    """
     if not _api_key: return False, {"error": "API Key 为空"}, "API Key 未提供"
     if _provider not in MODEL_CONFIGS: return False, {"error": f"未知提供商 {_provider}"}, f"未知提供商 {_provider}"
 
@@ -278,32 +304,87 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
     headers = cfg["headers"](_api_key)
     payload = cfg["payload"](_model, messages, max_tokens=max_tokens, temperature=temperature)
 
+    # 用于在界面上实时显示进度的占位符（可选，提升体验）
+    streaming_placeholder = st.empty()
+    full_content = ""
+
     try:
-        # 增加超时设置到120秒
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
-        response.raise_for_status()
-        return True, response.json(), ""
-    except requests.exceptions.Timeout:
-        error_msg = "请求超时。模型可能正忙或网络连接较慢。建议尝试其他模型或稍后再试。"
-        return False, {"error": error_msg}, error_msg
-    except requests.exceptions.RequestException as e:
-        error_msg = f"API请求失败: {str(e)}"
-        if hasattr(e, 'response') and e.response is not None:
-            try:
-                error_details = e.response.json()
-                if 'error' in error_details:
-                    # 尝试提取更详细的错误信息
-                    detail_msg = error_details['error'].get('message') or json.dumps(error_details['error'])
-                    error_msg += f" 详情: {detail_msg}"
+        # 1. 开启 stream=True
+        with requests.post(url, headers=headers, json=payload, stream=True, timeout=60) as response:
+            response.raise_for_status()
+            
+            # 2. 逐行读取流式响应
+            for line in response.iter_lines():
+                if not line: continue
+                
+                # 解码并去除前缀
+                line_text = line.decode('utf-8').strip()
+                
+                # 处理 SSE 格式 (通常以 "data: " 开头)
+                if line_text.startswith("data:"):
+                    json_str = line_text[5:].strip() # 去掉 "data:"
                 else:
-                     error_msg += f" 响应内容: {e.response.text[:200]}..." 
-            except:
-                error_msg += f" 响应内容: {e.response.text[:200]}..." 
+                    # 部分非标准流可能不带 data: 前缀，直接尝试解析
+                    json_str = line_text
+
+                # 遇到结束标记停止
+                if json_str == "[DONE]":
+                    break
+                
+                try:
+                    chunk = json.loads(json_str)
+                    
+                    # --- 提取文本片段 (Delta) ---
+                    delta_text = ""
+                    
+                    # 情况 A: OpenAI / DeepSeek / Moonshot 格式
+                    if "choices" in chunk and len(chunk["choices"]) > 0:
+                        delta = chunk["choices"][0].get("delta", {})
+                        delta_text = delta.get("content", "")
+                    
+                    # 情况 B: Qwen Native 格式 (incremental_output=True)
+                    elif "output" in chunk:
+                        # Qwen Native 在 incremental_output=True 时，output.text 是增量
+                        # 如果是 result_format='message'，结构可能是 output.choices[0].message.content
+                        output = chunk["output"]
+                        if "choices" in output and len(output["choices"]) > 0:
+                             # Qwen 兼容 message 格式
+                             msg = output["choices"][0].get("message", {})
+                             delta_text = msg.get("content", "")
+                        elif "text" in output:
+                             # Qwen 纯文本格式
+                             delta_text = output["text"]
+
+                    if delta_text:
+                        full_content += delta_text
+                        # (可选) 实时在界面展示部分内容，让用户知道没死机
+                        # streaming_placeholder.markdown(full_content + "▌")
+
+                except json.JSONDecodeError:
+                    continue
+        
+        # 清除流式占位符
+        streaming_placeholder.empty()
+
+        # 3. 构造一个模拟的完整响应，以便兼容后续的 extract_text_from_response 函数
+        # 这样您就不需要修改后面的代码了
+        mock_response = {
+            "choices": [{"message": {"content": full_content}}], # OpenAI 风格
+            "output": {"text": full_content} # Qwen 风格兼容
+        }
+        
+        if not full_content:
+             return False, {"error": "未接收到有效内容"}, "模型未返回内容"
+
+        return True, mock_response, ""
+
+    except requests.exceptions.RequestException as e:
+        error_msg = f"网络请求异常: {str(e)}"
         return False, {"error": error_msg}, error_msg
     except Exception as e:
-        error_msg = f"发生未知错误: {str(e)}"
+        error_msg = f"流式处理未知错误: {str(e)}\n已接收内容: {full_content[:100]}..."
         return False, {"error": error_msg}, error_msg
-
+        
 # ===============================
 # 词类判定主函数 (优化Prompt)
 # ===============================
