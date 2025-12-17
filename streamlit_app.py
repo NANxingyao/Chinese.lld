@@ -14,14 +14,14 @@ from openpyxl.styles import PatternFill
 # 页面配置
 # ===============================
 st.set_page_config(
-    page_title="汉语词类隶属度检测划类 (完整版)",
+    page_title="汉语词类隶属度检测划类 (修复版)",
     page_icon="📰",
     layout="wide",
     initial_sidebar_state="collapsed",
     menu_items=None
 )
 
-# 自定义CSS样式 (保持原样)
+# 自定义CSS样式
 hide_streamlit_style = """
 <style>
 header {visibility: hidden;}
@@ -29,16 +29,18 @@ footer {visibility: hidden;}
 .dataframe {font-size: 12px;}
 [data-testid="stSidebar"] { display: none !important; }
 .stApp > div:first-child { padding-top: 2rem; }
+/* 增加原始响应文本区域的高度 */
+.stCode { max-height: 400px; overflow-y: auto; }
 </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 # ===============================
-# 模型配置 (启用流式加速)
+# 模型配置
 # ===============================
 MODEL_CONFIGS = {
     "deepseek": {
-        "base_url": "https://api.deepseek.com/v1",
+        "base_url": "[https://api.deepseek.com/v1](https://api.deepseek.com/v1)",
         "endpoint": "/chat/completions",
         "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         "payload": lambda model, messages, **kw: {
@@ -48,7 +50,7 @@ MODEL_CONFIGS = {
         },
     },
     "openai": {
-        "base_url": "https://api.openai.com/v1",
+        "base_url": "[https://api.openai.com/v1](https://api.openai.com/v1)",
         "endpoint": "/chat/completions",
         "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         "payload": lambda model, messages, **kw: {
@@ -58,7 +60,7 @@ MODEL_CONFIGS = {
         },
     },
     "moonshot": {
-        "base_url": "https://api.moonshot.cn/v1",
+        "base_url": "[https://api.moonshot.cn/v1](https://api.moonshot.cn/v1)",
         "endpoint": "/chat/completions",
         "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         "payload": lambda model, messages, **kw: {
@@ -68,7 +70,7 @@ MODEL_CONFIGS = {
         },
     },
     "qwen": {
-        "base_url": "https://dashscope.aliyuncs.com/api/v1",
+        "base_url": "[https://dashscope.aliyuncs.com/api/v1](https://dashscope.aliyuncs.com/api/v1)",
         "endpoint": "/services/aigc/text-generation/generation",
         "headers": lambda key: {
             "Authorization": f"Bearer {key}", 
@@ -91,9 +93,9 @@ MODEL_CONFIGS = {
 
 MODEL_OPTIONS = {
     "DeepSeek Chat": {"provider": "deepseek", "model": "deepseek-chat", "api_key": os.getenv("DEEPSEEK_API_KEY"), "env_var": "DEEPSEEK_API_KEY"},
-    "OpenAI GPT-4o-mini (推荐)": {"provider": "openai", "model": "gpt-4o-mini", "api_key": os.getenv("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"},
+    "OpenAI GPT-4o-mini": {"provider": "openai", "model": "gpt-4o-mini", "api_key": os.getenv("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"},
     "Moonshot (Kimi)": {"provider": "moonshot", "model": "moonshot-v1-32k", "api_key": os.getenv("MOONSHOT_API_KEY"), "env_var": "MOONSHOT_API_KEY"},
-    "Qwen Turbo (速度快)": {"provider": "qwen", "model": "qwen-turbo", "api_key": os.getenv("QWEN_API_KEY"), "env_var": "QWEN_API_KEY"},
+    "Qwen Turbo": {"provider": "qwen", "model": "qwen-turbo", "api_key": os.getenv("QWEN_API_KEY"), "env_var": "QWEN_API_KEY"},
     "Qwen Max": {"provider": "qwen", "model": "qwen-max", "api_key": os.getenv("QWEN_API_KEY"), "env_var": "QWEN_API_KEY"},
 }
 
@@ -101,7 +103,7 @@ AVAILABLE_MODEL_OPTIONS = {name: info for name, info in MODEL_OPTIONS.items() if
 if not AVAILABLE_MODEL_OPTIONS: AVAILABLE_MODEL_OPTIONS = MODEL_OPTIONS
 
 # ===============================
-# 规则定义 (保持原样)
+# 规则定义
 # ===============================
 RULE_SETS = {
     "名词": [
@@ -140,15 +142,18 @@ RULE_SETS = {
 }
 
 # ===============================
-# 工具函数
+# 工具函数 (重点修复了 JSON 解析)
 # ===============================
 def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
+    """从API响应中提取文本"""
     if not isinstance(resp_json, dict): return ""
     try:
+        # 兼容 OpenAI / DeepSeek / Moonshot
         if "choices" in resp_json and len(resp_json["choices"]) > 0:
             choice = resp_json["choices"][0]
             if "message" in choice and "content" in choice["message"]:
                 return choice["message"]["content"]
+        # 兼容 Qwen
         if "output" in resp_json and "text" in resp_json["output"]:
             return resp_json["output"]["text"]
         return json.dumps(resp_json, ensure_ascii=False)
@@ -156,14 +161,38 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
         return json.dumps(resp_json, ensure_ascii=False)
 
 def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
-    match = re.search(r"(\{.*\})", text.strip(), re.DOTALL)
-    if not match: return None, text
-    json_text = match.group(1).strip()
+    """
+    【修复版】更强壮的 JSON 提取逻辑
+    1. 优先尝试提取 Markdown 代码块 ```json ... ```
+    2. 如果失败，尝试提取最外层的 { ... }
+    """
+    if not text:
+        return None, ""
+        
+    json_str = ""
+    
+    # 策略 1: 寻找 Markdown 代码块
+    code_block_match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
+    if code_block_match:
+        json_str = code_block_match.group(1).strip()
+    
+    # 策略 2: 如果没代码块，寻找最外层大括号
+    if not json_str:
+        # 贪婪匹配第一个 { 到 最后一个 }
+        # 注意：这里需要处理可能的嵌套，但简单的 regex 只能找首尾
+        match = re.search(r"(\{.*\})", text.strip(), re.DOTALL)
+        if match:
+            json_str = match.group(1).strip()
+            
+    if not json_str:
+        return None, text
+
     try:
-        parsed_json = json.loads(json_text)
-        return parsed_json, json_text
-    except json.JSONDecodeError:
-        return None, json_text
+        parsed_json = json.loads(json_str)
+        return parsed_json, json_str
+    except json.JSONDecodeError as e:
+        # 如果解析失败，返回 None，但在界面上我们会显示原始文本供调试
+        return None, text
 
 def normalize_key(k: str, pos_rules: list) -> str:
     if not isinstance(k, str): return None
@@ -207,18 +236,26 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
     
     full_content = ""
     try:
-        with requests.post(url, headers=headers, json=payload, stream=True, timeout=60) as response:
+        # 设置 stream=True 避免超时
+        with requests.post(url, headers=headers, json=payload, stream=True, timeout=120) as response:
             response.raise_for_status()
             for line in response.iter_lines():
                 if not line: continue
                 line_text = line.decode('utf-8').strip()
-                if line_text.startswith("data:"): json_str = line_text[5:].strip()
-                else: json_str = line_text
+                
+                # 处理 SSE 数据
+                if line_text.startswith("data:"): 
+                    json_str = line_text[5:].strip()
+                else: 
+                    json_str = line_text
                 
                 if json_str == "[DONE]": break
+                
                 try:
                     chunk = json.loads(json_str)
                     delta_text = ""
+                    
+                    # 提取内容
                     if "choices" in chunk and len(chunk["choices"]) > 0:
                         delta = chunk["choices"][0].get("delta", {})
                         delta_text = delta.get("content", "")
@@ -234,56 +271,82 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
                         full_content += delta_text
                 except json.JSONDecodeError: continue
         
+        # 构造伪完整响应
         mock_response = {"choices": [{"message": {"content": full_content}}], "output": {"text": full_content}}
-        if not full_content: return False, {"error": "无内容"}, "无内容"
+        
+        if not full_content: return False, {"error": "模型未返回任何内容"}, "模型无响应"
         return True, mock_response, ""
 
     except Exception as e:
+        # 如果出错但已经接收了部分内容，也尝试返回
+        if full_content:
+            mock_response = {"choices": [{"message": {"content": full_content}}], "output": {"text": full_content}}
+            return True, mock_response, f"流式中断: {str(e)}"
         return False, {"error": str(e)}, str(e)
 
 # ===============================
-# 分析主逻辑
+# 分析主逻辑 (修复 Prompt 和解析兜底)
 # ===============================
 def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str, str]:
     if not word: return {}, "", "未知", ""
 
+    # 简化的规则描述
     full_rules_by_pos = {
         pos: "\n".join([f"- {r['name']}: {r['desc']}" for r in rules])
         for pos, rules in RULE_SETS.items()
     }
 
-    system_msg = f"""你是一名汉语语言学专家。分析词语「{word}」。
-任务：判断该词是否符合名词、动词、名动词的各项规则。
-要求：
-1. 直接输出 JSON 格式结果。
-2. scores 字段中，必须对每一条规则返回 true 或 false。
-3. explanation 字段请用一句话简要概括理由，不需要详细造句。
-4. predicted_pos 请在'名词','动词','名动词'中选一个。
+    # 【重要修改】Prompt 强制要求 detailed reasoning 并且放在 JSON 里，或者允许 JSON 外文本
+    system_msg = f"""你是一名汉语语言学专家。
+任务：分析词语「{word}」在【名词】、【动词】、【名动词】三个词类下的表现。
 
-规则参考：
-【名词】
+请严格遵守以下输出格式：
+
+1. 首先，你可以进行简短的思维链分析。
+2. 然后，必须输出一个 Markdown 代码块 ```json ... ```，其中包含分析结果。
+3. JSON 结构必须包含：
+   - "explanation": (字符串) 这里必须包含详细的推理过程，说明为什么符合或不符合某些关键规则。不要太简略。
+   - "predicted_pos": (字符串) "名词" / "动词" / "名动词"
+   - "scores": (对象) 包含三个词类下所有规则的布尔值 (true/false)
+
+规则列表供参考：
+【名词规则】
 {full_rules_by_pos["名词"]}
-【动词】
+【动词规则】
 {full_rules_by_pos["动词"]}
-【名动词】
+【名动词规则】
 {full_rules_by_pos["名动词"]}
 """
-    user_prompt = f"请分析「{word}」并返回 JSON。"
+    user_prompt = f"请分析「{word}」。请确保输出合法的 JSON。"
 
+    # 调用 API
     ok, resp_json, err_msg = call_llm_api_cached(provider, model, api_key, [{"role": "system", "content": system_msg}, {"role": "user", "content": user_prompt}])
 
-    if not ok: return {}, f"调用失败: {err_msg}", "未知", f"Fail: {err_msg}"
+    if not ok: return {}, f"调用失败: {err_msg}", "未知", f"调用失败: {err_msg}"
 
     raw_text = extract_text_from_response(resp_json)
-    parsed_json, _ = extract_json_from_text(raw_text)
+    
+    # 尝试解析 JSON
+    parsed_json, json_str = extract_json_from_text(raw_text)
 
+    # 【兜底逻辑】
     if parsed_json and isinstance(parsed_json, dict):
-        explanation = parsed_json.get("explanation", "无")
+        # 优先使用 JSON 里的 explanation
+        explanation = parsed_json.get("explanation", "")
+        # 如果 JSON 里的 explanation 太短，且原始文本里有非 JSON 的部分，则尝试拼接
+        if len(explanation) < 10 and len(raw_text) > len(json_str) + 20:
+             explanation = raw_text.replace(json_str, "").replace("```json", "").replace("```", "").strip()
+        
+        # 如果还是没内容，就用 raw_text
+        if not explanation: explanation = raw_text
+
         predicted_pos = parsed_json.get("predicted_pos", "未知")
         raw_scores = parsed_json.get("scores", {})
     else:
-        return {}, raw_text, "未知", "JSON解析失败"
+        # 解析完全失败的情况
+        return {}, raw_text, "解析失败", raw_text  # 把原始文本全部当做 explanation 返回
 
+    # 分数转换逻辑
     scores_out = {pos: {} for pos in RULE_SETS.keys()}
     for pos, rules in RULE_SETS.items():
         raw_pos_scores = raw_scores.get(pos, {})
@@ -293,13 +356,14 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
                 if normalized_key:
                     rule_def = next(r for r in rules if r["name"] == normalized_key)
                     scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
+        # 补全缺失
         for rule in rules:
             if rule["name"] not in scores_out[pos]: scores_out[pos][rule["name"]] = 0
 
     return scores_out, raw_text, predicted_pos, explanation
 
 # ===============================
-# Excel 批量处理逻辑
+# Excel 批量处理逻辑 (保存推理过程)
 # ===============================
 def process_and_style_excel(df, selected_model_info, target_col_name):
     output = io.BytesIO()
@@ -313,6 +377,7 @@ def process_and_style_excel(df, selected_model_info, target_col_name):
         word = str(row[target_col_name]).strip()
         status_text.text(f"正在处理 ({index + 1}/{total}): {word}")
         
+        # 调用模型
         scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
             word=word,
             provider=selected_model_info["provider"],
@@ -320,28 +385,30 @@ def process_and_style_excel(df, selected_model_info, target_col_name):
             api_key=selected_model_info["api_key"]
         )
         
+        # 计算分数
         membership = calculate_membership(scores_all) if scores_all else {}
         score_v = membership.get("动词", 0.0)
         score_n = membership.get("名词", 0.0)
         score_nv = membership.get("名动词", 0.0)
         
-        # 修正：差值 = |动词 - 名词|
+        # 计算差值 |动-名|
         diff_val = round(abs(score_v - score_n), 4)
         
+        # 构造行数据 (包含原始响应和推理说明)
         new_row = {
             "词语": word,
             "动词": score_v,
             "名词": score_n,
             "名动词": score_nv,
             "差值/距离": diff_val,
-            "原始响应": raw_text,
+            "原始响应": explanation if explanation and len(explanation) > 10 else raw_text, # 优先展示推理
             "_predicted_pos": predicted_pos
         }
         processed_rows.append(new_row)
         progress_bar.progress((index + 1) / total)
 
+    # 导出
     result_df = pd.DataFrame(processed_rows)
-    
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         cols = ["词语", "动词", "名词", "名动词", "差值/距离", "原始响应"]
         result_df[cols].to_excel(writer, index=False, sheet_name='分析结果')
@@ -372,148 +439,75 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
     categories += [categories[0]]
     values += [values[0]]
     
-    axis_min = -1.0
-    axis_max = 1.0
-
     fig = go.Figure(data=[
-        go.Scatterpolar(
-            r=values, 
-            theta=categories, 
-            fill="toself", 
-            name="隶属度",
-            hovertemplate = '<b>%{theta}</b><br>隶属度: %{r:.4f}<extra></extra>'
-        )
+        go.Scatterpolar(r=values, theta=categories, fill="toself", name="隶属度")
     ])
     fig.update_layout(
-        polar=dict(
-            radialaxis=dict(visible=True, range=[axis_min, axis_max], tickvals=[-1.0, -0.5, 0, 0.5, 1.0])
-        ),
+        polar=dict(radialaxis=dict(visible=True, range=[-1, 1])),
         showlegend=False,
-        title=dict(text=title, x=0.5, font=dict(size=16))
+        title=dict(text=title, x=0.5)
     )
     st.plotly_chart(fig, use_container_width=True)
 
 # ===============================
-# 主界面 (Main)
+# 主界面
 # ===============================
 def main():
-    st.title("📰 汉语词类隶属度检测划类")
+    st.title("📰 汉语词类隶属度检测 (修复版)")
     
-    # 顶部控制区
-    control_container = st.container()
-    with control_container:
-        col1, col2, col3 = st.columns([2, 1, 3])
+    # 设置栏
+    with st.container():
+        col1, col2 = st.columns([3, 1])
         with col1:
-            st.subheader("⚙️ 模型设置")
             if not AVAILABLE_MODEL_OPTIONS:
-                st.error("❌ 找不到可用的 API Key！请设置环境变量。")
+                st.error("❌ 未检测到 API Key。")
                 selected_model_info = {"api_key": None}
             else:
-                selected_model_display_name = st.selectbox("选择大模型", list(AVAILABLE_MODEL_OPTIONS.keys()), key="model_select")
-                selected_model_info = AVAILABLE_MODEL_OPTIONS[selected_model_display_name]
-        
+                s_name = st.selectbox("选择模型", list(AVAILABLE_MODEL_OPTIONS.keys()))
+                selected_model_info = AVAILABLE_MODEL_OPTIONS[s_name]
         with col2:
-            st.subheader("🔗 连接测试")
-            if not selected_model_info["api_key"]:
-                st.button("测试 (不可用)", disabled=True)
-            else:
-                if st.button("测试模型链接", type="secondary"):
-                    with st.spinner("测试中..."):
-                        ok, _, err_msg = call_llm_api_cached(selected_model_info["provider"], selected_model_info["model"], selected_model_info["api_key"], [{"role": "user", "content": "hi"}], max_tokens=5)
-                        if ok: st.success("成功！")
-                        else: st.error(f"失败: {err_msg}")
-        
-        # 这里的输入框现在移到 Tab 1 内部，保持布局整洁
-        with col3:
-            st.write("") # 占位
+            st.write("")
+            if st.button("测试连接"):
+                ok, _, msg = call_llm_api_cached(selected_model_info["provider"], selected_model_info["model"], selected_model_info["api_key"], [{"role":"user","content":"hi"}], max_tokens=5)
+                if ok: st.success("连接成功")
+                else: st.error(f"失败: {msg}")
 
     st.markdown("---")
     
-    # 创建分页
-    tab1, tab2 = st.tabs(["🔍 单个词语详细分析 (保留所有图表)", "📂 Excel 批量处理 (自动标黄)"])
+    tab1, tab2 = st.tabs(["🔍 单个词语详细分析", "📂 Excel 批量处理"])
     
-    # ===============================
-    # Tab 1: 单词分析 (保留您要求的所有详细内容)
-    # ===============================
+    # Tab 1: 单词分析
     with tab1:
-        st.subheader("🔤 词语输入")
-        word_input = st.text_input("请输入要分析的汉语词语", placeholder="例如：发展", key="single_word_input")
-        
-        analyze_btn = st.button("🚀 开始单词分析", type="primary", disabled=not (selected_model_info["api_key"] and word_input))
-
-        if analyze_btn and word_input:
-            st.info(f"正在分析「{word_input}」...")
-            
-            scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
-                word=word_input,
-                provider=selected_model_info["provider"],
-                model=selected_model_info["model"],
-                api_key=selected_model_info["api_key"]
-            )
-            
-            if scores_all:
-                membership = calculate_membership(scores_all)
-                final_membership = membership.get(predicted_pos, 0)
+        word = st.text_input("输入词语", placeholder="例如：发展", key="single_input")
+        if st.button("开始分析", type="primary", disabled=not (word and selected_model_info["api_key"])):
+            with st.spinner("思考与分析中..."):
+                scores, raw, pred, expl = ask_model_for_pos_and_scores(word, selected_model_info["provider"], selected_model_info["model"], selected_model_info["api_key"])
                 
-                st.success(f'**分析完成**：词语「{word_input}」最可能的词类是 **【{predicted_pos}】**，隶属度为 **{final_membership:.4f}**')
-                
-                # --- 核心可视化区域 (您要求保留的部分) ---
-                col_res_1, col_res_2 = st.columns(2)
-                
-                with col_res_1:
-                    st.subheader("🏆 词类隶属度排名")
-                    top10 = get_top_10_positions(membership)
-                    top10_df = pd.DataFrame(top10, columns=["词类", "隶属度"])
-                    top10_df["隶属度"] = top10_df["隶属度"].apply(lambda x: f"{x:.4f}")
-                    st.table(top10_df)
+                if scores:
+                    mem = calculate_membership(scores)
+                    st.success(f"预测结果：**{pred}** (隶属度: {mem.get(pred,0):.2f})")
                     
-                    st.subheader("📊 词类隶属度雷达图")
-                    plot_radar_chart_streamlit(dict(top10), f"「{word_input}」的词类隶属度分布")
-                
-                with col_res_2:
-                    st.subheader("📋 各词类详细得分 (详细展开)")
-                    
-                    # 计算总分并排序
-                    pos_total_scores = {pos: sum(scores_all[pos].values()) for pos in RULE_SETS.keys()}
-                    sorted_pos_names = sorted(pos_total_scores.keys(), key=lambda p: pos_total_scores[p], reverse=True)
-                    
-                    # 循环生成 Expander
-                    for pos in sorted_pos_names:
-                        total_score = pos_total_scores[pos]
-                        max_rule = max(scores_all[pos].items(), key=lambda x: x[1], default=("无", 0))
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        top10_df = pd.DataFrame(get_top_10_positions(mem), columns=["词类", "隶属度"])
+                        st.table(top10_df)
+                        plot_radar_chart_streamlit(mem, f"{word} 雷达图")
+                    with c2:
+                        st.subheader("📝 推理过程")
+                        # 强制显示推理过程，如果 JSON 里的为空，显示原始文本
+                        display_text = expl if expl and len(expl) > 5 else raw
+                        st.info(display_text)
                         
-                        with st.expander(f"**{pos}** (总分: {total_score}, 最高分规则: {max_rule[0]} - {max_rule[1]}分)"):
-                            rule_data = []
-                            for rule in RULE_SETS[pos]:
-                                rule_score = scores_all[pos][rule["name"]]
-                                rule_data.append({
-                                    "规则代码": rule["name"],
-                                    "规则描述": rule["desc"],
-                                    "得分": rule_score
-                                })
-                            
-                            rule_data_sorted = sorted(rule_data, key=lambda x: x["得分"], reverse=True)
-                            rule_df = pd.DataFrame(rule_data_sorted)
-                            
-                            # 负分标红样式
-                            styled_df = rule_df.style.applymap(
-                                lambda x: "color: #ff4b4b; font-weight: bold" if isinstance(x, int) and x < 0 else "",
-                                subset=["得分"]
-                            )
-                            st.dataframe(styled_df, use_container_width=True, height=min(len(rule_df) * 30 + 50, 400))
-                    
-                    st.subheader("📥 模型原始响应")
-                    with st.expander("点击展开查看原始 JSON", expanded=False):
-                        st.code(raw_text, language="text")
+                        with st.expander("查看原始 JSON 响应"):
+                            st.code(raw, language="json")
+                else:
+                    st.error("解析失败，请查看下方原始响应手动判断。")
+                    st.text_area("原始响应", raw, height=300)
 
-    # ===============================
-    # Tab 2: 批量处理 (新功能)
-    # ===============================
+    # Tab 2: 批量处理
     with tab2:
-        st.header("📂 批量 Excel 处理")
-        st.info("说明：请上传包含表头为 **'词语'** 的 Excel 文件。系统将生成包含 **[动词 | 名词 | 名动词 | 差值]** 的结果，并自动将获胜词类标黄。")
-        
-        uploaded_file = st.file_uploader("上传 Excel 文件", type=["xlsx", "xls"])
+        st.info("上传 Excel (需包含'词语'列)，自动生成结果并标黄。")
+        uploaded_file = st.file_uploader("上传 Excel", type=["xlsx", "xls"])
         
         if uploaded_file and selected_model_info["api_key"]:
             try:
@@ -521,21 +515,14 @@ def main():
                 target_col = next((c for c in df.columns if "词" in str(c) or "word" in str(c).lower()), None)
                 
                 if target_col:
-                    st.write(f"✅ 识别到目标列：`{target_col}`，共 {len(df)} 个词。")
-                    if st.button("🚀 开始批量分析并生成标黄表格"):
+                    st.write(f"✅ 目标列：`{target_col}`，共 {len(df)} 个词。")
+                    if st.button("🚀 开始批量分析"):
                         excel_data = process_and_style_excel(df, selected_model_info, target_col)
-                        
-                        st.download_button(
-                            label="📥 下载结果 (已标黄)",
-                            data=excel_data,
-                            file_name="词类分析结果_标黄版.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
+                        st.download_button("📥 下载结果", excel_data, file_name="分析结果.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 else:
-                    st.error("❌ 未找到包含 '词' 的列名，请修改 Excel 表头。")
+                    st.error("❌ 未找到包含 '词' 的列名。")
             except Exception as e:
-                st.error(f"文件读取错误: {e}")
+                st.error(f"文件错误: {e}")
 
 if __name__ == "__main__":
     main()
-
