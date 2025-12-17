@@ -14,14 +14,14 @@ from openpyxl.styles import PatternFill
 # 页面配置
 # ===============================
 st.set_page_config(
-    page_title="汉语词类隶属度检测划类 (专业版)",
+    page_title="汉语词类隶属度检测划类 (完整版)",
     page_icon="📰",
     layout="wide",
     initial_sidebar_state="collapsed",
     menu_items=None
 )
 
-# 自定义CSS样式
+# 自定义CSS样式 (保持原样)
 hide_streamlit_style = """
 <style>
 header {visibility: hidden;}
@@ -34,7 +34,7 @@ footer {visibility: hidden;}
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 # ===============================
-# 模型配置 (启用流式 Streaming 以解决超时和Status 0问题)
+# 模型配置 (启用流式加速)
 # ===============================
 MODEL_CONFIGS = {
     "deepseek": {
@@ -70,7 +70,6 @@ MODEL_CONFIGS = {
     "qwen": {
         "base_url": "https://dashscope.aliyuncs.com/api/v1",
         "endpoint": "/services/aigc/text-generation/generation",
-        # Qwen Native API 需要 Accept: text/event-stream 来触发 SSE
         "headers": lambda key: {
             "Authorization": f"Bearer {key}", 
             "Content-Type": "application/json",
@@ -102,7 +101,7 @@ AVAILABLE_MODEL_OPTIONS = {name: info for name, info in MODEL_OPTIONS.items() if
 if not AVAILABLE_MODEL_OPTIONS: AVAILABLE_MODEL_OPTIONS = MODEL_OPTIONS
 
 # ===============================
-# 规则定义
+# 规则定义 (保持原样)
 # ===============================
 RULE_SETS = {
     "名词": [
@@ -146,7 +145,6 @@ RULE_SETS = {
 def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
     if not isinstance(resp_json, dict): return ""
     try:
-        # Qwen / OpenAI 兼容处理
         if "choices" in resp_json and len(resp_json["choices"]) > 0:
             choice = resp_json["choices"][0]
             if "message" in choice and "content" in choice["message"]:
@@ -196,7 +194,7 @@ def get_top_10_positions(membership: Dict[str, float]) -> List[Tuple[str, float]
     return sorted(membership.items(), key=lambda x: x[1], reverse=True)[:10]
 
 # ===============================
-# API 调用函数 (流式处理)
+# API 调用 (流式)
 # ===============================
 def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, temperature=0.0):
     if not _api_key: return False, {"error": "API Key 为空"}, "API Key 未提供"
@@ -208,9 +206,6 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
     payload = cfg["payload"](_model, messages, max_tokens=max_tokens, temperature=temperature)
     
     full_content = ""
-    # 仅在单次分析模式下显示流式过程，防止批量处理时UI混乱（可选）
-    # streaming_placeholder = st.empty() 
-
     try:
         with requests.post(url, headers=headers, json=payload, stream=True, timeout=60) as response:
             response.raise_for_status()
@@ -237,10 +232,8 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
                     
                     if delta_text:
                         full_content += delta_text
-                        # streaming_placeholder.markdown(full_content + "▌") 
                 except json.JSONDecodeError: continue
         
-        # streaming_placeholder.empty()
         mock_response = {"choices": [{"message": {"content": full_content}}], "output": {"text": full_content}}
         if not full_content: return False, {"error": "无内容"}, "无内容"
         return True, mock_response, ""
@@ -249,12 +242,11 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
         return False, {"error": str(e)}, str(e)
 
 # ===============================
-# 核心分析逻辑 (Prompt 已优化提速)
+# 分析主逻辑
 # ===============================
 def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str, str]:
     if not word: return {}, "", "未知", ""
 
-    # 简化的 Prompt，不再要求造句，大幅提速
     full_rules_by_pos = {
         pos: "\n".join([f"- {r['name']}: {r['desc']}" for r in rules])
         for pos, rules in RULE_SETS.items()
@@ -301,20 +293,18 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
                 if normalized_key:
                     rule_def = next(r for r in rules if r["name"] == normalized_key)
                     scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
-        # 补全缺失规则
         for rule in rules:
             if rule["name"] not in scores_out[pos]: scores_out[pos][rule["name"]] = 0
 
     return scores_out, raw_text, predicted_pos, explanation
 
 # ===============================
-# Excel 处理与标黄逻辑
+# Excel 批量处理逻辑
 # ===============================
 def process_and_style_excel(df, selected_model_info, target_col_name):
     output = io.BytesIO()
     processed_rows = []
     
-    # 进度显示
     progress_bar = st.progress(0)
     status_text = st.empty()
     total = len(df)
@@ -323,7 +313,6 @@ def process_and_style_excel(df, selected_model_info, target_col_name):
         word = str(row[target_col_name]).strip()
         status_text.text(f"正在处理 ({index + 1}/{total}): {word}")
         
-        # 1. 调用模型
         scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
             word=word,
             provider=selected_model_info["provider"],
@@ -331,16 +320,14 @@ def process_and_style_excel(df, selected_model_info, target_col_name):
             api_key=selected_model_info["api_key"]
         )
         
-        # 2. 计算隶属度
         membership = calculate_membership(scores_all) if scores_all else {}
         score_v = membership.get("动词", 0.0)
         score_n = membership.get("名词", 0.0)
         score_nv = membership.get("名动词", 0.0)
         
-        # 3. 计算差值 (动词 - 名词 的绝对值)
+        # 修正：差值 = |动词 - 名词|
         diff_val = round(abs(score_v - score_n), 4)
         
-        # 4. 构造数据行 (顺序：词语, 动词, 名词, 名动词, 差值/距离, 原始响应)
         new_row = {
             "词语": word,
             "动词": score_v,
@@ -348,14 +335,13 @@ def process_and_style_excel(df, selected_model_info, target_col_name):
             "名动词": score_nv,
             "差值/距离": diff_val,
             "原始响应": raw_text,
-            "_predicted_pos": predicted_pos # 隐藏辅助列
+            "_predicted_pos": predicted_pos
         }
         processed_rows.append(new_row)
         progress_bar.progress((index + 1) / total)
 
     result_df = pd.DataFrame(processed_rows)
     
-    # 使用 openpyxl 导出并标黄
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         cols = ["词语", "动词", "名词", "名动词", "差值/距离", "原始响应"]
         result_df[cols].to_excel(writer, index=False, sheet_name='分析结果')
@@ -364,23 +350,20 @@ def process_and_style_excel(df, selected_model_info, target_col_name):
         yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
         
         for i, data_row in enumerate(processed_rows):
-            row_num = i + 2 # Header is row 1
+            row_num = i + 2 
             pred = data_row["_predicted_pos"]
-            
-            # A=1(词), B=2(动), C=3(名), D=4(名动)
             target_idx = None
             if pred == "动词": target_idx = 2
             elif pred == "名词": target_idx = 3
             elif pred == "名动词": target_idx = 4
-            
             if target_idx:
                 worksheet.cell(row=row_num, column=target_idx).fill = yellow_fill
 
-    status_text.success("✅ 处理完成！已自动标黄获胜词类。")
+    status_text.success("✅ 批量处理完成！")
     return output.getvalue()
 
 # ===============================
-# UI 模块
+# 雷达图工具
 # ===============================
 def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
     if not scores_norm: return
@@ -388,72 +371,166 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
     values = list(scores_norm.values())
     categories += [categories[0]]
     values += [values[0]]
-    fig = go.Figure(data=[go.Scatterpolar(r=values, theta=categories, fill="toself", name="隶属度")])
-    fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[-1, 1])), showlegend=False, title=dict(text=title, x=0.5))
+    
+    axis_min = -1.0
+    axis_max = 1.0
+
+    fig = go.Figure(data=[
+        go.Scatterpolar(
+            r=values, 
+            theta=categories, 
+            fill="toself", 
+            name="隶属度",
+            hovertemplate = '<b>%{theta}</b><br>隶属度: %{r:.4f}<extra></extra>'
+        )
+    ])
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(visible=True, range=[axis_min, axis_max], tickvals=[-1.0, -0.5, 0, 0.5, 1.0])
+        ),
+        showlegend=False,
+        title=dict(text=title, x=0.5, font=dict(size=16))
+    )
     st.plotly_chart(fig, use_container_width=True)
 
+# ===============================
+# 主界面 (Main)
+# ===============================
 def main():
-    st.title("📰 汉语词类隶属度检测 ")
+    st.title("📰 汉语词类隶属度检测划类")
     
-    # 顶部设置栏
-    with st.container():
-        col1, col2 = st.columns([3, 1])
+    # 顶部控制区
+    control_container = st.container()
+    with control_container:
+        col1, col2, col3 = st.columns([2, 1, 3])
         with col1:
+            st.subheader("⚙️ 模型设置")
             if not AVAILABLE_MODEL_OPTIONS:
-                st.error("❌ 找不到 API Key，请设置环境变量 (如 QWEN_API_KEY)！")
+                st.error("❌ 找不到可用的 API Key！请设置环境变量。")
                 selected_model_info = {"api_key": None}
             else:
-                s_name = st.selectbox("选择模型", list(AVAILABLE_MODEL_OPTIONS.keys()))
-                selected_model_info = AVAILABLE_MODEL_OPTIONS[s_name]
+                selected_model_display_name = st.selectbox("选择大模型", list(AVAILABLE_MODEL_OPTIONS.keys()), key="model_select")
+                selected_model_info = AVAILABLE_MODEL_OPTIONS[selected_model_display_name]
+        
         with col2:
-            st.write("") # Spacer
-            if st.button("测试连接"):
-                ok, _, msg = call_llm_api_cached(selected_model_info["provider"], selected_model_info["model"], selected_model_info["api_key"], [{"role":"user","content":"hi"}], max_tokens=5)
-                if ok: st.success("连接成功")
-                else: st.error(f"连接失败: {msg}")
+            st.subheader("🔗 连接测试")
+            if not selected_model_info["api_key"]:
+                st.button("测试 (不可用)", disabled=True)
+            else:
+                if st.button("测试模型链接", type="secondary"):
+                    with st.spinner("测试中..."):
+                        ok, _, err_msg = call_llm_api_cached(selected_model_info["provider"], selected_model_info["model"], selected_model_info["api_key"], [{"role": "user", "content": "hi"}], max_tokens=5)
+                        if ok: st.success("成功！")
+                        else: st.error(f"失败: {err_msg}")
+        
+        # 这里的输入框现在移到 Tab 1 内部，保持布局整洁
+        with col3:
+            st.write("") # 占位
 
     st.markdown("---")
     
-    # 分页签：单词测试 vs 批量处理
-    tab1, tab2 = st.tabs(["🔍 单个词语详细分析", "📂 Excel 批量处理"])
+    # 创建分页
+    tab1, tab2 = st.tabs(["🔍 单个词语详细分析 (保留所有图表)", "📂 Excel 批量处理 (自动标黄)"])
     
-    # --- Tab 1: 单词分析 ---
+    # ===============================
+    # Tab 1: 单词分析 (保留您要求的所有详细内容)
+    # ===============================
     with tab1:
-        word = st.text_input("输入词语", placeholder="例如：发展")
-        if st.button("开始分析", type="primary", disabled=not (word and selected_model_info["api_key"])):
-            with st.spinner("分析中..."):
-                scores, raw, pred, expl = ask_model_for_pos_and_scores(word, selected_model_info["provider"], selected_model_info["model"], selected_model_info["api_key"])
-                
-                if scores:
-                    mem = calculate_membership(scores)
-                    st.success(f"最可能词类：**{pred}** (隶属度: {mem.get(pred,0):.2f})")
-                    
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        top10_df = pd.DataFrame(get_top_10_positions(mem), columns=["词类", "隶属度"])
-                        st.table(top10_df)
-                        plot_radar_chart_streamlit(mem, f"{word} 隶属度雷达图")
-                    with c2:
-                        st.subheader("推理简述")
-                        st.info(expl)
-                        with st.expander("查看原始响应"): st.code(raw)
+        st.subheader("🔤 词语输入")
+        word_input = st.text_input("请输入要分析的汉语词语", placeholder="例如：发展", key="single_word_input")
+        
+        analyze_btn = st.button("🚀 开始单词分析", type="primary", disabled=not (selected_model_info["api_key"] and word_input))
 
-    # --- Tab 2: 批量处理 ---
+        if analyze_btn and word_input:
+            st.info(f"正在分析「{word_input}」...")
+            
+            scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
+                word=word_input,
+                provider=selected_model_info["provider"],
+                model=selected_model_info["model"],
+                api_key=selected_model_info["api_key"]
+            )
+            
+            if scores_all:
+                membership = calculate_membership(scores_all)
+                final_membership = membership.get(predicted_pos, 0)
+                
+                st.success(f'**分析完成**：词语「{word_input}」最可能的词类是 **【{predicted_pos}】**，隶属度为 **{final_membership:.4f}**')
+                
+                # --- 核心可视化区域 (您要求保留的部分) ---
+                col_res_1, col_res_2 = st.columns(2)
+                
+                with col_res_1:
+                    st.subheader("🏆 词类隶属度排名")
+                    top10 = get_top_10_positions(membership)
+                    top10_df = pd.DataFrame(top10, columns=["词类", "隶属度"])
+                    top10_df["隶属度"] = top10_df["隶属度"].apply(lambda x: f"{x:.4f}")
+                    st.table(top10_df)
+                    
+                    st.subheader("📊 词类隶属度雷达图")
+                    plot_radar_chart_streamlit(dict(top10), f"「{word_input}」的词类隶属度分布")
+                
+                with col_res_2:
+                    st.subheader("📋 各词类详细得分 (详细展开)")
+                    
+                    # 计算总分并排序
+                    pos_total_scores = {pos: sum(scores_all[pos].values()) for pos in RULE_SETS.keys()}
+                    sorted_pos_names = sorted(pos_total_scores.keys(), key=lambda p: pos_total_scores[p], reverse=True)
+                    
+                    # 循环生成 Expander
+                    for pos in sorted_pos_names:
+                        total_score = pos_total_scores[pos]
+                        max_rule = max(scores_all[pos].items(), key=lambda x: x[1], default=("无", 0))
+                        
+                        with st.expander(f"**{pos}** (总分: {total_score}, 最高分规则: {max_rule[0]} - {max_rule[1]}分)"):
+                            rule_data = []
+                            for rule in RULE_SETS[pos]:
+                                rule_score = scores_all[pos][rule["name"]]
+                                rule_data.append({
+                                    "规则代码": rule["name"],
+                                    "规则描述": rule["desc"],
+                                    "得分": rule_score
+                                })
+                            
+                            rule_data_sorted = sorted(rule_data, key=lambda x: x["得分"], reverse=True)
+                            rule_df = pd.DataFrame(rule_data_sorted)
+                            
+                            # 负分标红样式
+                            styled_df = rule_df.style.applymap(
+                                lambda x: "color: #ff4b4b; font-weight: bold" if isinstance(x, int) and x < 0 else "",
+                                subset=["得分"]
+                            )
+                            st.dataframe(styled_df, use_container_width=True, height=min(len(rule_df) * 30 + 50, 400))
+                    
+                    st.subheader("📥 模型原始响应")
+                    with st.expander("点击展开查看原始 JSON", expanded=False):
+                        st.code(raw_text, language="text")
+
+    # ===============================
+    # Tab 2: 批量处理 (新功能)
+    # ===============================
     with tab2:
-        st.info("上传 Excel 文件，必须包含表头为 **'词语'** 的列。系统将生成包含 **[动词|名词|名动词|差值]** 的结果表，并自动标黄。")
-        uploaded_file = st.file_uploader("上传 Excel", type=["xlsx", "xls"])
+        st.header("📂 批量 Excel 处理")
+        st.info("说明：请上传包含表头为 **'词语'** 的 Excel 文件。系统将生成包含 **[动词 | 名词 | 名动词 | 差值]** 的结果，并自动将获胜词类标黄。")
+        
+        uploaded_file = st.file_uploader("上传 Excel 文件", type=["xlsx", "xls"])
         
         if uploaded_file and selected_model_info["api_key"]:
             try:
                 df = pd.read_excel(uploaded_file)
-                # 寻找目标列
                 target_col = next((c for c in df.columns if "词" in str(c) or "word" in str(c).lower()), None)
                 
                 if target_col:
                     st.write(f"✅ 识别到目标列：`{target_col}`，共 {len(df)} 个词。")
-                    if st.button("🚀 开始批量分析"):
+                    if st.button("🚀 开始批量分析并生成标黄表格"):
                         excel_data = process_and_style_excel(df, selected_model_info, target_col)
-                        st.download_button("📥 下载结果 (已标黄)", excel_data, file_name="分析结果.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                        
+                        st.download_button(
+                            label="📥 下载结果 (已标黄)",
+                            data=excel_data,
+                            file_name="词类分析结果_标黄版.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
                 else:
                     st.error("❌ 未找到包含 '词' 的列名，请修改 Excel 表头。")
             except Exception as e:
