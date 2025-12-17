@@ -218,96 +218,128 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
 # ===============================
 # 6. 单个词分析逻辑 (Prompt 深度优化版)
 # ===============================
-def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str):
-    # 1. 准备规则文本
-    full_rules = {p: "\n".join([f"- {r['name']}: {r['desc']}" for r in rs]) for p, rs in RULE_SETS.items()}
-    
-    # 2. 构建强约束 Prompt
-    system = f"""你是一名资深的汉语语言学专家。请对词语「{word}」进行严格的句法和词法分析。
+def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str, str]:
+    if not word:
+        return {}, "", "未知", ""
+
+    # 规则文字说明（给模型看，让它老老实实按规则来判断）
+    full_rules_by_pos = {
+        pos: "\n".join([
+            f"- {r['name']}: {r['desc']}（符合: {r['match_score']} 分，不符合: {r['mismatch_score']} 分）"
+            for r in rules
+        ])
+        for pos, rules in RULE_SETS.items()
+    }
+
+    # ===== 系统提示：只允许输出“符合/不符合”，禁止自己打数字分 =====
+    system_msg = f"""你是一名中文词法与语法方面的专家。现在要分析词语「{word}」在下列词类中的表现：
+
+- 需要判断的词类：名词、动词、名动词
+- 评分规则已经由系统定义，你**不要**自己设计分值，也**不要**在 JSON 中给出具体数字分数。程序将根据你的判断（true/false）自动赋值。
+- 你只需要判断每一条规则是“符合”还是“不符合”。
+
+【各词类的规则说明（仅供你判断使用）】
+
+【名词】
+{full_rules_by_pos["名词"]}
+
+【动词】
+{full_rules_by_pos["动词"]}
+
+【名动词】
+{full_rules_by_pos["名动词"]}
 
 【输出要求】
-请严格按照以下两部分顺序输出：
 
-第一部分：详细推理过程 (Markdown格式)
-请完全参照以下格式模板输出，不要省略任何一条规则：
+1. 在 explanation 字段中，必须**逐条规则**说明判断依据，并举例（可以自己造句）：
+   - 格式示例：
+     - 「名词-N1_可受数量词修饰：符合。理由：……。例句：……。」
+     - 「动词-V2_可后附/插入时体助词'着/了/过'：不符合。理由：……。例句：……。」
+   - explanation 里要覆盖 **三个词类的所有规则**，不能只写几条。
 
-### 详细推理过程
+2. 在 JSON 中的 scores 字段里：
+   - 每一类下的每一条规则，只能给出 **布尔值 true / false**，表示是否符合该规则
+   - 严禁在 scores 里使用数值分数（例如 0, 5, 10 等）
+   - 如果你不确定，也必须做出判断（true 或 false），不要用 null、0 或其它值
+   - JSON 结构必须是：{{"explanation": "...", "predicted_pos": "...", "scores": {{"名词": {{...}}, "动词": {{...}}, "名动词": {{...}}}}}}
 
-#### 名词
-- **规则名**：符合/不符合。理由：……。例句：……。
-(请对名词的所有规则 N1-N8 逐一分析)
+3. predicted_pos：
+   - 请选择「名词」「动词」「名动词」之一，作为该词语最典型的词类。
 
-#### 动词
-- **规则名**：符合/不符合。理由：……。例句：……。
-(请对动词的所有规则 V1-V9 逐一分析)
-
-#### 名动词
-- **规则名**：符合/不符合。理由：……。例句：……。
-(请对名动词的所有规则 NV1-NV10 逐一分析)
-
-第二部分：结构化结果 (JSON格式)
-在推理结束后，输出一个 Markdown JSON 代码块。
-- explanation: 将上述推理过程的纯文本汇总填入。
-- predicted_pos: 判定结果 (名词/动词/名动词)。
-- scores: 对应上述每一条规则的布尔值 (true/false)。
-
-【规则参考列表】
-名词规则：
-{full_rules['名词']}
-
-动词规则：
-{full_rules['动词']}
-
-名动词规则：
-{full_rules['名动词']}
+4. **最后输出时，先写详细的文字推理，最后单独且完整地给出一段合法的 JSON（不要再加注释）。**
 """
 
-    user_prompt = f"开始分析词语「{word}」。请先输出推理文本，最后输出 JSON。"
+    # 用户提示：再强调一次
+    user_prompt = f"""
+请严格按照上述要求分析词语「{word}」。
 
-    # 3. 调用 API
-    ok, resp, err = call_llm_api_cached(provider, model, api_key, [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user_prompt}
-    ])
+特别注意：
+- 在 JSON 的 scores 部分，只能用 true/false 表示“是否符合规则”，不能使用任何数字。
+- explanation 中必须对每一条规则写明“符合/不符合 + 理由 + 例句”。
+
+请先给出详细推理过程，然后在最后单独输出一个 JSON 对象。
+"""
+
+    with st.spinner(f"正在调用大模型 ({model}) 进行分析，请稍候..."):
+        ok, resp_json, err_msg = call_llm_api_cached(
+            _provider=provider,
+            _model=model,
+            _api_key=api_key,
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_prompt}
+            ]
+        )
+
+    if not ok:
+        st.error(f"模型调用失败: {err_msg}")
+        # 返回一个空结果，但保留错误信息
+        return {}, f"调用失败: {err_msg}", "未知", f"模型调用失败: {err_msg}"
+
+    raw_text = extract_text_from_response(resp_json)
     
-    if not ok: return {}, "", "失败", err
-    
-    # 4. 解析结果
-    raw = extract_text_from_response(resp)
-    data, _ = extract_json_from_text(raw)
-    
-    # 5. 兜底逻辑
-    if data:
-        # 如果模型很听话把推理写进了 JSON 的 explanation，就用它的
-        # 如果没写，或者太短，就直接用 raw (包含了Markdown文本) 作为 explanation
-        json_expl = data.get("explanation", "")
-        expl = json_expl if len(json_expl) > 50 else raw 
-        
-        pred = data.get("predicted_pos", "未知")
-        raw_scores = data.get("scores", {})
+    # 【修复核心问题】调用新增的 JSON 提取函数
+    parsed_json, cleaned_json_text = extract_json_from_text(raw_text)
+
+    # 解析 JSON
+    if parsed_json and isinstance(parsed_json, dict):
+        explanation = parsed_json.get("explanation", "模型未提供详细推理过程。")
+        predicted_pos = parsed_json.get("predicted_pos", "未知")
+        raw_scores = parsed_json.get("scores", {})
+        if predicted_pos not in RULE_SETS:
+             st.warning(f"模型预测的词类 '{predicted_pos}' 不在分析范围内 ('名词', '动词', '名动词')。")
     else:
-        expl = raw # 解析失败时，保留原始文本供人工查看
-        pred = "未知"
+        st.error("❌ 未能从模型响应中解析出有效的JSON。请检查模型输出是否符合要求。")
+        explanation = "无法解析模型输出。原始响应：\n" + raw_text
+        predicted_pos = "未知"
         raw_scores = {}
-        
-    # 6. 分数映射 (模糊匹配键名，防止模型由细微的格式错误)
-    scores_out = {p: {} for p in RULE_SETS}
+        cleaned_json_text = raw_text  # 展示原始文本
+
+    # --- 关键：初始化所有词类的得分字典，并进行分数转换 ---
+    scores_out = {pos: {} for pos in RULE_SETS.keys()}
+
+    # 只把“符合/不符合”转成具体分值（正分 / 负分）
     for pos, rules in RULE_SETS.items():
-        s_map = raw_scores.get(pos, {})
-        for r in rules:
-            val = False
-            # 尝试匹配：移除空格、下划线后对比
-            target_key = r["name"].replace(" ", "").replace("_", "").upper()
-            
-            for k, v in s_map.items():
-                current_key = k.replace(" ", "").replace("_", "").upper()
-                # 只要规则代码 (如 N1, V2) 包含在键名中即可
-                if target_key in current_key or current_key in target_key:
-                    val = v
-                    break
-            scores_out[pos][r["name"]] = map_to_allowed_score(r, val)
-            
-    return scores_out, raw, pred, expl
+        raw_pos_scores = raw_scores.get(pos, {})
+        if isinstance(raw_pos_scores, dict):
+            for k, v in raw_pos_scores.items():
+                normalized_key = normalize_key(k, rules)
+                if normalized_key:
+                    # 找到当前规则的定义
+                    rule_def = next(r for r in rules if r["name"] == normalized_key)
+                    # 使用 map_to_allowed_score：true/false/“是/否”等 → match_score / mismatch_score
+                    scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
+
+    # 保证每条规则都有得分，没有就默认 Mismatch Score（更严格）或 0 分（更保守）
+    # 采用更保守的 0 分，因为模型没提及，可能是不适用，而不是明确不符合
+    for pos, rules in RULE_SETS.items():
+        for rule in rules:
+            rule_name = rule["name"]
+            if rule_name not in scores_out[pos]:
+                scores_out[pos][rule_name] = 0
+
+    return scores_out, raw_text, predicted_pos, explanation
+
 # ===============================
 # 7. 批量处理逻辑 (实时保存 + 增量更新)
 # ===============================
