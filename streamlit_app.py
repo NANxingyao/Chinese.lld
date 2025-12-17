@@ -5,11 +5,11 @@ import re
 import os
 import pandas as pd
 import plotly.graph_objects as go
-import io # 新增：用于内存文件处理
+import io
+import time  # <--- 必须添加这行，用于降速和重试
 from typing import Tuple, Dict, Any, List
-# 新增：用于Excel标黄
 from openpyxl import load_workbook
-from openpyxl.styles import PatternFill 
+from openpyxl.styles import PatternFill
 
 # ===============================
 # 页面配置
@@ -551,6 +551,9 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
 # ===============================
 # 【新增】Excel 批量处理与标黄逻辑
 # ===============================
+# ===============================
+# 【增强版】Excel 批量处理（防中断+重试+自动降速）
+# ===============================
 def process_and_style_excel(df, selected_model_info, target_col_name):
     output = io.BytesIO()
     
@@ -561,74 +564,98 @@ def process_and_style_excel(df, selected_model_info, target_col_name):
 
     for index, row in df.iterrows():
         word = str(row[target_col_name]).strip()
-        status_text.text(f"正在处理 ({index + 1}/{total}): {word}")
         
-        # 1. 调用模型
-        scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
-            word=word,
-            provider=selected_model_info["provider"],
-            model=selected_model_info["model"],
-            api_key=selected_model_info["api_key"]
-        )
+        # --- 重试机制：最多尝试 3 次 ---
+        max_retries = 3
+        success = False
+        scores_all = {}
+        raw_text = ""
+        predicted_pos = "请求失败"
+        explanation = "多次重试后仍无法获取结果，可能是网络超时或词语违规。"
         
-        # 2. 获取各词类分数 (默认给 0 防止报错)
-        membership = calculate_membership(scores_all) if scores_all else {}
+        for attempt in range(max_retries):
+            try:
+                status_text.text(f"正在处理 ({index + 1}/{total}): {word} ... (第 {attempt + 1} 次尝试)")
+                
+                # 调用模型
+                scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
+                    word=word,
+                    provider=selected_model_info["provider"],
+                    model=selected_model_info["model"],
+                    api_key=selected_model_info["api_key"]
+                )
+                
+                # 如果成功拿到分数，且不是空字典，算作成功
+                if scores_all:
+                    success = True
+                    break  # 跳出重试循环
+                else:
+                    # 如果返回空，说明解析失败，等待后重试
+                    time.sleep(2)
+            except Exception as e:
+                # 捕获网络报错，打印日志并重试
+                print(f"Error processing {word}: {e}")
+                time.sleep(2)
+        
+        # --- 无论成功失败，都进行数据记录，保证循环不中断 ---
+        
+        # 获取各词类分数 (如果失败，默认为 0)
+        membership = calculate_membership(scores_all) if success and scores_all else {}
         score_v = membership.get("动词", 0.0)
         score_n = membership.get("名词", 0.0)
         score_nv = membership.get("名动词", 0.0)
         
-        # 3. 计算差值/距离 = |动词 - 名词|
+        # 计算差值
         diff_val = round(abs(score_v - score_n), 4)
         
-        # 4. 构造数据行 (严格按照您的截图顺序: 动词 -> 名词 -> 名动词 -> 差值 -> 原始响应)
         new_row = {
             "词语": word,
             "动词": score_v,
             "名词": score_n,
             "名动词": score_nv,
-            "差值/距离": diff_val,     # 差值
-            "原始响应": raw_text,
-            "_predicted_pos": predicted_pos  # 隐藏列，用于标黄判断
+            "差值/距离": diff_val,
+            "原始响应": raw_text if success else f"错误信息: {explanation}", # 失败时记录错误
+            "_predicted_pos": predicted_pos
         }
         processed_rows.append(new_row)
+        
+        # 更新进度条
         progress_bar.progress((index + 1) / total)
+        
+        # --- 关键：主动降速 ---
+        # 每跑完一个词，强制休息 1 秒，避免触发 API 的 QPS 限制
+        # 如果你的词很多，可以设为 0.5；如果经常断，建议设为 1.5 或 2
+        time.sleep(1) 
 
     # 生成 DataFrame
     result_df = pd.DataFrame(processed_rows)
     
     # 导出 Excel 并标黄
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # 定义要导出的列顺序 (不包含 _predicted_pos)
-        cols = ["词语", "动词", "名词", "名动词", "差值/距离", "原始响应"]
-        
-        result_df[cols].to_excel(writer, index=False, sheet_name='分析结果')
-        
-        workbook = writer.book
-        worksheet = writer.sheets['分析结果']
-        
-        # 定义黄色高亮样式
-        yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-        
-        # 遍历标黄
-        for i, data_row in enumerate(processed_rows):
-            row_num = i + 2 # Header占一行
-            pred = data_row["_predicted_pos"]
+    try:
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            cols = ["词语", "动词", "名词", "名动词", "差值/距离", "原始响应"]
+            result_df[cols].to_excel(writer, index=False, sheet_name='分析结果')
             
-            # 根据预测结果确定列索引 (注意：Excel列从1开始)
-            # A=1(词语), B=2(动词), C=3(名词), D=4(名动词)
-            target_idx = None
+            workbook = writer.book
+            worksheet = writer.sheets['分析结果']
             
-            if pred == "动词":
-                target_idx = 2
-            elif pred == "名词":
-                target_idx = 3
-            elif pred == "名动词":
-                target_idx = 4
+            yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
             
-            if target_idx:
-                worksheet.cell(row=row_num, column=target_idx).fill = yellow_fill
+            for i, data_row in enumerate(processed_rows):
+                row_num = i + 2 
+                pred = data_row["_predicted_pos"]
+                
+                target_idx = None
+                if pred == "动词": target_idx = 2
+                elif pred == "名词": target_idx = 3
+                elif pred == "名动词": target_idx = 4
+                
+                if target_idx:
+                    worksheet.cell(row=row_num, column=target_idx).fill = yellow_fill
+    except Exception as e:
+        st.error(f"生成 Excel 文件时出错: {e}")
 
-    status_text.success("✅ 处理完成！差值已按 |动词-名词| 计算。")
+    status_text.success(f"✅ 处理完成！共 {total} 个词语。")
     return output.getvalue()
 
 # ===============================
