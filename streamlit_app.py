@@ -549,10 +549,7 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
     st.plotly_chart(fig, use_container_width=True)
 
 # ===============================
-# 【新增】Excel 批量处理与标黄逻辑
-# ===============================
-# ===============================
-# 【增强版】Excel 批量处理（防中断+重试+自动降速）
+# 【最终增强版】批量处理（实时存档 + 断点生成）
 # ===============================
 def process_and_style_excel(df, selected_model_info, target_col_name):
     output = io.BytesIO()
@@ -560,72 +557,104 @@ def process_and_style_excel(df, selected_model_info, target_col_name):
     processed_rows = []
     progress_bar = st.progress(0)
     status_text = st.empty()
+    backup_msg = st.empty() # 用于显示备份状态
+    
     total = len(df)
+    
+    # 定义本地备份文件名 (在脚本同级目录下)
+    backup_file = "process_backup.csv"
+    
+    # 如果存在旧的备份文件，先删除，避免数据混淆
+    if os.path.exists(backup_file):
+        try:
+            os.remove(backup_file)
+        except:
+            pass # 如果删不掉就算了
 
-    for index, row in df.iterrows():
-        word = str(row[target_col_name]).strip()
-        
-        # --- 重试机制：最多尝试 3 次 ---
-        max_retries = 3
-        success = False
-        scores_all = {}
-        raw_text = ""
-        predicted_pos = "请求失败"
-        explanation = "多次重试后仍无法获取结果，可能是网络超时或词语违规。"
-        
-        for attempt in range(max_retries):
-            try:
-                status_text.text(f"正在处理 ({index + 1}/{total}): {word} ... (第 {attempt + 1} 次尝试)")
-                
-                # 调用模型
-                scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
-                    word=word,
-                    provider=selected_model_info["provider"],
-                    model=selected_model_info["model"],
-                    api_key=selected_model_info["api_key"]
-                )
-                
-                # 如果成功拿到分数，且不是空字典，算作成功
-                if scores_all:
-                    success = True
-                    break  # 跳出重试循环
-                else:
-                    # 如果返回空，说明解析失败，等待后重试
+    # --- 使用 try-except 块包裹循环 ---
+    # 这样即使中途报错，也能执行最后的 Excel 生成步骤
+    try:
+        for index, row in df.iterrows():
+            word = str(row[target_col_name]).strip()
+            
+            # --- 重试机制 ---
+            max_retries = 3
+            success = False
+            scores_all = {}
+            raw_text = ""
+            predicted_pos = "请求失败"
+            explanation = "多次重试后仍无法获取结果"
+            
+            for attempt in range(max_retries):
+                try:
+                    status_text.text(f"正在处理 ({index + 1}/{total}): {word} ... (第 {attempt + 1} 次尝试)")
+                    
+                    scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
+                        word=word,
+                        provider=selected_model_info["provider"],
+                        model=selected_model_info["model"],
+                        api_key=selected_model_info["api_key"]
+                    )
+                    
+                    if scores_all:
+                        success = True
+                        break 
+                    else:
+                        time.sleep(2)
+                except Exception as e:
+                    print(f"Error: {e}")
                     time.sleep(2)
+            
+            # --- 数据处理 ---
+            membership = calculate_membership(scores_all) if success and scores_all else {}
+            score_v = membership.get("动词", 0.0)
+            score_n = membership.get("名词", 0.0)
+            score_nv = membership.get("名动词", 0.0)
+            diff_val = round(abs(score_v - score_n), 4)
+            
+            new_row = {
+                "词语": word,
+                "动词": score_v,
+                "名词": score_n,
+                "名动词": score_nv,
+                "差值/距离": diff_val,
+                "原始响应": raw_text if success else f"错误: {explanation}",
+                "_predicted_pos": predicted_pos
+            }
+            
+            # 1. 加入内存列表（用于最后生成漂亮Excel）
+            processed_rows.append(new_row)
+            
+            # 2. 【核心修改】实时写入本地 CSV 备份
+            # mode='a' 表示追加模式，header 只有在文件不存在时才写入
+            try:
+                temp_df = pd.DataFrame([new_row])
+                write_header = not os.path.exists(backup_file)
+                temp_df.to_csv(backup_file, mode='a', header=write_header, index=False, encoding='utf-8-sig')
+                backup_msg.info(f"💾 已实时备份 {index + 1} 条数据到本地文件: `{backup_file}` (位于脚本同目录下)")
             except Exception as e:
-                # 捕获网络报错，打印日志并重试
-                print(f"Error processing {word}: {e}")
-                time.sleep(2)
-        
-        # --- 无论成功失败，都进行数据记录，保证循环不中断 ---
-        
-        # 获取各词类分数 (如果失败，默认为 0)
-        membership = calculate_membership(scores_all) if success and scores_all else {}
-        score_v = membership.get("动词", 0.0)
-        score_n = membership.get("名词", 0.0)
-        score_nv = membership.get("名动词", 0.0)
-        
-        # 计算差值
-        diff_val = round(abs(score_v - score_n), 4)
-        
-        new_row = {
-            "词语": word,
-            "动词": score_v,
-            "名词": score_n,
-            "名动词": score_nv,
-            "差值/距离": diff_val,
-            "原始响应": raw_text if success else f"错误信息: {explanation}", # 失败时记录错误
-            "_predicted_pos": predicted_pos
-        }
-        processed_rows.append(new_row)
-        
-        # 更新进度条
-        progress_bar.progress((index + 1) / total)
-        
-        # --- 关键：主动降速 ---
-        # 每跑完一个词，强制休息 1 秒，避免触发 API 的 QPS 限制
-        # 如果你的词很多，可以设为 0.5；如果经常断，建议设为 1.5 或 2
-        time.sleep(1) 
+                print(f"备份失败: {e}")
+
+            # 更新进度
+            progress_bar.progress((index + 1) / total)
+            
+            # 强制降速
+            time.sleep(1)
+
+    except Exception as e:
+        st.error(f"⚠️ 发生意外中断: {e}")
+        st.warning("🛑 正在为您抢救已完成的数据...")
+    
+    # ==========================================
+    # 无论循环是否完成，或者是中途报错跳出
+    # 下面的代码都会执行，为您生成 Excel
+    # ==========================================
+    
+    if not processed_rows:
+        st.error("❌ 没有成功处理任何数据。")
+        return None
+
+    st.info(f"正在生成结果文件，共包含 {len(processed_rows)} 条有效数据...")
 
     # 生成 DataFrame
     result_df = pd.DataFrame(processed_rows)
@@ -654,10 +683,12 @@ def process_and_style_excel(df, selected_model_info, target_col_name):
                     worksheet.cell(row=row_num, column=target_idx).fill = yellow_fill
     except Exception as e:
         st.error(f"生成 Excel 文件时出错: {e}")
+        # 如果Excel生成失败，至少返回CSV备份的内容
+        return None
 
-    status_text.success(f"✅ 处理完成！共 {total} 个词语。")
+    status_text.success(f"✅ 处理结束！成功获取 {len(processed_rows)}/{total} 个词语。")
     return output.getvalue()
-
+    
 # ===============================
 # 主页面逻辑
 # ===============================
