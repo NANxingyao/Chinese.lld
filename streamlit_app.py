@@ -7,13 +7,28 @@ import pandas as pd
 import plotly.graph_objects as go
 import io
 import time
+import logging
+import fcntl
 from typing import Tuple, Dict, Any, List
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
+from pathlib import Path
 
 # ===============================
-# 页面配置
+# 基础配置与日志（新增：定位中断原因）
 # ===============================
+# 创建日志配置
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("process_log.log", encoding="utf-8"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# 页面配置
 st.set_page_config(
     page_title="汉语词类隶属度检测划类",
     page_icon="📰",
@@ -34,9 +49,10 @@ footer {visibility: hidden;}
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# ===============================
-# 词类规则定义（全局，修复核心：提取到全局避免复杂读取）
-# ===============================
+# 全局常量（修复：使用绝对路径避免文件路径问题）
+BASE_DIR = Path(__file__).parent
+BACKUP_FILE = BASE_DIR / "batch_history_log.csv"
+PROGRESS_FILE = BASE_DIR / "process_progress.json"  # 新增：保存处理进度
 RULE_SETS = {
     "名词": [
         {"name": "N1_可受数量词修饰", "desc": "可以受数量词修饰", "match_score": 10, "mismatch_score": 0},
@@ -74,7 +90,7 @@ RULE_SETS = {
 }
 
 # ===============================
-# 模型配置 (启用流式 Stream)
+# 模型配置
 # ===============================
 MODEL_CONFIGS = {
     "deepseek": {
@@ -129,7 +145,6 @@ MODEL_CONFIGS = {
     },
 }
 
-# 模型选项（仅从环境变量获取API Key）
 MODEL_OPTIONS = {
     "DeepSeek Chat": {
         "provider": "deepseek", 
@@ -157,7 +172,6 @@ MODEL_OPTIONS = {
     },
 }
 
-# 过滤掉没有配置 API Key 的模型
 AVAILABLE_MODEL_OPTIONS = {
     name: info for name, info in MODEL_OPTIONS.items() if info["api_key"]
 }
@@ -166,25 +180,22 @@ if not AVAILABLE_MODEL_OPTIONS:
     AVAILABLE_MODEL_OPTIONS = MODEL_OPTIONS
 
 # ===============================
-# 工具函数
+# 增强型工具函数（解决中断核心）
 # ===============================
 def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
     """从不同格式的LLM响应中安全提取文本内容。"""
     if not isinstance(resp_json, dict):
         return ""
     try:
-        # Qwen 格式
         if "output" in resp_json and "text" in resp_json["output"]:
             return resp_json["output"]["text"]
-        
-        # OpenAI/DeepSeek/Moonshot 格式
         if "choices" in resp_json and len(resp_json["choices"]) > 0:
             choice = resp_json["choices"][0]
             if "message" in choice and "content" in choice["message"]:
                 return choice["message"]["content"]
-            
         return json.dumps(resp_json, ensure_ascii=False)
     except Exception as e:
+        logger.error(f"提取响应文本失败: {e}")
         return json.dumps(resp_json, ensure_ascii=False)
 
 def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
@@ -197,7 +208,8 @@ def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
     try:
         parsed_json = json.loads(json_text)
         return parsed_json, json_text
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        logger.error(f"解析JSON失败: {e}, 原始文本: {json_text[:100]}")
         return None, json_text
 
 def normalize_key(k: str, pos_rules: list) -> str:
@@ -213,32 +225,42 @@ def normalize_key(k: str, pos_rules: list) -> str:
 def map_to_allowed_score(rule: dict, raw_val) -> int:
     """将模型返回值映射为规则得分"""
     match_score, mismatch_score = rule["match_score"], rule["mismatch_score"]
-    if isinstance(raw_val, bool):
-        return match_score if raw_val else mismatch_score
-    if isinstance(raw_val, str):
-        s = raw_val.strip().lower()
-        if s in ("yes", "y", "true", "是", "√", "符合"):
-            return match_score
-        if s in ("no", "n", "false", "否", "×", "不符合"):
-            return mismatch_score
-    if isinstance(raw_val, (int, float)):
-        raw_val_int = int(raw_val)
-        if raw_val_int == match_score: return match_score
-        if raw_val_int == mismatch_score: return mismatch_score
+    try:
+        if isinstance(raw_val, bool):
+            return match_score if raw_val else mismatch_score
+        if isinstance(raw_val, str):
+            s = raw_val.strip().lower()
+            if s in ("yes", "y", "true", "是", "√", "符合"):
+                return match_score
+            if s in ("no", "n", "false", "否", "×", "不符合"):
+                return mismatch_score
+        if isinstance(raw_val, (int, float)):
+            raw_val_int = int(raw_val)
+            if raw_val_int == match_score: return match_score
+            if raw_val_int == mismatch_score: return mismatch_score
+    except Exception as e:
+        logger.error(f"映射得分失败: {e}")
     return mismatch_score
 
 def calculate_membership(scores_all: Dict[str, Dict[str, int]]) -> Dict[str, float]:
     """计算隶属度"""
     membership = {}
-    for pos, scores in scores_all.items():
-        total_score = sum(scores.values())
-        normalized = total_score / 100
-        membership[pos] = max(-1.0, min(1.0, normalized))
+    try:
+        for pos, scores in scores_all.items():
+            total_score = sum(scores.values())
+            normalized = total_score / 100
+            membership[pos] = max(-1.0, min(1.0, normalized))
+    except Exception as e:
+        logger.error(f"计算隶属度失败: {e}")
     return membership
 
 def get_top_10_positions(membership: Dict[str, float]) -> List[Tuple[str, float]]:
     """获取隶属度最高的前 10 个词类"""
-    return sorted(membership.items(), key=lambda x: x[1], reverse=True)[:10]
+    try:
+        return sorted(membership.items(), key=lambda x: x[1], reverse=True)[:10]
+    except Exception as e:
+        logger.error(f"排序隶属度失败: {e}")
+        return []
 
 def get_history_count(backup_file):
     """获取最新的历史记录数量（实时更新用）"""
@@ -248,16 +270,73 @@ def get_history_count(backup_file):
         temp_history = pd.read_csv(backup_file, encoding='utf-8-sig')
         return len(temp_history)
     except Exception as e:
-        st.warning(f"读取历史记录数量失败: {e}")
+        logger.warning(f"读取历史记录数量失败: {e}")
         return 0
 
+# 新增：文件写入加锁 + 重试（解决文件操作中断）
+def safe_write_csv(df, file_path, mode='a', header=False, encoding='utf-8-sig', max_retries=3):
+    """安全写入CSV，加文件锁避免冲突，失败自动重试"""
+    retry_count = 0
+    while retry_count < max_retries:
+        try:
+            with open(file_path, mode, encoding=encoding) as f:
+                fcntl.flock(f, fcntl.LOCK_EX)  # 排他锁
+                df.to_csv(f, mode=mode, header=header, index=False)
+                fcntl.flock(f, fcntl.LOCK_UN)  # 释放锁
+            return True
+        except Exception as e:
+            retry_count += 1
+            logger.warning(f"写入CSV失败（重试{retry_count}/{max_retries}）: {e}")
+            time.sleep(1)
+    logger.error(f"写入CSV最终失败: {file_path}")
+    return False
+
+# 新增：保存/加载处理进度（解决断点续传中断）
+def save_process_progress(file_name, current_row, total_rows):
+    """保存处理进度"""
+    try:
+        progress_data = {
+            "file_name": file_name,
+            "current_row": current_row,
+            "total_rows": total_rows,
+            "last_update": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+        with open(PROGRESS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(progress_data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"保存进度失败: {e}")
+
+def load_process_progress():
+    """加载处理进度"""
+    if not os.path.exists(PROGRESS_FILE):
+        return None
+    try:
+        with open(PROGRESS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"加载进度失败: {e}")
+        return None
+
+# 新增：清除进度文件
+def clear_process_progress():
+    """清除进度文件"""
+    if os.path.exists(PROGRESS_FILE):
+        try:
+            os.remove(PROGRESS_FILE)
+        except Exception as e:
+            logger.error(f"清除进度文件失败: {e}")
+
 # ===============================
-# 安全的 LLM 调用函数 (流式版)
+# 增强型LLM调用（解决API中断）
 # ===============================
-def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, temperature=0.0):
-    """封装LLM调用逻辑"""
-    if not _api_key: return False, {"error": "API Key 为空"}, "API Key 未提供"
-    if _provider not in MODEL_CONFIGS: return False, {"error": f"未知提供商 {_provider}"}, f"未知提供商 {_provider}"
+def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, temperature=0.0, max_retries=3):
+    """封装LLM调用逻辑，增强重试机制"""
+    if not _api_key: 
+        logger.error("API Key 为空")
+        return False, {"error": "API Key 为空"}, "API Key 未提供"
+    if _provider not in MODEL_CONFIGS: 
+        logger.error(f"未知提供商 {_provider}")
+        return False, {"error": f"未知提供商 {_provider}"}, f"未知提供商 {_provider}"
 
     cfg = MODEL_CONFIGS[_provider]
     url = f"{cfg['base_url'].rstrip('/')}{cfg['endpoint']}"
@@ -267,49 +346,57 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
     streaming_placeholder = st.empty()
     full_content = ""
 
-    try:
-        with requests.post(url, headers=headers, json=payload, stream=True, timeout=60) as response:
-            response.raise_for_status()
-            for line in response.iter_lines():
-                if not line: continue
-                line_text = line.decode('utf-8').strip()
-                json_str = line_text[5:].strip() if line_text.startswith("data:") else line_text
-                if json_str == "[DONE]": break
-                try:
-                    chunk = json.loads(json_str)
-                    delta_text = ""
-                    if "choices" in chunk and len(chunk["choices"]) > 0:
-                        delta = chunk["choices"][0].get("delta", {})
-                        delta_text = delta.get("content", "")
-                    elif "output" in chunk:
-                        output = chunk["output"]
-                        if "choices" in output and len(output["choices"]) > 0:
-                            msg = output["choices"][0].get("message", {})
-                            delta_text = msg.get("content", "")
-                        elif "text" in output:
-                            delta_text = output["text"]
-                    if delta_text:
-                        full_content += delta_text
-                except json.JSONDecodeError:
-                    continue
-        
-        streaming_placeholder.empty()
-        mock_response = {
-            "choices": [{"message": {"content": full_content}}],
-            "output": {"text": full_content}
-        }
-        
-        if not full_content:
-             return False, {"error": "未接收到有效内容"}, "模型未返回内容"
+    # 增强重试逻辑
+    for attempt in range(max_retries):
+        try:
+            with requests.post(url, headers=headers, json=payload, stream=True, timeout=120) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line: continue
+                    line_text = line.decode('utf-8').strip()
+                    json_str = line_text[5:].strip() if line_text.startswith("data:") else line_text
+                    if json_str == "[DONE]": break
+                    try:
+                        chunk = json.loads(json_str)
+                        delta_text = ""
+                        if "choices" in chunk and len(chunk["choices"]) > 0:
+                            delta = chunk["choices"][0].get("delta", {})
+                            delta_text = delta.get("content", "")
+                        elif "output" in chunk:
+                            output = chunk["output"]
+                            if "choices" in output and len(output["choices"]) > 0:
+                                msg = output["choices"][0].get("message", {})
+                                delta_text = msg.get("content", "")
+                            elif "text" in output:
+                                delta_text = output["text"]
+                        if delta_text:
+                            full_content += delta_text
+                    except json.JSONDecodeError:
+                        continue
+            
+            streaming_placeholder.empty()
+            mock_response = {
+                "choices": [{"message": {"content": full_content}}],
+                "output": {"text": full_content}
+            }
+            
+            if not full_content:
+                logger.warning(f"模型未返回内容（尝试{attempt+1}）")
+                continue
 
-        return True, mock_response, ""
+            return True, mock_response, ""
 
-    except requests.exceptions.RequestException as e:
-        error_msg = f"网络请求异常: {str(e)}"
-        return False, {"error": error_msg}, error_msg
-    except Exception as e:
-        error_msg = f"流式处理未知错误: {str(e)}\n已接收内容: {full_content[:100]}..."
-        return False, {"error": error_msg}, error_msg
+        except requests.exceptions.RequestException as e:
+            error_msg = f"网络请求异常（尝试{attempt+1}）: {str(e)}"
+            logger.warning(error_msg)
+            time.sleep(2 ** attempt)  # 指数退避
+        except Exception as e:
+            error_msg = f"流式处理未知错误（尝试{attempt+1}）: {str(e)}\n已接收内容: {full_content[:100]}..."
+            logger.error(error_msg)
+            time.sleep(2 ** attempt)
+    
+    streaming_placeholder.empty()
+    return False, {"error": error_msg}, error_msg
 
 # ===============================
 # 词类判定主函数
@@ -319,13 +406,11 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     if not word:
         return {}, "", "未知", ""
 
-    # 构建规则说明文本（使用全局RULE_SETS）
     full_rules_by_pos = {
         pos: "\n".join([f"- {r['name']}: {r['desc']}（符合: {r['match_score']} 分，不符合: {r['mismatch_score']} 分）" for r in rules])
         for pos, rules in RULE_SETS.items()
     }
 
-    # 系统提示词
     system_msg = f"""你是一名中文词法与语法方面的专家。现在要分析词语「{word}」在下列词类中的表现：
 - 需要判断的词类：名词、动词、名动词
 - 评分规则已经由系统定义，你**不要**自己设计分值，也**不要**在 JSON 中给出具体数字分数。程序将根据你的判断（true/false）自动赋值。
@@ -382,6 +467,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 
     if not ok:
         st.error(f"模型调用失败: {err_msg}")
+        logger.error(f"模型调用失败 - 词语:{word}, 错误:{err_msg}")
         return {}, f"调用失败: {err_msg}", "未知", f"模型调用失败: {err_msg}"
 
     raw_text = extract_text_from_response(resp_json)
@@ -400,23 +486,26 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         raw_scores = {}
         cleaned_json_text = raw_text
 
-    # 初始化得分字典
     scores_out = {pos: {} for pos in RULE_SETS.keys()}
-    for pos, rules in RULE_SETS.items():
-        raw_pos_scores = raw_scores.get(pos, {})
-        if isinstance(raw_pos_scores, dict):
-            for k, v in raw_pos_scores.items():
-                normalized_key = normalize_key(k, rules)
-                if normalized_key:
-                    rule_def = next(r for r in rules if r["name"] == normalized_key)
-                    scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
+    try:
+        for pos, rules in RULE_SETS.items():
+            raw_pos_scores = raw_scores.get(pos, {})
+            if isinstance(raw_pos_scores, dict):
+                for k, v in raw_pos_scores.items():
+                    normalized_key = normalize_key(k, rules)
+                    if normalized_key:
+                        rule_def = next(r for r in rules if r["name"] == normalized_key)
+                        scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
 
-    # 补全缺失的规则得分（默认0分）
-    for pos, rules in RULE_SETS.items():
-        for rule in rules:
-            rule_name = rule["name"]
-            if rule_name not in scores_out[pos]:
-                scores_out[pos][rule_name] = 0
+        # 补全缺失的规则得分
+        for pos, rules in RULE_SETS.items():
+            for rule in rules:
+                rule_name = rule["name"]
+                if rule_name not in scores_out[pos]:
+                    scores_out[pos][rule_name] = 0
+    except Exception as e:
+        logger.error(f"处理得分失败: {e}")
+        scores_out = {}
 
     return scores_out, raw_text, predicted_pos, explanation
 
@@ -466,10 +555,10 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
     st.plotly_chart(fig, use_container_width=True)
 
 # ===============================
-# 批量处理函数
+# 增强型批量处理（核心修复中断）
 # ===============================
-def process_and_style_excel(df, selected_model_info, target_col_name, metric_placeholder, BACKUP_FILE):
-    """批量处理Excel并实时更新数据量"""
+def process_and_style_excel(df, selected_model_info, target_col_name, metric_placeholder, backup_file):
+    """批量处理Excel并实时更新数据量，增强鲁棒性"""
     output = io.BytesIO()
     if 'processed_history' not in st.session_state:
         st.session_state.processed_history = []
@@ -478,67 +567,97 @@ def process_and_style_excel(df, selected_model_info, target_col_name, metric_pla
     status_text = st.empty()
     backup_info_placeholder = st.container()
     total = len(df)
-    backup_file = BACKUP_FILE
-
+    file_name = f"excel_{int(time.time())}"  # 唯一标识当前文件
+    
+    # 加载上次进度
+    last_progress = load_process_progress()
+    start_row = 0
+    if last_progress and last_progress.get("file_name") == file_name:
+        start_row = last_progress.get("current_row", 0)
+        st.info(f"📌 检测到上次未完成的任务，从第 {start_row+1} 行继续处理")
+    
     try:
-        for index, row in df.iterrows():
+        for index in range(start_row, total):
+            row = df.iloc[index]
             word = str(row[target_col_name]).strip()
-            max_retries = 3
-            success = False
-            scores_all, raw_text, predicted_pos, explanation = {}, "", "请求失败", ""
             
-            for attempt in range(max_retries):
-                try:
-                    status_text.text(f"正在处理 ({index + 1}/{total}): {word} ... (尝试 {attempt + 1})")
-                    scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
-                        word=word,
-                        provider=selected_model_info["provider"],
-                        model=selected_model_info["model"],
-                        api_key=selected_model_info["api_key"]
-                    )
-                    if scores_all:
-                        success = True
-                        break
-                    time.sleep(2)
-                except Exception:
-                    time.sleep(2)
+            # 保存当前进度
+            save_process_progress(file_name, index, total)
             
-            # 构造数据行
-            membership = calculate_membership(scores_all) if success else {}
-            new_row = {
-                "序数": index + 1,
-                "词语": word,
-                "动词": membership.get("动词", 0.0),
-                "名词": membership.get("名词", 0.0),
-                "名动词": membership.get("名动词", 0.0),
-                "差值/距离": round(abs(membership.get("动词", 0.0) - membership.get("名词", 0.0)), 4),
-                "预测词类": predicted_pos,
-                "原始响应": raw_text if success else f"错误: {explanation}",
-                "时间戳": time.strftime("%Y-%m-%d %H:%M:%S")
-            }
-            
-            # 保存到SessionState
-            st.session_state.processed_history.append(new_row)
-            
-            # 写入CSV并实时更新数据量
+            # 单条数据异常捕获（核心：避免单条失败中断整体）
             try:
-                temp_df = pd.DataFrame([new_row])
-                header_needed = not os.path.exists(backup_file)
-                temp_df.to_csv(backup_file, mode='a', header=header_needed, index=False, encoding='utf-8-sig')
-                # 核心：更新已存数据量指标
-                latest_count = get_history_count(backup_file)
-                metric_placeholder.metric("已存数据量", f"{latest_count} 条")
-            except Exception as csv_err:
-                st.error(f"保存第 {index+1} 条记录失败: {csv_err}")
+                max_retries = 3
+                success = False
+                scores_all, raw_text, predicted_pos, explanation = {}, "", "请求失败", ""
+                
+                for attempt in range(max_retries):
+                    try:
+                        status_text.text(f"正在处理 ({index + 1}/{total}): {word} ... (尝试 {attempt + 1})")
+                        scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
+                            word=word,
+                            provider=selected_model_info["provider"],
+                            model=selected_model_info["model"],
+                            api_key=selected_model_info["api_key"]
+                        )
+                        if scores_all:
+                            success = True
+                            break
+                        time.sleep(2)
+                    except Exception as e:
+                        logger.error(f"处理词语{word}失败（尝试{attempt+1}）: {e}")
+                        time.sleep(2)
+                
+                # 构造数据行
+                membership = calculate_membership(scores_all) if success else {}
+                new_row = {
+                    "序数": index + 1,
+                    "词语": word,
+                    "动词": membership.get("动词", 0.0),
+                    "名词": membership.get("名词", 0.0),
+                    "名动词": membership.get("名动词", 0.0),
+                    "差值/距离": round(abs(membership.get("动词", 0.0) - membership.get("名词", 0.0)), 4),
+                    "预测词类": predicted_pos,
+                    "原始响应": raw_text if success else f"错误: {explanation}",
+                    "时间戳": time.strftime("%Y-%m-%d %H:%M:%S")
+                }
+                
+                # 保存到SessionState
+                st.session_state.processed_history.append(new_row)
+                
+                # 安全写入CSV并实时更新数据量
+                try:
+                    temp_df = pd.DataFrame([new_row])
+                    header_needed = not os.path.exists(backup_file)
+                    write_success = safe_write_csv(temp_df, backup_file, mode='a', header=header_needed)
+                    if write_success:
+                        # 实时更新已存数据量
+                        latest_count = get_history_count(backup_file)
+                        metric_placeholder.metric("已存数据量", f"{latest_count} 条")
+                    else:
+                        st.error(f"⚠️ 保存第 {index+1} 条记录失败（文件写入错误）")
+                except Exception as csv_err:
+                    st.error(f"保存第 {index+1} 条记录失败: {csv_err}")
+                    logger.error(f"保存CSV失败 - 行号:{index+1}, 错误:{csv_err}")
 
-            with backup_info_placeholder:
-                st.info(f"💾 已自动保存第 {index+1} 条记录。如遇中断，请检查目录下 `{backup_file}`")
+                with backup_info_placeholder:
+                    st.info(f"💾 已自动保存第 {index+1} 条记录。如遇中断，下次将从第 {index+2} 行继续")
 
-            progress_bar.progress((index + 1) / total)
-            time.sleep(0.5)
+                progress_bar.progress((index + 1) / total)
+                time.sleep(0.5)  # 限流：避免请求过快被封禁
+                
+            except Exception as row_err:
+                logger.error(f"处理第{index+1}行失败（跳过）: {row_err}")
+                st.warning(f"⚠️ 跳过第 {index+1} 行（处理失败）: {row_err}")
+                progress_bar.progress((index + 1) / total)
+                continue
 
     except Exception as e:
         st.error(f"⚠️ 批量处理意外中断: {e}")
+        logger.error(f"批量处理中断: {e}")
+        return None
+    finally:
+        # 处理完成/中断后清除进度文件
+        clear_process_progress()
     
     # 导出Excel
     final_data = st.session_state.processed_history
@@ -565,6 +684,7 @@ def process_and_style_excel(df, selected_model_info, target_col_name, metric_pla
         return output.getvalue()
     except Exception as e:
         st.error(f"Excel 生成失败: {e}")
+        logger.error(f"生成Excel失败: {e}")
         return None
 
 # ===============================
@@ -679,7 +799,6 @@ def main():
                         with st.expander(f"**{pos}** (总分: {total_score}, 最高分规则: {max_rule[0]} - {max_rule[1]}分)"):
                             rule_data = []
                             for rule_name, rule_score in scores_all[pos].items():
-                                # 修复核心：简化规则描述查找（直接用全局RULE_SETS）
                                 rule_desc = ""
                                 if pos in RULE_SETS:
                                     for rule in RULE_SETS[pos]:
@@ -710,7 +829,6 @@ def main():
     # 批量处理
     with tab2:
         st.header("📂 批量任务实时监控")
-        BACKUP_FILE = "batch_history_log.csv"
 
         # 控制面板
         st.subheader("🛠️ 控制面板")
@@ -745,8 +863,8 @@ def main():
                 if os.path.exists(BACKUP_FILE):
                     try:
                         os.remove(BACKUP_FILE)
-                        st.success("✅ 已清空本地记录")
-                        # 清空后更新数据量显示
+                        clear_process_progress()  # 同时清除进度
+                        st.success("✅ 已清空本地记录和进度")
                         metric_placeholder.metric("已存数据量", "0 条")
                         st.rerun()
                     except Exception as e:
@@ -790,7 +908,7 @@ def main():
                 if target_col:
                     st.write(f"✅ 识别到目标列: `{target_col}` | 待分析总数: {len(df_input)}")
                     
-                    if st.button("🚀 开始处理 (自动续传)", type="primary", use_container_width=True):
+                    if st.button("🚀 开始处理 (断点续传+防中断)", type="primary", use_container_width=True):
                         if not selected_model_info["api_key"]:
                             st.error("❌ 请先在上方配置有效的 API Key")
                         else:
@@ -807,90 +925,96 @@ def main():
 
                             total_rows = len(df_input)
                             
-                            for index, row in df_input.iterrows():
-                                word = str(row[target_col]).strip()
-                                if not word:
-                                    status_info.write(f"⏩ **跳过空值**: 第 {index+1}/{total_rows} 行")
+                            # 批量处理主循环（全量异常捕获）
+                            try:
+                                for index, row in df_input.iterrows():
+                                    word = str(row[target_col]).strip()
+                                    if not word:
+                                        status_info.write(f"⏩ **跳过空值**: 第 {index+1}/{total_rows} 行")
+                                        progress_bar.progress((index + 1) / total_rows)
+                                        continue
+                                    
+                                    pct = int((index + 1) / total_rows * 100)
                                     progress_bar.progress((index + 1) / total_rows)
-                                    continue
-                                
-                                pct = int((index + 1) / total_rows * 100)
-                                progress_bar.progress((index + 1) / total_rows)
-                                
-                                if word in existing_words:
-                                    status_info.write(f"⏩ **跳过已处理**: {word} ({index+1}/{total_rows}) | 进度: {pct}%")
-                                    continue
-                                
-                                status_info.write(f"🔍 **正在分析**: `{word}` | 进度: {index+1}/{total_rows} ({pct}%)")
-                                
-                                # 调用API处理
-                                max_retries = 3
-                                success = False
-                                scores, raw_text, pred_pos, explanation = {}, "", "处理失败", "无响应"
-                                for attempt in range(max_retries):
+                                    
+                                    if word in existing_words:
+                                        status_info.write(f"⏩ **跳过已处理**: {word} ({index+1}/{total_rows}) | 进度: {pct}%")
+                                        continue
+                                    
+                                    status_info.write(f"🔍 **正在分析**: `{word}` | 进度: {index+1}/{total_rows} ({pct}%)")
+                                    
+                                    # 调用API处理（增强重试）
+                                    max_retries = 3
+                                    success = False
+                                    scores, raw_text, pred_pos, explanation = {}, "", "处理失败", "无响应"
+                                    for attempt in range(max_retries):
+                                        try:
+                                            scores, raw_text, pred_pos, explanation = ask_model_for_pos_and_scores(
+                                                word=word,
+                                                provider=selected_model_info["provider"],
+                                                model=selected_model_info["model"],
+                                                api_key=selected_model_info["api_key"]
+                                            )
+                                            success = bool(scores)
+                                            if success:
+                                                break
+                                            time.sleep(2)
+                                        except Exception as e:
+                                            explanation = f"调用异常: {str(e)}"
+                                            logger.error(f"处理词语{word}失败（尝试{attempt+1}）: {e}")
+                                            time.sleep(2)
+                                    
+                                    # 构造数据行
+                                    membership = calculate_membership(scores) if success else {}
+                                    new_row = {
+                                        "序数": index + 1,
+                                        "词语": word,
+                                        "动词": membership.get("动词", 0.0),
+                                        "名词": membership.get("名词", 0.0),
+                                        "名动词": membership.get("名动词", 0.0),
+                                        "差值/距离": round(abs(membership.get("动词", 0.0) - membership.get("名词", 0.0)), 4),
+                                        "预测词类": pred_pos,
+                                        "原始响应": raw_text if success else f"错误: {explanation}",
+                                        "时间戳": time.strftime("%Y-%m-%d %H:%M:%S")
+                                    }
+                                    
+                                    # 安全保存数据
                                     try:
-                                        scores, raw_text, pred_pos, explanation = ask_model_for_pos_and_scores(
-                                            word=word,
-                                            provider=selected_model_info["provider"],
-                                            model=selected_model_info["model"],
-                                            api_key=selected_model_info["api_key"]
-                                        )
-                                        success = bool(scores)
-                                        if success:
-                                            break
-                                        time.sleep(2)
-                                    except Exception as e:
-                                        explanation = f"调用异常: {str(e)}"
-                                        time.sleep(2)
+                                        temp_df = pd.DataFrame([new_row])
+                                        header_needed = not os.path.exists(BACKUP_FILE)
+                                        write_success = safe_write_csv(temp_df, BACKUP_FILE, mode='a', header=header_needed)
+                                        if write_success:
+                                            existing_words.add(word)
+                                            # 实时更新已存数据量
+                                            latest_count = get_history_count(BACKUP_FILE)
+                                            metric_placeholder.metric("已存数据量", f"{latest_count} 条")
+                                        else:
+                                            st.error(f"⚠️ 保存第 {index+1} 条记录失败（文件写入错误）")
+                                    except Exception as csv_err:
+                                        st.error(f"⚠️ 保存第 {index+1} 条记录失败: {csv_err}")
+                                        logger.error(f"保存CSV失败 - 行号:{index+1}, 错误:{csv_err}")
+                                    
+                                    # 刷新表格
+                                    try:
+                                        updated_df = pd.read_csv(BACKUP_FILE, encoding='utf-8-sig')
+                                        table_placeholder.dataframe(updated_df, use_container_width=True, height=300)
+                                    except Exception as read_err:
+                                        st.warning(f"刷新表格失败: {read_err}")
+                                    
+                                    time.sleep(0.5)  # 限流
                                 
-                                # 构造数据行
-                                membership = calculate_membership(scores) if success else {}
-                                new_row = {
-                                    "序数": index + 1,
-                                    "词语": word,
-                                    "动词": membership.get("动词", 0.0),
-                                    "名词": membership.get("名词", 0.0),
-                                    "名动词": membership.get("名动词", 0.0),
-                                    "差值/距离": round(abs(membership.get("动词", 0.0) - membership.get("名词", 0.0)), 4),
-                                    "预测词类": pred_pos,
-                                    "原始响应": raw_text if success else f"错误: {explanation}",
-                                    "时间戳": time.strftime("%Y-%m-%d %H:%M:%S")
-                                }
-                                
-                                # 保存数据并实时更新数量
-                                try:
-                                    temp_df = pd.DataFrame([new_row])
-                                    header_needed = not os.path.exists(BACKUP_FILE)
-                                    temp_df.to_csv(
-                                        BACKUP_FILE, 
-                                        mode='a', 
-                                        header=header_needed, 
-                                        index=False, 
-                                        encoding='utf-8-sig'
-                                    )
-                                    existing_words.add(word)
-                                    # 实时更新已存数据量
-                                    latest_count = get_history_count(BACKUP_FILE)
-                                    metric_placeholder.metric("已存数据量", f"{latest_count} 条")
-                                except Exception as csv_err:
-                                    st.error(f"⚠️ 保存第 {index+1} 条记录失败: {csv_err}")
-                                
-                                # 刷新表格
-                                try:
-                                    updated_df = pd.read_csv(BACKUP_FILE, encoding='utf-8-sig')
-                                    table_placeholder.dataframe(updated_df, use_container_width=True, height=300)
-                                except Exception as read_err:
-                                    st.warning(f"刷新表格失败: {read_err}")
-                                
-                                time.sleep(0.1)
-                            
-                            progress_bar.progress(100)
-                            status_info.success(f"🎉 批量处理完成！总处理量: {total_rows} 条，已保存到 {BACKUP_FILE}")
-                            st.rerun()
+                                progress_bar.progress(100)
+                                status_info.success(f"🎉 批量处理完成！总处理量: {total_rows} 条，已保存到 {BACKUP_FILE}")
+                                clear_process_progress()  # 清除进度
+                                st.rerun()
+                            except Exception as batch_err:
+                                logger.error(f"批量处理主循环中断: {batch_err}")
+                                status_info.error(f"⚠️ 批量处理中断: {batch_err}，下次可从断点继续")
                 else:
                     st.error("❌ 未识别到包含'词'或'word'的列，请检查Excel文件结构")
             except Exception as e:
                 st.error(f"读取Excel文件失败: {e}")
+                logger.error(f"读取Excel失败: {e}")
 
 # ===============================
 # 运行主函数
@@ -904,7 +1028,7 @@ if __name__ == "__main__":
 st.markdown("---")
 st.markdown(
     "<div style='text-align:center; color:#666;'>"
-    "© 2025 汉语词类隶属度检测划类  "
+    "© 2025 汉语词类隶属度检测划类（防中断版） "
     "</div>",
     unsafe_allow_html=True
 )
