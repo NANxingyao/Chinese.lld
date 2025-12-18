@@ -554,140 +554,111 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
 def process_and_style_excel(df, selected_model_info, target_col_name):
     output = io.BytesIO()
     
-    processed_rows = []
+    # --- 核心修改：使用 session_state 存储历史，防止界面刷新丢失 ---
+    if 'processed_history' not in st.session_state:
+        st.session_state.processed_history = []
+    
     progress_bar = st.progress(0)
     status_text = st.empty()
-    backup_msg = st.empty() # 用于显示备份状态
+    backup_info_placeholder = st.container() # 用于显示实时进度和备份提示
     
     total = len(df)
-    
-    # 定义本地备份文件名 (在脚本同级目录下)
-    backup_file = "process_backup.csv"
-    
-    # 如果存在旧的备份文件，先删除，避免数据混淆
-    if os.path.exists(backup_file):
-        try:
-            os.remove(backup_file)
-        except:
-            pass # 如果删不掉就算了
+    backup_file = "batch_process_history.csv" # 历史记录存盘文件
 
-    # --- 使用 try-except 块包裹循环 ---
-    # 这样即使中途报错，也能执行最后的 Excel 生成步骤
     try:
         for index, row in df.iterrows():
             word = str(row[target_col_name]).strip()
             
-            # --- 重试机制 ---
+            # 检查是否已经处理过（可选：避免重复消耗Token）
+            # if any(h['词语'] == word for h in st.session_state.processed_history): continue
+
+            # 重试机制
             max_retries = 3
             success = False
-            scores_all = {}
-            raw_text = ""
-            predicted_pos = "请求失败"
-            explanation = "多次重试后仍无法获取结果"
+            scores_all, raw_text, predicted_pos, explanation = {}, "", "请求失败", ""
             
             for attempt in range(max_retries):
                 try:
-                    status_text.text(f"正在处理 ({index + 1}/{total}): {word} ... (第 {attempt + 1} 次尝试)")
-                    
+                    status_text.text(f"正在处理 ({index + 1}/{total}): {word} ... (尝试 {attempt + 1})")
                     scores_all, raw_text, predicted_pos, explanation = ask_model_for_pos_and_scores(
                         word=word,
                         provider=selected_model_info["provider"],
                         model=selected_model_info["model"],
                         api_key=selected_model_info["api_key"]
                     )
-                    
                     if scores_all:
                         success = True
-                        break 
-                    else:
-                        time.sleep(2)
-                except Exception as e:
-                    print(f"Error: {e}")
+                        break
+                    time.sleep(2)
+                except Exception:
                     time.sleep(2)
             
-            # --- 数据处理 ---
-            membership = calculate_membership(scores_all) if success and scores_all else {}
-            score_v = membership.get("动词", 0.0)
-            score_n = membership.get("名词", 0.0)
-            score_nv = membership.get("名动词", 0.0)
-            diff_val = round(abs(score_v - score_n), 4)
-            
+            # 计算数据
+            membership = calculate_membership(scores_all) if success else {}
             new_row = {
+                "序数": index + 1,
                 "词语": word,
-                "动词": score_v,
-                "名词": score_n,
-                "名动词": score_nv,
-                "差值/距离": diff_val,
+                "动词": membership.get("动词", 0.0),
+                "名词": membership.get("名词", 0.0),
+                "名动词": membership.get("名动词", 0.0),
+                "差值/距离": round(abs(membership.get("动词", 0.0) - membership.get("名词", 0.0)), 4),
+                "预测词类": predicted_pos,
                 "原始响应": raw_text if success else f"错误: {explanation}",
-                "_predicted_pos": predicted_pos
+                "时间戳": time.strftime("%Y-%m-%d %H:%M:%S")
             }
             
-            # 1. 加入内存列表（用于最后生成漂亮Excel）
-            processed_rows.append(new_row)
+            # --- 实时存留记录 ---
+            # 1. 存入 SessionState (内存)
+            st.session_state.processed_history.append(new_row)
             
-            # 2. 【核心修改】实时写入本地 CSV 备份
-            # mode='a' 表示追加模式，header 只有在文件不存在时才写入
+            # 2. 写入本地磁盘 CSV (持久化)
             try:
                 temp_df = pd.DataFrame([new_row])
-                write_header = not os.path.exists(backup_file)
-                temp_df.to_csv(backup_file, mode='a', header=write_header, index=False, encoding='utf-8-sig')
-                backup_msg.info(f"💾 已实时备份 {index + 1} 条数据到本地文件: `{backup_file}` (位于脚本同目录下)")
-            except Exception as e:
-                print(f"备份失败: {e}")
+                # header 只在文件不存在时写入
+                header_needed = not os.path.exists(backup_file)
+                temp_df.to_csv(backup_file, mode='a', header=header_needed, index=False, encoding='utf-8-sig')
+            except:
+                pass
 
-            # 更新进度
+            # 3. 实时在界面展示已完成的记录（让用户放心）
+            with backup_info_placeholder:
+                st.info(f"💾 已自动保存第 {index+1} 条记录。如遇中断，请检查目录下 `{backup_file}`")
+
             progress_bar.progress((index + 1) / total)
-            
-            # 强制降速
-            time.sleep(1)
+            time.sleep(0.5)
 
     except Exception as e:
-        st.error(f"⚠️ 发生意外中断: {e}")
-        st.warning("🛑 正在为您抢救已完成的数据...")
+        st.error(f"⚠️ 批量处理意外中断: {e}")
     
-    # ==========================================
-    # 无论循环是否完成，或者是中途报错跳出
-    # 下面的代码都会执行，为您生成 Excel
-    # ==========================================
-    
-    if not processed_rows:
-        st.error("❌ 没有成功处理任何数据。")
+    # ===============================
+    # 导出逻辑（支持中断后导出已完成部分）
+    # ===============================
+    final_data = st.session_state.processed_history
+    if not final_data:
         return None
 
-    st.info(f"正在生成结果文件，共包含 {len(processed_rows)} 条有效数据...")
-
-    # 生成 DataFrame
-    result_df = pd.DataFrame(processed_rows)
+    result_df = pd.DataFrame(final_data)
     
-    # 导出 Excel 并标黄
     try:
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            cols = ["词语", "动词", "名词", "名动词", "差值/距离", "原始响应"]
+            cols = ["词语", "动词", "名词", "名动词", "差值/距离", "预测词类", "原始响应"]
             result_df[cols].to_excel(writer, index=False, sheet_name='分析结果')
             
             workbook = writer.book
             worksheet = writer.sheets['分析结果']
-            
             yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
             
-            for i, data_row in enumerate(processed_rows):
-                row_num = i + 2 
-                pred = data_row["_predicted_pos"]
-                
-                target_idx = None
-                if pred == "动词": target_idx = 2
-                elif pred == "名词": target_idx = 3
-                elif pred == "名动词": target_idx = 4
-                
+            for i, data_row in enumerate(final_data):
+                row_num = i + 2
+                pred = data_row["预测词类"]
+                target_idx = {"动词": 2, "名词": 3, "名动词": 4}.get(pred)
                 if target_idx:
                     worksheet.cell(row=row_num, column=target_idx).fill = yellow_fill
+                    
+        return output.getvalue()
     except Exception as e:
-        st.error(f"生成 Excel 文件时出错: {e}")
-        # 如果Excel生成失败，至少返回CSV备份的内容
+        st.error(f"Excel 生成失败: {e}")
         return None
-
-    status_text.success(f"✅ 处理结束！成功获取 {len(processed_rows)}/{total} 个词语。")
-    return output.getvalue()
     
 # ===============================
 # 主页面逻辑
@@ -883,6 +854,19 @@ def main():
                 else:
                     st.success(f"✅ 识别到目标列：`{target_col}`，共 {len(df)} 个词语。")
                     st.dataframe(df.head(3))
+
+                    if os.path.exists("batch_process_history.csv"):
+            with st.expander("🕒 发现历史备份记录 (程序中断时可用)"):
+                history_df = pd.read_csv("batch_process_history.csv")
+                st.write(f"本地文件中有 {len(history_df)} 条记录")
+                st.dataframe(history_df.tail(5)) # 展示最后5条
+                
+                # 提供一个清空备份的按钮
+                if st.button("🗑️ 清空本地历史记录"):
+                    os.remove("batch_process_history.csv")
+                    if 'processed_history' in st.session_state:
+                        st.session_state.processed_history = []
+                    st.rerun()
                     
                     if st.button("🚀 开始处理并生成标黄表格", type="primary"):
                         if not selected_model_info["api_key"]:
