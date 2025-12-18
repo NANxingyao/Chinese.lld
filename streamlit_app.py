@@ -6,7 +6,7 @@ import os
 import pandas as pd
 import plotly.graph_objects as go
 import io
-import time  # <--- 必须添加这行，用于降速和重试
+import time
 from typing import Tuple, Dict, Any, List
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
@@ -17,36 +17,64 @@ from openpyxl.styles import PatternFill
 st.set_page_config(
     page_title="汉语词类隶属度检测划类",
     page_icon="📰",
-    layout="wide",  # 使用宽布局
-    initial_sidebar_state="collapsed",  # 默认折叠侧边栏
+    layout="wide",
+    initial_sidebar_state="collapsed",
     menu_items=None
 )
 
 # 自定义CSS样式
 hide_streamlit_style = """
 <style>
-/* 隐藏顶部菜单栏和页脚 */
 header {visibility: hidden;}
 footer {visibility: hidden;}
-
-/* 调整表格样式 */
 .dataframe {font-size: 12px;}
-
-/* 隐藏默认的侧边栏 */
-[data-testid="stSidebar"] {
-    display: none !important;
-}
-
-/* 为顶部控制区添加边框和背景色，使其看起来像一个固定的面板 */
-.stApp > div:first-child {
-    padding-top: 2rem;
-}
+[data-testid="stSidebar"] {display: none !important;}
+.stApp > div:first-child {padding-top: 2rem;}
 </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 # ===============================
-# 模型配置 (修改版：启用流式 Stream)
+# 词类规则定义（全局，修复核心：提取到全局避免复杂读取）
+# ===============================
+RULE_SETS = {
+    "名词": [
+        {"name": "N1_可受数量词修饰", "desc": "可以受数量词修饰", "match_score": 10, "mismatch_score": 0},
+        {"name": "N2_不能受副词修饰", "desc": "不能受副词修饰", "match_score": 20, "mismatch_score": -20},
+        {"name": "N3_可作主宾语", "desc": "可以做典型的主语或宾语", "match_score": 20, "mismatch_score": 0},
+        {"name": "N4_可作中心语或作定语", "desc": "可以做中心语受其他名词修饰，或者作定语直接修饰其他名词", "match_score": 10, "mismatch_score": 0},
+        {"name": "N5_可后附的字结构", "desc": "可以后附助词“的”构成“的”字结构", "match_score": 10, "mismatch_score": 0},
+        {"name": "N6_可后附方位词构处所", "desc": "可以后附方位词构成处所结构", "match_score": 10, "mismatch_score": 0},
+        {"name": "N7_不能作谓语核心", "desc": "不能做谓语或谓语核心", "match_score": 10, "mismatch_score": -10},
+        {"name": "N8_不能作补语/一般不作状语", "desc": "不能作补语，并且一般不能做状语直接修饰动词性成分", "match_score": 10, "mismatch_score": 0},
+    ],
+    "动词": [
+        {"name": "V1_可受否定'不/没有'修饰", "desc": "可以受否定副词'不'或'没有'修饰", "match_score": 10, "mismatch_score": 0},
+        {"name": "V2_可后附/插入时体助词'着/了/过'", "desc": "可以后附或中间插入时体助词'着/了/过'", "match_score": 10, "mismatch_score": 0},
+        {"name": "V3_可带真宾语或通过介词引导论元", "desc": "可以带真宾语或通过介词引导论元", "match_score": 20, "mismatch_score": 0},
+        {"name": "V4_程度副词与带宾语的关系", "desc": "不能受程度副词'很'修饰，或能同时受'很'修饰并带宾语", "match_score": 10, "mismatch_score": -10},
+        {"name": "V5_可有重叠/正反重叠形式", "desc": "可以有'VV, V一V, V了V, V不V, V了没有'等形式", "match_score": 10, "mismatch_score": 0},
+        {"name": "V6_可做谓语或谓语核心", "desc": "可以做谓语或谓语核心", "match_score": 10, "mismatch_score": -10},
+        {"name": "V7_不能作状语修饰动词性成分", "desc": "不能作状语修饰动词性成分", "match_score": 10, "mismatch_score": 0},
+        {"name": "V8_可作'怎么/怎样'提问或'这么/这样/那么'回答", "desc": "可以跟在'怎么/怎样'之后提问或跟在'这么/这样/那么'之后回答", "match_score": 10, "mismatch_score": 0},
+        {"name": "V9_不能跟在'多/多么'之后提问或表示感叹", "desc": "不能跟在'多'之后对性质提问，不能跟在'多么'之后表示感叹", "match_score": 10, "mismatch_score": -10},
+    ],
+    "名动词": [
+        {"name": "NV1_可被\"不/没有\"否定且肯定形式-1", "desc": "可以用\"不\"和\"没有\"来否定", "match_score": 10, "mismatch_score": -10},
+        {"name": "NV2_可附时体助词或进入\"……了没有\"格式", "desc": "可以后附时体助词\"着、了、过\"", "match_score": 10, "mismatch_score": -10},
+        {"name": "NV3_可带真宾语且不受\"很\"修饰", "desc": "可以带真宾语，并且不能受程度副词\"很\"等修饰", "match_score": 10, "mismatch_score": -10},
+        {"name": "NV4_有重叠和正反重叠形式", "desc": "可以有\"VV、V一V、V了V、V不V\"等重叠和正反重叠形式", "match_score": 10, "mismatch_score": 0},
+        {"name": "NV5_可作多种句法成分且可作形式动词宾语", "desc": "既可以作谓语或谓语核心，又可以作主语或宾语", "match_score": 10, "mismatch_score": -10},
+        {"name": "NV6_不能直接作状语", "desc": "不能直接作状语修饰动词性成分", "match_score": 10, "mismatch_score": -10},
+        {"name": "NV7_可修饰名词或受名词/数量词修饰", "desc": "可以修饰名词或者受名词修饰，或者可以受数量词修饰", "match_score": 10, "mismatch_score": 0},
+        {"name": "NV8_可跟在\"怎么/怎样/这么/这样/那么/那样\"之后", "desc": "可以跟在\"怎么、怎样\"之后提问", "match_score": 10, "mismatch_score": 0},
+        {"name": "NV9_不能跟在\"多/多么\"之后", "desc": "不能跟在\"多\"之后对性质的程度进行提问", "match_score": 10, "mismatch_score": -10},
+        {"name": "NV10_可后附方位词构成处所结构", "desc": "可以后附方位词构成处所结构", "match_score": 10, "mismatch_score": 0},
+    ]
+}
+
+# ===============================
+# 模型配置 (启用流式 Stream)
 # ===============================
 MODEL_CONFIGS = {
     "deepseek": {
@@ -85,8 +113,8 @@ MODEL_CONFIGS = {
         "headers": lambda key: {
             "Authorization": f"Bearer {key}", 
             "Content-Type": "application/json",
-            "X-DashScope-SSE": "enable",  # 显式开启 SSE
-            "Accept": "text/event-stream" # 关键：告诉服务器我们要流式
+            "X-DashScope-SSE": "enable",
+            "Accept": "text/event-stream"
         },
         "payload": lambda model, messages, **kw: {
             "model": model, 
@@ -101,7 +129,7 @@ MODEL_CONFIGS = {
     },
 }
 
-# 模型选项（仅从环境变量获取API Key，已移除默认值）
+# 模型选项（仅从环境变量获取API Key）
 MODEL_OPTIONS = {
     "DeepSeek Chat": {
         "provider": "deepseek", 
@@ -129,12 +157,11 @@ MODEL_OPTIONS = {
     },
 }
 
-# 过滤掉没有配置 API Key 的模型，只保留可用的
+# 过滤掉没有配置 API Key 的模型
 AVAILABLE_MODEL_OPTIONS = {
     name: info for name, info in MODEL_OPTIONS.items() if info["api_key"]
 }
 
-# 如果没有可用模型，则显示所有模型但给出警告
 if not AVAILABLE_MODEL_OPTIONS:
     AVAILABLE_MODEL_OPTIONS = MODEL_OPTIONS
 
@@ -156,13 +183,12 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
             if "message" in choice and "content" in choice["message"]:
                 return choice["message"]["content"]
             
-        # 兜底
         return json.dumps(resp_json, ensure_ascii=False)
     except Exception as e:
         return json.dumps(resp_json, ensure_ascii=False)
 
 def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
-    """从包含推理过程和JSON的混合文本中提取并解析JSON对象。"""
+    """从混合文本中提取并解析JSON对象。"""
     match = re.search(r"(\{.*\})", text.strip(), re.DOTALL)
     if not match:
         return None, text
@@ -215,7 +241,7 @@ def get_top_10_positions(membership: Dict[str, float]) -> List[Tuple[str, float]
     return sorted(membership.items(), key=lambda x: x[1], reverse=True)[:10]
 
 def get_history_count(backup_file):
-    """获取最新的历史记录数量（核心：实时更新用）"""
+    """获取最新的历史记录数量（实时更新用）"""
     if not os.path.exists(backup_file):
         return 0
     try:
@@ -293,43 +319,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     if not word:
         return {}, "", "未知", ""
 
-    # 词类规则定义
-    RULE_SETS = {
-        "名词": [
-            {"name": "N1_可受数量词修饰", "desc": "可以受数量词修饰", "match_score": 10, "mismatch_score": 0},
-            {"name": "N2_不能受副词修饰", "desc": "不能受副词修饰", "match_score": 20, "mismatch_score": -20},
-            {"name": "N3_可作主宾语", "desc": "可以做典型的主语或宾语", "match_score": 20, "mismatch_score": 0},
-            {"name": "N4_可作中心语或作定语", "desc": "可以做中心语受其他名词修饰，或者作定语直接修饰其他名词", "match_score": 10, "mismatch_score": 0},
-            {"name": "N5_可后附的字结构", "desc": "可以后附助词“的”构成“的”字结构", "match_score": 10, "mismatch_score": 0},
-            {"name": "N6_可后附方位词构处所", "desc": "可以后附方位词构成处所结构", "match_score": 10, "mismatch_score": 0},
-            {"name": "N7_不能作谓语核心", "desc": "不能做谓语或谓语核心", "match_score": 10, "mismatch_score": -10},
-            {"name": "N8_不能作补语/一般不作状语", "desc": "不能作补语，并且一般不能做状语直接修饰动词性成分", "match_score": 10, "mismatch_score": 0},
-        ],
-        "动词": [
-            {"name": "V1_可受否定'不/没有'修饰", "desc": "可以受否定副词'不'或'没有'修饰", "match_score": 10, "mismatch_score": 0},
-            {"name": "V2_可后附/插入时体助词'着/了/过'", "desc": "可以后附或中间插入时体助词'着/了/过'", "match_score": 10, "mismatch_score": 0},
-            {"name": "V3_可带真宾语或通过介词引导论元", "desc": "可以带真宾语或通过介词引导论元", "match_score": 20, "mismatch_score": 0},
-            {"name": "V4_程度副词与带宾语的关系", "desc": "不能受程度副词'很'修饰，或能同时受'很'修饰并带宾语", "match_score": 10, "mismatch_score": -10},
-            {"name": "V5_可有重叠/正反重叠形式", "desc": "可以有'VV, V一V, V了V, V不V, V了没有'等形式", "match_score": 10, "mismatch_score": 0},
-            {"name": "V6_可做谓语或谓语核心", "desc": "可以做谓语或谓语核心", "match_score": 10, "mismatch_score": -10},
-            {"name": "V7_不能作状语修饰动词性成分", "desc": "不能作状语修饰动词性成分", "match_score": 10, "mismatch_score": 0},
-            {"name": "V8_可作'怎么/怎样'提问或'这么/这样/那么'回答", "desc": "可以跟在'怎么/怎样'之后提问或跟在'这么/这样/那么'之后回答", "match_score": 10, "mismatch_score": 0},
-            {"name": "V9_不能跟在'多/多么'之后提问或表示感叹", "desc": "不能跟在'多'之后对性质提问，不能跟在'多么'之后表示感叹", "match_score": 10, "mismatch_score": -10},
-        ],
-        "名动词": [
-            {"name": "NV1_可被\"不/没有\"否定且肯定形式-1", "desc": "可以用\"不\"和\"没有\"来否定", "match_score": 10, "mismatch_score": -10},
-            {"name": "NV2_可附时体助词或进入\"……了没有\"格式", "desc": "可以后附时体助词\"着、了、过\"", "match_score": 10, "mismatch_score": -10},
-            {"name": "NV3_可带真宾语且不受\"很\"修饰", "desc": "可以带真宾语，并且不能受程度副词\"很\"等修饰", "match_score": 10, "mismatch_score": -10},
-            {"name": "NV4_有重叠和正反重叠形式", "desc": "可以有\"VV、V一V、V了V、V不V\"等重叠和正反重叠形式", "match_score": 10, "mismatch_score": 0},
-            {"name": "NV5_可作多种句法成分且可作形式动词宾语", "desc": "既可以作谓语或谓语核心，又可以作主语或宾语", "match_score": 10, "mismatch_score": -10},
-            {"name": "NV6_不能直接作状语", "desc": "不能直接作状语修饰动词性成分", "match_score": 10, "mismatch_score": -10},
-            {"name": "NV7_可修饰名词或受名词/数量词修饰", "desc": "可以修饰名词或者受名词修饰，或者可以受数量词修饰", "match_score": 10, "mismatch_score": 0},
-            {"name": "NV8_可跟在\"怎么/怎样/这么/这样/那么/那样\"之后", "desc": "可以跟在\"怎么、怎样\"之后提问", "match_score": 10, "mismatch_score": 0},
-            {"name": "NV9_不能跟在\"多/多么\"之后", "desc": "不能跟在\"多\"之后对性质的程度进行提问", "match_score": 10, "mismatch_score": -10},
-            {"name": "NV10_可后附方位词构成处所结构", "desc": "可以后附方位词构成处所结构", "match_score": 10, "mismatch_score": 0},
-        ]
-    }
-
+    # 构建规则说明文本（使用全局RULE_SETS）
     full_rules_by_pos = {
         pos: "\n".join([f"- {r['name']}: {r['desc']}（符合: {r['match_score']} 分，不符合: {r['mismatch_score']} 分）" for r in rules])
         for pos, rules in RULE_SETS.items()
@@ -689,16 +679,13 @@ def main():
                         with st.expander(f"**{pos}** (总分: {total_score}, 最高分规则: {max_rule[0]} - {max_rule[1]}分)"):
                             rule_data = []
                             for rule_name, rule_score in scores_all[pos].items():
-                                # 查找规则描述
+                                # 修复核心：简化规则描述查找（直接用全局RULE_SETS）
                                 rule_desc = ""
-                                for rule_set in [r for r in [
-                                    {"名词": [r for r in ask_model_for_pos_and_scores.__code__.co_consts if isinstance(r, dict) and "名词" in r][0]["名词"]},
-                                    {"动词": [r for r in ask_model_for_pos_and_scores.__code__.co_consts if isinstance(r, dict) and "动词" in r][0]["动词"]},
-                                    {"名动词": [r for r in ask_model_for_pos_and_scores.__code__.co_consts if isinstance(r, dict) and "名动词" in r][0]["名动词"]}
-                                ] if pos in r][0][pos]]:
-                                    if rule_set["name"] == rule_name:
-                                        rule_desc = rule_set["desc"]
-                                        break
+                                if pos in RULE_SETS:
+                                    for rule in RULE_SETS[pos]:
+                                        if rule["name"] == rule_name:
+                                            rule_desc = rule["desc"]
+                                            break
                                 rule_data.append({
                                     "规则代码": rule_name,
                                     "规则描述": rule_desc,
@@ -730,7 +717,7 @@ def main():
         ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2, 1, 1])
         
         with ctrl_col1:
-            # 核心修改：创建可实时更新的metric占位符
+            # 可实时更新的metric占位符
             metric_placeholder = st.empty()
             # 初始化显示最新数量
             history_count = get_history_count(BACKUP_FILE)
