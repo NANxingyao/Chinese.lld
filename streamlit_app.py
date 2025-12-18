@@ -823,83 +823,90 @@ def main():
                     st.subheader("📥 模型原始响应")
                     with st.expander("点击展开查看原始响应", expanded=False):
                         st.code(raw_text, language="text") # 改为 text 以更好地展示混合文本
-# --- Tab 2: 批量处理逻辑 (增强持久化版) ---
+# --- Tab 2: 批量处理逻辑 (历史记录常驻显示版) ---
     with tab2:
-        st.header("📂 批量 Excel 处理 (含实时历史留存)")
+        st.header("📂 批量 Excel 处理")
         
         # 定义本地持久化文件名
         BACKUP_FILE = "batch_history_log.csv"
 
-        st.markdown(f"""
-        **功能说明：**
-        1. **实时备份**：每处理一个词，结果会立即写入本地文件 `{BACKUP_FILE}`。
-        2. **防止中断**：如遇浏览器刷新或网络断开，已处理的数据不会丢失。
-        3. **自动标黄**：生成的 Excel 会自动高亮隶属度最高的词类。
-        """, unsafe_allow_html=True)
+        # ==========================================
+        # 1. 实时历史记录看板 (常驻显示)
+        # ==========================================
+        st.subheader("📊 历史记录与恢复面板")
         
-        # --- 历史数据恢复区 ---
         if os.path.exists(BACKUP_FILE):
-            with st.expander("🕒 发现已留存的历史记录 (断点抢救)", expanded=False):
-                try:
-                    history_df = pd.read_csv(BACKUP_FILE)
-                    st.write(f"本地已成功留存 **{len(history_df)}** 条分析记录。")
-                    st.dataframe(history_df.tail(5), use_container_width=True)
-                    
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        # 允许用户直接下载当前已抢救的 CSV
-                        st.download_button(
-                            "📥 下载已完成的CSV记录",
-                            data=history_df.to_csv(index=False, encoding='utf-8-sig'),
-                            file_name="已抢救的历史记录.csv",
-                            mime="text/csv"
-                        )
-                    with c2:
-                        if st.button("🗑️ 清空历史记录 (重新开始)"):
-                            os.remove(BACKUP_FILE)
-                            st.rerun()
-                except Exception as e:
-                    st.error(f"读取备份文件失败: {e}")
+            try:
+                # 读取本地已保存的所有数据
+                history_df = pd.read_csv(BACKUP_FILE)
+                total_saved = len(history_df)
+                
+                # 使用两栏展示状态和下载
+                stat_col, action_col = st.columns([2, 1])
+                with stat_col:
+                    st.info(f"✅ **检测到本地存留数据**：共计 **{total_saved}** 条记录。")
+                    # 展示最后3条实时结果
+                    st.dataframe(history_df.tail(3), use_container_width=True, height=150)
+                
+                with action_col:
+                    st.write("操作已存数据：")
+                    # 即使程序中断，这个按钮也一直存在，可以直接下载已完成的部分
+                    st.download_button(
+                        "📥 导出已完成记录 (CSV)",
+                        data=history_df.to_csv(index=False, encoding='utf-8-sig'),
+                        file_name=f"分析记录备份_{time.strftime('%m%d_%H%M')}.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                    if st.button("🗑️ 清空本地缓存", use_container_width=True, help="处理新文件前请先清空旧数据"):
+                        os.remove(BACKUP_FILE)
+                        if 'processed_history' in st.session_state:
+                            st.session_state.processed_history = []
+                        st.rerun()
+            except Exception as e:
+                st.warning(f"读取备份时遇到点小问题: {e}")
+        else:
+            st.write("💡 当前暂无历史存留记录。开始处理后，数据将实时显示在这里。")
 
         st.divider()
 
-        # --- 上传与处理区 ---
+        # ==========================================
+        # 2. 上传与处理区
+        # ==========================================
+        st.subheader("🚀 新任务上传")
         uploaded_file = st.file_uploader("上传待分析的 Excel 文件", type=["xlsx", "xls"])
         
         if uploaded_file:
             try:
-                # 预读文件获取表头
                 df = pd.read_excel(uploaded_file)
-                target_col = None
-                for col in df.columns:
-                    if "词" in str(col) or "word" in str(col).lower():
-                        target_col = col
-                        break
+                # 自动识别列名
+                target_col = next((col for col in df.columns if "词" in str(col) or "word" in str(col).lower()), None)
                 
                 if not target_col:
-                    st.error("❌ 找不到包含'词'的列，请确保 Excel 表头中有'词语'或'Word'。")
+                    st.error("❌ 无法识别目标列。请确保 Excel 中有一列标题包含 '词' 或 'Word'。")
                 else:
-                    st.success(f"✅ 识别到目标列：`{target_col}`，共计 {len(df)} 个词语。")
+                    st.success(f"准备就绪！目标列：`{target_col}` | 总数：{len(df)}")
                     
-                    if st.button("🚀 开始批量处理 (实时存盘)", type="primary"):
+                    if st.button("开始批量执行 (自动存盘)", type="primary"):
                         if not selected_model_info["api_key"]:
-                            st.error("请先在上方配置 API Key")
+                            st.error("API Key 未配置，请在上方设置。")
                         else:
-                            # 开始处理
+                            # 调用处理函数
                             excel_data = process_and_style_excel(df, selected_model_info, target_col)
                             
                             if excel_data:
                                 st.balloons()
+                                st.success("🎉 全部任务处理完成！")
                                 st.download_button(
-                                    label="📥 下载最终生成的标黄 Excel",
+                                    label="💾 下载最终标黄版 Excel",
                                     data=excel_data,
                                     file_name="词类分析结果_最终版.xlsx",
-                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    use_container_width=True
                                 )
             
             except Exception as e:
-                st.error(f"解析文件出错: {e}")
-
+                st.error(f"文件处理出错: {e}")
 
 
 # ===============================
