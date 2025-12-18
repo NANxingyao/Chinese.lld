@@ -823,26 +823,53 @@ def main():
                     st.subheader("📥 模型原始响应")
                     with st.expander("点击展开查看原始响应", expanded=False):
                         st.code(raw_text, language="text") # 改为 text 以更好地展示混合文本
-
-    # --- Tab 2: 批量处理逻辑 ---
+# --- Tab 2: 批量处理逻辑 (增强持久化版) ---
     with tab2:
-        st.header("📂 批量 Excel 处理 (自动标黄)")
+        st.header("📂 批量 Excel 处理 (含实时历史留存)")
         
-        st.markdown("""
-        **上传说明：**
-        1. 上传一个 Excel 文件 (`.xlsx`)。
-        2. 文件中必须包含一列**“词语”**（或 Word）。
-        3. 程序将自动生成包含 **[动词 | 名词 | 名动词 | 差值 | 原始响应]** 的新表。
-        4. **获胜的词类** 对应的单元格会被自动 **<span style='background-color: #FFFF00; color: black; padding: 2px;'>标黄</span>**。
+        # 定义本地持久化文件名
+        BACKUP_FILE = "batch_history_log.csv"
+
+        st.markdown(f"""
+        **功能说明：**
+        1. **实时备份**：每处理一个词，结果会立即写入本地文件 `{BACKUP_FILE}`。
+        2. **防止中断**：如遇浏览器刷新或网络断开，已处理的数据不会丢失。
+        3. **自动标黄**：生成的 Excel 会自动高亮隶属度最高的词类。
         """, unsafe_allow_html=True)
         
-        uploaded_file = st.file_uploader("上传 Excel 文件", type=["xlsx", "xls"])
+        # --- 历史数据恢复区 ---
+        if os.path.exists(BACKUP_FILE):
+            with st.expander("🕒 发现已留存的历史记录 (断点抢救)", expanded=False):
+                try:
+                    history_df = pd.read_csv(BACKUP_FILE)
+                    st.write(f"本地已成功留存 **{len(history_df)}** 条分析记录。")
+                    st.dataframe(history_df.tail(5), use_container_width=True)
+                    
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        # 允许用户直接下载当前已抢救的 CSV
+                        st.download_button(
+                            "📥 下载已完成的CSV记录",
+                            data=history_df.to_csv(index=False, encoding='utf-8-sig'),
+                            file_name="已抢救的历史记录.csv",
+                            mime="text/csv"
+                        )
+                    with c2:
+                        if st.button("🗑️ 清空历史记录 (重新开始)"):
+                            os.remove(BACKUP_FILE)
+                            st.rerun()
+                except Exception as e:
+                    st.error(f"读取备份文件失败: {e}")
+
+        st.divider()
+
+        # --- 上传与处理区 ---
+        uploaded_file = st.file_uploader("上传待分析的 Excel 文件", type=["xlsx", "xls"])
         
         if uploaded_file:
             try:
+                # 预读文件获取表头
                 df = pd.read_excel(uploaded_file)
-                
-                # 自动寻找列名
                 target_col = None
                 for col in df.columns:
                     if "词" in str(col) or "word" in str(col).lower():
@@ -850,40 +877,30 @@ def main():
                         break
                 
                 if not target_col:
-                    st.error("❌ 找不到包含'词'的列，请修改表头。")
+                    st.error("❌ 找不到包含'词'的列，请确保 Excel 表头中有'词语'或'Word'。")
                 else:
-                    st.success(f"✅ 识别到目标列：`{target_col}`，共 {len(df)} 个词语。")
-                    st.dataframe(df.head(3))
-
-                    if os.path.exists("batch_process_history.csv"):
-            with st.expander("🕒 发现历史备份记录 (程序中断时可用)"):
-                history_df = pd.read_csv("batch_process_history.csv")
-                st.write(f"本地文件中有 {len(history_df)} 条记录")
-                st.dataframe(history_df.tail(5)) # 展示最后5条
-                
-                # 提供一个清空备份的按钮
-                if st.button("🗑️ 清空本地历史记录"):
-                    os.remove("batch_process_history.csv")
-                    if 'processed_history' in st.session_state:
-                        st.session_state.processed_history = []
-                    st.rerun()
+                    st.success(f"✅ 识别到目标列：`{target_col}`，共计 {len(df)} 个词语。")
                     
-                    if st.button("🚀 开始处理并生成标黄表格", type="primary"):
+                    if st.button("🚀 开始批量处理 (实时存盘)", type="primary"):
                         if not selected_model_info["api_key"]:
-                            st.error("请先配置 API Key")
+                            st.error("请先在上方配置 API Key")
                         else:
-                            # 调用上面的处理函数
+                            # 开始处理
                             excel_data = process_and_style_excel(df, selected_model_info, target_col)
                             
-                            st.download_button(
-                                label="📥 下载结果 (已标黄)",
-                                data=excel_data,
-                                file_name="词类分析结果_标黄版.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                            )
-                    
+                            if excel_data:
+                                st.balloons()
+                                st.download_button(
+                                    label="📥 下载最终生成的标黄 Excel",
+                                    data=excel_data,
+                                    file_name="词类分析结果_最终版.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                )
+            
             except Exception as e:
-                st.error(f"文件处理出错: {e}")
+                st.error(f"解析文件出错: {e}")
+
+
 
 # ===============================
 # 运行主函数
