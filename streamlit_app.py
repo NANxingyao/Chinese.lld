@@ -823,96 +823,119 @@ def main():
                     st.subheader("📥 模型原始响应")
                     with st.expander("点击展开查看原始响应", expanded=False):
                         st.code(raw_text, language="text") # 改为 text 以更好地展示混合文本
-  # --- Tab 2: 批量处理 (含进度监控与断点存盘) ---
+# --- Tab 2: 批量处理逻辑 (完全露出的监控与下载面板) ---
     with tab2:
         st.header("📂 批量任务实时监控")
         
         BACKUP_FILE = "batch_history_log.csv"
 
         # ==========================================
-        # 1. 历史记录管理区 (常驻)
+        # 1. 核心控制与历史文件区 (常驻显示)
         # ==========================================
-        with st.expander("📁 本地历史文件管理", expanded=os.path.exists(BACKUP_FILE)):
-            if os.path.exists(BACKUP_FILE):
-                try:
-                    h_df = pd.read_csv(BACKUP_FILE)
-                    st.info(f"数据留存状态：当前已保存 **{len(h_df)}** 条分析结果。")
-                    col_h1, col_h2 = st.columns(2)
-                    with col_h1:
-                        st.download_button(
-                            "📥 下载已存历史 (CSV)",
-                            data=h_df.to_csv(index=False, encoding='utf-8-sig'),
-                            file_name=f"history_backup_{time.strftime('%Y%m%d_%H%M')}.csv",
-                            mime="text/csv",
-                            use_container_width=True
-                        )
-                    with col_h2:
-                        if st.button("🗑️ 清空所有历史", use_container_width=True):
-                            os.remove(BACKUP_FILE)
-                            st.rerun()
-                except:
-                    st.write("读取历史文件失败。")
+        st.subheader("🛠️ 控制面板")
+        
+        # 布局：左边显示统计，右边显示文件操作
+        ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2, 1, 1])
+        
+        # 检查本地是否有历史记录
+        has_history = os.path.exists(BACKUP_FILE)
+        history_count = 0
+        if has_history:
+            try:
+                temp_history = pd.read_csv(BACKUP_FILE)
+                history_count = len(temp_history)
+            except: pass
+
+        with ctrl_col1:
+            st.metric("已存数据量", f"{history_count} 条")
+            if has_history:
+                st.caption(f"存储位置: `{BACKUP_FILE}`")
+        
+        with ctrl_col2:
+            # 历史记录下载按钮 (直接露出)
+            if has_history:
+                with open(BACKUP_FILE, "rb") as f:
+                    st.download_button(
+                        label="📥 下载历史文件(CSV)",
+                        data=f,
+                        file_name=f"batch_results_{time.strftime('%m%d_%H%M')}.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
             else:
-                st.write("💡 暂无本地历史文件，任务开始后将自动创建。")
+                st.button("📥 下载历史文件", disabled=True, use_container_width=True)
+
+        with ctrl_col3:
+            # 清空按钮
+            if st.button("🗑️ 清空本地记录", use_container_width=True, type="secondary"):
+                if has_history:
+                    os.remove(BACKUP_FILE)
+                    st.rerun()
 
         st.divider()
 
         # ==========================================
-        # 2. 进度监控区 (任务运行时动态显示)
+        # 2. 进度条与当前词语监控 (动态)
         # ==========================================
-        progress_container = st.container() # 用于动态放置进度条和当前词
+        st.subheader("📈 运行状态")
+        progress_bar = st.progress(0)
+        status_info = st.empty() # 动态显示：正在处理哪个词，进度百分比
         
         # ==========================================
-        # 3. 任务启动区
+        # 3. 实时生成表 (支持直接复制)
         # ==========================================
-        uploaded_file = st.file_uploader("上传 Excel 文件", type=["xlsx", "xls"])
-        
-        # 占位符：用于实时显示表格
+        st.subheader("📋 实时结果预览")
         table_placeholder = st.empty()
         
-        # 初始加载：即使没点运行，只要有历史就显示表格
-        if os.path.exists(BACKUP_FILE):
-            try:
-                current_df = pd.read_csv(BACKUP_FILE)
-                table_placeholder.dataframe(current_df, use_container_width=True, height=400)
-            except: pass
+        # 启动前先渲染一次已有数据
+        if has_history:
+            table_placeholder.dataframe(pd.read_csv(BACKUP_FILE), use_container_width=True, height=300)
+        else:
+            table_placeholder.info("暂无数据。上传文件并点击开始后，结果将在此逐行实时显示。")
 
+        st.divider()
+
+        # ==========================================
+        # 4. 任务上传与启动
+        # ==========================================
+        st.subheader("📤 上传新任务")
+        uploaded_file = st.file_uploader("选择 Excel 文件", type=["xlsx", "xls"])
+        
         if uploaded_file:
             df_input = pd.read_excel(uploaded_file)
             target_col = next((col for col in df_input.columns if "词" in str(col) or "word" in str(col).lower()), None)
             
             if target_col:
-                if st.button("🚀 开始/继续处理", type="primary", use_container_width=True):
+                st.write(f"待分析总数: {len(df_input)}")
+                
+                if st.button("🚀 开始处理 (自动续传)", type="primary", use_container_width=True):
                     if not selected_model_info["api_key"]:
-                        st.error("请先配置 API Key")
+                        st.error("请先在上方配置 API Key")
                     else:
-                        # 获取已处理过的词，实现断点跳过
+                        # 获取已处理过的词，实现断点续传
                         existing_words = set()
                         if os.path.exists(BACKUP_FILE):
                             existing_words = set(pd.read_csv(BACKUP_FILE)["词语"].astype(str).tolist())
 
-                        # 设置进度条
                         total_rows = len(df_input)
-                        bar = progress_container.progress(0)
-                        status_msg = progress_container.empty()
                         
                         for index, row in df_input.iterrows():
                             word = str(row[target_col]).strip()
                             
-                            # 进度更新
-                            current_progress = (index + 1) / total_rows
-                            bar.progress(current_progress)
+                            # 更新进度条
+                            pct = int((index + 1) / total_rows * 100)
+                            progress_bar.progress(index / total_rows)
                             
-                            # 1. 检查是否跳过
+                            # 1. 续传逻辑：跳过已处理
                             if word in existing_words:
-                                status_msg.info(f"进度: {index+1}/{total_rows} | ⏩ 跳过已存词: **{word}**")
+                                status_info.write(f"⏩ **跳过**: {word} ({index+1}/{total_rows})")
                                 continue
                             
-                            # 2. 正在处理显示的词
-                            status_msg.warning(f"进度: {index+1}/{total_rows} | 🔍 正在分析: **{word}**")
+                            # 2. 正在处理提示
+                            status_info.write(f"🔍 **正在分析**: `{word}` | 进度: {index+1}/{total_rows} ({pct}%)")
                             
+                            # 调用 API
                             try:
-                                # 执行分析 (调用你的 API 函数)
                                 scores, raw_text, pred_pos, _ = ask_model_for_pos_and_scores(
                                     word=word,
                                     provider=selected_model_info["provider"],
@@ -924,14 +947,14 @@ def main():
                                     membership = calculate_membership(scores)
                                     new_row = {
                                         "词语": word,
+                                        "预测结果": pred_pos,
                                         "动词": membership.get("动词", 0.0),
                                         "名词": membership.get("名词", 0.0),
                                         "名动词": membership.get("名动词", 0.0),
-                                        "预测结果": pred_pos,
-                                        "时间戳": time.strftime("%H:%M:%S")
+                                        "更新时间": time.strftime("%H:%M:%S")
                                     }
                                     
-                                    # 3. 立即物理存盘 (防止中断)
+                                    # 3. 物理存盘 (追加写入)
                                     pd.DataFrame([new_row]).to_csv(
                                         BACKUP_FILE, 
                                         mode='a', 
@@ -942,16 +965,16 @@ def main():
                                     
                                     # 4. 实时刷新表格显示
                                     updated_df = pd.read_csv(BACKUP_FILE)
-                                    table_placeholder.dataframe(updated_df, use_container_width=True, height=400)
+                                    table_placeholder.dataframe(updated_df, use_container_width=True, height=300)
                                     
                             except Exception as e:
-                                st.error(f"处理 {word} 出错: {e}")
+                                st.error(f"处理 '{word}' 时异常: {e}")
                             
-                            # 控制节奏，防止UI卡顿
-                            time.sleep(0.1)
+                            time.sleep(0.05) # 微调UI刷新率
                         
-                        status_msg.success(f"🎉 处理完成！总计 {total_rows} 条数据。")
-
+                        progress_bar.progress(100)
+                        status_info.success(f"🎉 任务已完成！总处理量: {total_rows}")
+                        st.rerun() # 完成后自动重刷一次页面，更新顶部的下载按钮状态
 # ===============================
 # 运行主函数
 # ===============================
