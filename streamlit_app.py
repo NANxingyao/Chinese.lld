@@ -823,105 +823,105 @@ def main():
                     st.subheader("📥 模型原始响应")
                     with st.expander("点击展开查看原始响应", expanded=False):
                         st.code(raw_text, language="text") # 改为 text 以更好地展示混合文本
-with tab2:
-        st.header("📂 批量任务实时监控")
-        
-        # 定义本地存储文件名
-        BACKUP_FILE = "batch_history_log.csv"
-
-        # --- 第一部分：操作区 ---
-        st.subheader("1. 任务启动")
-        uploaded_file = st.file_uploader("上传待分析的 Excel", type=["xlsx", "xls"])
-        
-        col_run, col_clear = st.columns([1, 1])
-        with col_run:
-            run_button = st.button("🚀 开始处理 (自动续传)", type="primary", use_container_width=True)
-        with col_clear:
-            if st.button("🗑️ 清空历史记录", use_container_width=True):
-                if os.path.exists(BACKUP_FILE):
-                    os.remove(BACKUP_FILE)
-                    st.rerun()
-
-        st.divider()
-
-        # --- 第二部分：实时监控表 (关键点) ---
-        st.subheader("2. 实时生成表 (生成一条显示一条，支持直接复制)")
-        
-        # 创建一个空容器，用于后续动态更新表格内容
-        table_placeholder = st.empty()
-
-        # 初始状态：如果已有备份文件，先展示出来
-        if os.path.exists(BACKUP_FILE):
-            try:
-                history_df = pd.read_csv(BACKUP_FILE)
-                # 使用 dataframe 模式，用户可以直接点击单元格复制内容
-                table_placeholder.dataframe(history_df, use_container_width=True)
-            except:
-                pass
-        else:
-            table_placeholder.info("等待任务启动... 处理结果将实时显示在此处。")
-
-        # --- 处理逻辑 ---
-        if run_button and uploaded_file:
-            if not selected_model_info["api_key"]:
-                st.error("请先在上方配置 API Key")
-            else:
-                # 1. 读取上传的文件
-                df_input = pd.read_excel(uploaded_file)
-                target_col = next((col for col in df_input.columns if "词" in str(col) or "word" in str(col).lower()), None)
-                
-                if target_col:
-                    # 2. 准备断点续传名单
-                    existing_words = set()
+    with tab2:
+            st.header("📂 批量任务实时监控")
+            
+            # 定义本地存储文件名
+            BACKUP_FILE = "batch_history_log.csv"
+    
+            # --- 第一部分：操作区 ---
+            st.subheader("1. 任务启动")
+            uploaded_file = st.file_uploader("上传待分析的 Excel", type=["xlsx", "xls"])
+            
+            col_run, col_clear = st.columns([1, 1])
+            with col_run:
+                run_button = st.button("🚀 开始处理 (自动续传)", type="primary", use_container_width=True)
+            with col_clear:
+                if st.button("🗑️ 清空历史记录", use_container_width=True):
                     if os.path.exists(BACKUP_FILE):
-                        existing_words = set(pd.read_csv(BACKUP_FILE)["词语"].astype(str).tolist())
-
-                    # 3. 循环处理
-                    for index, row in df_input.iterrows():
-                        word = str(row[target_col]).strip()
-                        if word in existing_words:
-                            continue
-                        
-                        # 调用 API (这里调用你之前的 ask_model 函数)
-                        try:
-                            scores, raw_text, pred_pos, _ = ask_model_for_pos_and_scores(
-                                word=word,
-                                provider=selected_model_info["provider"],
-                                model=selected_model_info["model"],
-                                api_key=selected_model_info["api_key"]
-                            )
+                        os.remove(BACKUP_FILE)
+                        st.rerun()
+    
+            st.divider()
+    
+            # --- 第二部分：实时监控表 (关键点) ---
+            st.subheader("2. 实时生成表 (生成一条显示一条，支持直接复制)")
+            
+            # 创建一个空容器，用于后续动态更新表格内容
+            table_placeholder = st.empty()
+    
+            # 初始状态：如果已有备份文件，先展示出来
+            if os.path.exists(BACKUP_FILE):
+                try:
+                    history_df = pd.read_csv(BACKUP_FILE)
+                    # 使用 dataframe 模式，用户可以直接点击单元格复制内容
+                    table_placeholder.dataframe(history_df, use_container_width=True)
+                except:
+                    pass
+            else:
+                table_placeholder.info("等待任务启动... 处理结果将实时显示在此处。")
+    
+            # --- 处理逻辑 ---
+            if run_button and uploaded_file:
+                if not selected_model_info["api_key"]:
+                    st.error("请先在上方配置 API Key")
+                else:
+                    # 1. 读取上传的文件
+                    df_input = pd.read_excel(uploaded_file)
+                    target_col = next((col for col in df_input.columns if "词" in str(col) or "word" in str(col).lower()), None)
+                    
+                    if target_col:
+                        # 2. 准备断点续传名单
+                        existing_words = set()
+                        if os.path.exists(BACKUP_FILE):
+                            existing_words = set(pd.read_csv(BACKUP_FILE)["词语"].astype(str).tolist())
+    
+                        # 3. 循环处理
+                        for index, row in df_input.iterrows():
+                            word = str(row[target_col]).strip()
+                            if word in existing_words:
+                                continue
                             
-                            if scores:
-                                membership = calculate_membership(scores)
-                                new_data = {
-                                    "词语": word,
-                                    "动词": membership.get("动词", 0.0),
-                                    "名词": membership.get("名词", 0.0),
-                                    "名动词": membership.get("名动词", 0.0),
-                                    "预测结果": pred_pos
-                                }
-                                # 立即写入本地 CSV (物理存盘)
-                                temp_df = pd.DataFrame([new_data])
-                                temp_df.to_csv(BACKUP_FILE, mode='a', header=not os.path.exists(BACKUP_FILE), index=False, encoding='utf-8-sig')
+                            # 调用 API (这里调用你之前的 ask_model 函数)
+                            try:
+                                scores, raw_text, pred_pos, _ = ask_model_for_pos_and_scores(
+                                    word=word,
+                                    provider=selected_model_info["provider"],
+                                    model=selected_model_info["model"],
+                                    api_key=selected_model_info["api_key"]
+                                )
                                 
-                                # 实时读取最新结果并更新 UI 表格
-                                current_all_df = pd.read_csv(BACKUP_FILE)
-                                # 用最新的数据替换旧的表格内容
-                                table_placeholder.dataframe(current_all_df, use_container_width=True)
-                                
-                        except Exception as e:
-                            st.warning(f"处理 '{word}' 时出错: {e}")
+                                if scores:
+                                    membership = calculate_membership(scores)
+                                    new_data = {
+                                        "词语": word,
+                                        "动词": membership.get("动词", 0.0),
+                                        "名词": membership.get("名词", 0.0),
+                                        "名动词": membership.get("名动词", 0.0),
+                                        "预测结果": pred_pos
+                                    }
+                                    # 立即写入本地 CSV (物理存盘)
+                                    temp_df = pd.DataFrame([new_data])
+                                    temp_df.to_csv(BACKUP_FILE, mode='a', header=not os.path.exists(BACKUP_FILE), index=False, encoding='utf-8-sig')
+                                    
+                                    # 实时读取最新结果并更新 UI 表格
+                                    current_all_df = pd.read_csv(BACKUP_FILE)
+                                    # 用最新的数据替换旧的表格内容
+                                    table_placeholder.dataframe(current_all_df, use_container_width=True)
+                                    
+                            except Exception as e:
+                                st.warning(f"处理 '{word}' 时出错: {e}")
+                            
+                            time.sleep(0.2) # 稍微停顿，防止 UI 渲染过快导致闪烁
                         
-                        time.sleep(0.2) # 稍微停顿，防止 UI 渲染过快导致闪烁
-                    
-                    st.success("✅ 所有新词汇处理完毕！")
-                    
-                    # 任务结束后，提供最终 Excel 下载
-                    final_df = pd.read_csv(BACKUP_FILE)
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        final_df.to_excel(writer, index=False)
-                    st.download_button("💾 下载完整 Excel 报告", data=output.getvalue(), file_name="分析报告.xlsx")
+                        st.success("✅ 所有新词汇处理完毕！")
+                        
+                        # 任务结束后，提供最终 Excel 下载
+                        final_df = pd.read_csv(BACKUP_FILE)
+                        output = io.BytesIO()
+                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                            final_df.to_excel(writer, index=False)
+                        st.download_button("💾 下载完整 Excel 报告", data=output.getvalue(), file_name="分析报告.xlsx")
 
 # ===============================
 # 运行主函数
