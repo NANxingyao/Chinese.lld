@@ -113,9 +113,9 @@ MODEL_CONFIGS = {
             "stream": True,
         },
     },
-  "gemini": {
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-        "endpoint": "/v1/chat/completions", # 注意这里多加了 /v1
+ "gemini": {
+        "base_url": "https://generativelanguage.googleapis.com/v1beta",
+        "endpoint": "/chat/completions",
         "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         "payload": lambda model, messages, **kw: {
             "model": model, 
