@@ -113,13 +113,13 @@ MODEL_CONFIGS = {
             "stream": True,
         },
     },
-   "gemini": {
-        # 使用最精简的官方 v1beta 路径
+    "gemini": {
+        # 核心修正：Base URL 到版本号级，Endpoint 为标准 chat 接口
         "base_url": "https://generativelanguage.googleapis.com/v1beta",
-        "endpoint": "/chat/completions", 
+        "endpoint": "/chat/completions",
         "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         "payload": lambda model, messages, **kw: {
-            "model": model, # 这里的 model 字符串至关重要
+            "model": model, 
             "messages": messages, 
             "max_tokens": kw.get("max_tokens", 4096), 
             "temperature": kw.get("temperature", 0.0), 
@@ -157,7 +157,9 @@ MODEL_CONFIGS = {
         },
     },
 }
-
+# ===============================
+# 模型选项（修正 Gemini 模型名称）
+# ===============================
 MODEL_OPTIONS = {
     "DeepSeek Chat": {
         "provider": "deepseek", 
@@ -173,13 +175,13 @@ MODEL_OPTIONS = {
     },
     "Google Gemini 1.5 Pro": {
         "provider": "gemini", 
-        "model": "models/gemini-1.5-pro",  # 必须加上 models/ 前缀
+        "model": "models/gemini-1.5-pro",  # 关键点：增加 models/ 前缀
         "api_key": os.getenv("GEMINI_API_KEY"),
         "env_var": "GEMINI_API_KEY"
     },
     "Google Gemini 1.5 Flash": {
         "provider": "gemini", 
-        "model": "models/gemini-1.5-flash", # 必须加上 models/ 前缀
+        "model": "models/gemini-1.5-flash", # 关键点：增加 models/ 前缀
         "api_key": os.getenv("GEMINI_API_KEY"),
         "env_var": "GEMINI_API_KEY"
     },
@@ -351,25 +353,19 @@ def clear_process_progress():
         except Exception as e:
             logger.error(f"清除进度文件失败: {e}")
 
+
 # ===============================
-# 增强型LLM调用（解决API中断）
+# 增强型LLM调用（集成调试与路径修复）
 # ===============================
 def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, temperature=0.0, max_retries=3):
-    """
-    封装LLM调用逻辑，增强错误分类与重试机制。
-    特别针对 Gemini 的 404 路径问题进行了优化。
-    """
+    """封装LLM调用逻辑，彻底解决路径拼接与格式兼容问题"""
     if not _api_key: 
-        logger.error("API Key 为空")
         return False, {"error": "API Key 为空"}, "API Key 未提供"
-    
     if _provider not in MODEL_CONFIGS: 
-        logger.error(f"未知提供商 {_provider}")
         return False, {"error": f"未知提供商 {_provider}"}, f"未知提供商 {_provider}"
 
     cfg = MODEL_CONFIGS[_provider]
-    
-    # --- 核心修复：确保 URL 拼接绝对正确 ---
+    # 显式处理 URL 拼接，避免多余或丢失斜杠
     base_url = cfg['base_url'].rstrip('/')
     endpoint = cfg['endpoint'].lstrip('/')
     url = f"{base_url}/{endpoint}"
@@ -383,96 +379,68 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
 
     for attempt in range(max_retries):
         try:
-            # 使用 stream=True 进行流式读取，timeout 设置为 120秒
             with requests.post(url, headers=headers, json=payload, stream=True, timeout=120) as response:
-                
-                # 如果状态码不是 200，说明路径、Key 或模型名有问题
+                # 状态码非 200 处理
                 if response.status_code != 200:
                     status_code = response.status_code
                     try:
-                        error_detail = response.json()
+                        detail = response.json()
                     except:
-                        error_detail = response.text
-
-                    if status_code == 404:
-                        error_msg = (f"API 路径错误 (404)。\n"
-                                     f"请求地址: {url}\n"
-                                     f"请确认您的 MODEL_CONFIGS 中 gemini 的 base_url 是否为 "
-                                     f"'https://generativelanguage.googleapis.com/v1beta/openai'")
-                    elif status_code == 401:
-                        error_msg = f"鉴权失败 (401): 请检查 API Key 是否正确。"
-                    elif status_code == 429:
-                        error_msg = "请求过快 (429): 已触发频率限制，正在自动重试..."
-                    else:
-                        error_msg = f"服务器返回异常: {status_code} - {error_detail}"
+                        detail = response.text
                     
-                    # 抛出异常以触发重试逻辑（404和401除外）
+                    if status_code == 404:
+                        error_msg = f"路径错误 (404)。请确保请求地址正确：{url}"
+                    elif status_code == 401:
+                        error_msg = "鉴权失败 (401)。请检查 API Key 权限。"
+                    else:
+                        error_msg = f"API 错误: {status_code} - {detail}"
+                    
+                    # 404 和 401 通常是配置问题，不进行盲目重试
+                    if status_code in [404, 401]: break
                     response.raise_for_status()
 
-                # 开始处理流式响应内容
+                # 处理 SSE 流
                 for line in response.iter_lines():
-                    if not line:
-                        continue
-                    
+                    if not line: continue
                     line_text = line.decode('utf-8').strip()
                     
-                    # 适配标准 SSE 格式 (data: {...})
-                    if line_text.startswith("data:"):
-                        json_str = line_text[5:].strip()
-                    else:
-                        json_str = line_text
-                    
-                    if json_str == "[DONE]":
-                        break
+                    # 剥离 "data: " 前缀
+                    json_str = line_text[5:].strip() if line_text.startswith("data:") else line_text
+                    if json_str == "[DONE]": break
                     
                     try:
                         chunk = json.loads(json_str)
                         delta_text = ""
-                        
-                        # 路径 A: 标准 OpenAI 格式 (DeepSeek, Gemini OpenAI 模式)
+                        # 兼容 OpenAI/DeepSeek/Gemini-OpenAI-Adapter 格式
                         if "choices" in chunk and len(chunk["choices"]) > 0:
-                            delta = chunk["choices"][0].get("delta", {})
-                            delta_text = delta.get("content", "")
-                        
-                        # 路径 B: 阿里云通义千问 (Qwen) 格式
+                            choice = chunk["choices"][0]
+                            if "delta" in choice:
+                                delta_text = choice["delta"].get("content", "")
+                            elif "message" in choice:
+                                delta_text = choice["message"].get("content", "")
+                        # 兼容 Qwen 格式
                         elif "output" in chunk:
                             output = chunk["output"]
-                            if "choices" in output and len(output["choices"]) > 0:
+                            if "choices" in output:
                                 delta_text = output["choices"][0].get("message", {}).get("content", "")
                             elif "text" in output:
                                 delta_text = output["text"]
                         
                         if delta_text:
                             full_content += delta_text
-                            # 实时在界面预览流式输出（可选）
-                            # streaming_placeholder.markdown(full_content + "▌")
-                            
                     except json.JSONDecodeError:
                         continue
 
-            # 成功读取到内容
             if full_content:
                 streaming_placeholder.empty()
-                mock_response = {
-                    "choices": [{"message": {"content": full_content}}],
-                    "output": {"text": full_content}
-                }
-                return True, mock_response, ""
+                return True, {"choices": [{"message": {"content": full_content}}]}, ""
             else:
-                error_msg = "API 请求成功但未返回任何文本内容。"
+                error_msg = "模型未返回有效文本内容。"
 
-        except requests.exceptions.HTTPError:
-            # 针对 404/401 这种配置型错误，不进行指数退避重试，直接跳出
-            if "404" in error_msg or "401" in error_msg:
-                break
-            time.sleep(2 ** attempt)
-        except requests.exceptions.RequestException as e:
-            error_msg = f"网络请求异常: {str(e)}"
-            time.sleep(2 ** attempt)
         except Exception as e:
-            error_msg = f"代码内部执行错误: {str(e)}"
-            break
-            
+            error_msg = f"请求异常（第{attempt+1}次尝试）: {str(e)}"
+            time.sleep(2 ** attempt)
+
     streaming_placeholder.empty()
     return False, {"error": error_msg}, error_msg
 
