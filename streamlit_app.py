@@ -451,8 +451,8 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
     
     streaming_placeholder.empty()
     return False, {"error": error_msg}, error_msg
-url = f"{cfg['base_url'].rstrip('/')}{cfg['endpoint']}"
-st.info(f"DEBUG: 最终请求地址是 {url}") # 在 UI 上看一眼地址是否为 .../v1beta/openai/chat/completions
+
+
 # ===============================
 # 词类判定主函数
 # ===============================
