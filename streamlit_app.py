@@ -113,14 +113,13 @@ MODEL_CONFIGS = {
             "stream": True,
         },
     },
-    "gemini": {
-        # 修正：base_url 包含到 openai 这一级
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-        # 修正：endpoint 增加 v1 路径
-        "endpoint": "/v1/chat/completions",
+   "gemini": {
+        # 使用最精简的官方 v1beta 路径
+        "base_url": "https://generativelanguage.googleapis.com/v1beta",
+        "endpoint": "/chat/completions", 
         "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         "payload": lambda model, messages, **kw: {
-            "model": model, 
+            "model": model, # 这里的 model 字符串至关重要
             "messages": messages, 
             "max_tokens": kw.get("max_tokens", 4096), 
             "temperature": kw.get("temperature", 0.0), 
@@ -174,13 +173,13 @@ MODEL_OPTIONS = {
     },
     "Google Gemini 1.5 Pro": {
         "provider": "gemini", 
-        "model": "gemini-1.5-pro", 
+        "model": "models/gemini-1.5-pro",  # 必须加上 models/ 前缀
         "api_key": os.getenv("GEMINI_API_KEY"),
         "env_var": "GEMINI_API_KEY"
     },
     "Google Gemini 1.5 Flash": {
         "provider": "gemini", 
-        "model": "gemini-1.5-flash", 
+        "model": "models/gemini-1.5-flash", # 必须加上 models/ 前缀
         "api_key": os.getenv("GEMINI_API_KEY"),
         "env_var": "GEMINI_API_KEY"
     },
