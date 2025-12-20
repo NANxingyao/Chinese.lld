@@ -113,6 +113,16 @@ MODEL_CONFIGS = {
             "stream": True,
         },
     },
+    "gemini": {
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "endpoint": "/chat/completions",
+        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        "payload": lambda model, messages, **kw: {
+            "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), 
+            "temperature": kw.get("temperature", 0.0), 
+            "stream": True,
+        },
+    },
     "moonshot": {
         "base_url": "https://api.moonshot.cn/v1",
         "endpoint": "/chat/completions",
@@ -157,6 +167,18 @@ MODEL_OPTIONS = {
         "model": "gpt-4o-mini", 
         "api_key": os.getenv("OPENAI_API_KEY"),
         "env_var": "OPENAI_API_KEY"
+    },
+    "Google Gemini 1.5 Pro": {
+        "provider": "gemini", 
+        "model": "gemini-1.5-pro", 
+        "api_key": os.getenv("GEMINI_API_KEY"),
+        "env_var": "GEMINI_API_KEY"
+    },
+    "Google Gemini 1.5 Flash": {
+        "provider": "gemini", 
+        "model": "gemini-1.5-flash", 
+        "api_key": os.getenv("GEMINI_API_KEY"),
+        "env_var": "GEMINI_API_KEY"
     },
     "Moonshot（Kimi）": {
         "provider": "moonshot", 
