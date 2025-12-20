@@ -114,9 +114,9 @@ MODEL_CONFIGS = {
         },
     },
     "gemini": {
-        # 核心修改：将 /v1beta/openai 改为 /v1beta
-        "base_url": "https://generativelanguage.googleapis.com/v1beta", 
-        "endpoint": "/chat/completions",
+        # 方案 A：这是目前最通用的 OpenAI 兼容路径
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "endpoint": "/v1/chat/completions", # 注意这里多了一个 /v1
         "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         "payload": lambda model, messages, **kw: {
             "model": model, 
