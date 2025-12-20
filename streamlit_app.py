@@ -113,7 +113,8 @@ MODEL_CONFIGS = {
             "stream": True,
         },
     },
-    "gemini": {
+   "gemini": {
+        # 关键修改：去掉末尾的 /openai
         "base_url": "https://generativelanguage.googleapis.com/v1beta", 
         "endpoint": "/chat/completions",
         "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
