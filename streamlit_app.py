@@ -908,7 +908,7 @@ def main():
                 if target_col:
                     st.write(f"✅ 识别到目标列: `{target_col}` | 待分析总数: {len(df_input)}")
                     
-                    if st.button("🚀 开始处理 (断点续传+防中断)", type="primary", use_container_width=True):
+                    if st.button("🚀 开始处理 (断点续传)", type="primary", use_container_width=True):
                         if not selected_model_info["api_key"]:
                             st.error("❌ 请先在上方配置有效的 API Key")
                         else:
