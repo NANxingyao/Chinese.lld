@@ -858,8 +858,9 @@ def main():
                                 })
                             rule_data_sorted = sorted(rule_data, key=lambda x: x["得分"], reverse=True)
                             rule_df = pd.DataFrame(rule_data_sorted)
-                            styled_df = rule_df.style.applymap(
-                                lambda x: "color: #ff4b4b; font-weight: bold" if isinstance(x, int) and x < 0 else "",
+                            styled_df = rule_df.style.map(
+                                lambda x: "color: #ff4b4b; font-weight: bold"
+                                if isinstance(x, (int, float)) and x < 0 else "",
                                 subset=["得分"]
                             )
                             st.dataframe(
