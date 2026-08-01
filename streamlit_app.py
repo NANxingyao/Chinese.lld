@@ -30,7 +30,8 @@ logger = logging.getLogger(__name__)
 
 # 页面配置
 st.set_page_config(
-    page_title="汉语词类隶属度检测划类",
+    page_title="基于大语言模型的汉语隶属度检测划类平台
+    ——Chinese Affinity Detection and Classification Platform Based on LLM",
     page_icon="📰",
     layout="wide",
     initial_sidebar_state="collapsed",
