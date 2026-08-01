@@ -737,7 +737,7 @@ def process_and_style_excel(df, selected_model_info, target_col_name, metric_pla
 # 主页面逻辑
 # ===============================
 def main():
-    st.title("📰 汉语词类隶属度检测划类")
+    st.title("📰 基于大语言模型的汉语隶属度检测划类平台——Chinese Affinity Detection and Classification Platform Based on LLM")
     
     # 顶部控制区
     control_container = st.container()
