@@ -1075,7 +1075,7 @@ if __name__ == "__main__":
 st.markdown("---")
 st.markdown(
     "<div style='text-align:center; color:#666;'>"
-    "© 2025 汉语词类隶属度检测划类（防中断版） "
+    "© 2025 汉语词类隶属度检测划类_Ryan "
     "</div>",
     unsafe_allow_html=True
 )
