@@ -1766,10 +1766,10 @@ def main():
         <h1>📰 基于大语言模型的汉语词类隶属度检测划类平台</h1>
         <div class="subtitle">Chinese Membership Detection and Classification Platform Based on Large Language Models (LLMs)</div>
         <div class="badges">
-            <span class="badge">🤖 多模型支持</span>
-            <span class="badge">📊 隶属度分析</span>
-            <span class="badge">📈 可视化展示</span>
-            <span class="badge">📥 批量处理</span>
+            <span class="badge"> 多模型支持</span>
+            <span class="badge"> 隶属度分析</span>
+            <span class="badge"> 可视化展示</span>
+            <span class="badge"> 批量处理</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -1781,7 +1781,6 @@ def main():
         
         with col1:
             # 模型设置高亮容器
-            st.markdown('<div class="model-settings-card">', unsafe_allow_html=True)
             st.markdown('<div class="section-title"><span class="icon">⚙️</span> 模型设置（LLM）</div>', unsafe_allow_html=True)
             
             if not AVAILABLE_MODEL_OPTIONS:
@@ -1812,7 +1811,6 @@ def main():
                 
         with col2:
             # 连接测试高亮容器
-            st.markdown('<div class="connection-card">', unsafe_allow_html=True)
             st.markdown('<div class="section-title" style="justify-content: center;"><span class="icon">🔗</span> 连接测试</div>', unsafe_allow_html=True)
             st.write("")
             if not selected_model_info["api_key"]:
@@ -1836,16 +1834,15 @@ def main():
     st.markdown("---")
 
     # ===== 分页 =====
-    tab1, tab2 = st.tabs(["🔍 单个词语详细分析", "📊 Excel 批量处理"])
+    tab1, tab2 = st.tabs(["单个词语详细分析", "Excel 批量处理"])
 
     # ===== 单个词语分析 =====
     with tab1:
         # 输入区卡片
-        st.markdown('<div class="module-card">', unsafe_allow_html=True)
-        st.markdown('<div class="section-title"><span class="icon">📝</span> 词语输入</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title"><span class="icon"> </span> 词语输入</div>', unsafe_allow_html=True)
         word = st.text_input("请输入要分析的汉语词语", placeholder="例如：苹果、跑、美丽...", key="word_input")
         analyze_button = st.button(
-            "🚀 开始分析", 
+            "开始分析", 
             type="primary",
             disabled=not (selected_model_info["api_key"] and word)
         )
@@ -1969,11 +1966,10 @@ def main():
     # ===== 批量处理 =====
     with tab2:
         # 批量任务监控标题
-        st.markdown('<div class="module-card">', unsafe_allow_html=True)
         st.markdown('<div class="section-title"><span class="icon">📡</span> 批量任务实时监控</div>', unsafe_allow_html=True)
         
         # 控制面板
-        st.markdown("#### 🎛️ 控制面板")
+        st.markdown("####  控制面板")
         ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2, 1, 1])
         
         with ctrl_col1:
@@ -1991,7 +1987,7 @@ def main():
             if os.path.exists(BACKUP_FILE):
                 with open(BACKUP_FILE, "rb") as f:
                     st.download_button(
-                        label="📥 下载历史文件(CSV)",
+                        label=" 下载历史文件(CSV)",
                         data=f,
                         file_name=f"batch_results_{time.strftime('%Y%m%d_%H%M%S')}.csv",
                         mime="text/csv",
@@ -2000,7 +1996,7 @@ def main():
             else:
                 st.button("下载历史文件", disabled=True, use_container_width=True)
         with ctrl_col3:
-            if st.button("🗑️ 清空本地记录", use_container_width=True, type="secondary"):
+            if st.button(" 清空本地记录", use_container_width=True, type="secondary"):
                 if os.path.exists(BACKUP_FILE):
                     try:
                         os.remove(BACKUP_FILE)
@@ -2011,17 +2007,17 @@ def main():
                     except Exception as e:
                         st.error(f"清空记录失败: {e}")
                 else:
-                    st.info("📄 暂无本地记录可清空")
+                    st.info(" 暂无本地记录可清空")
         
         st.divider()
         
         # 运行状态
-        st.markdown("#### ⏱️ 运行状态")
+        st.markdown("####  运行状态")
         progress_bar = st.progress(0)
         status_info = st.empty()
         
         # 实时结果预览
-        st.markdown("#### 📋 实时结果预览")
+        st.markdown("####  实时结果预览")
         table_placeholder = st.empty()
         if os.path.exists(BACKUP_FILE):
             try:
@@ -2038,7 +2034,7 @@ def main():
         st.divider()
         
         # 上传任务
-        st.markdown("#### 📤 上传新任务")
+        st.markdown("####  上传新任务")
         uploaded_file = st.file_uploader("选择 Excel 文件", type=["xlsx", "xls"])
         
         if uploaded_file:
@@ -2049,14 +2045,14 @@ def main():
                 if target_col:
                     st.markdown(f"""
                     <div class="info-highlight">
-                        <div style="font-weight: 600; color: #1e40af;">📊 文件信息</div>
+                        <div style="font-weight: 600; color: #1e40af;"> 文件信息</div>
                         <div style="margin-top: 0.5rem;">
                             识别到目标列: <code>{target_col}</code> | 待分析总数: <strong>{len(df_input)}</strong> 条
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    if st.button("🚀 开始处理", type="primary", use_container_width=True):
+                    if st.button(" 开始处理", type="primary", use_container_width=True):
                         if not selected_model_info["api_key"]:
                             st.error("请先在上方配置有效的 API Key")
                         else:
@@ -2182,7 +2178,7 @@ st.markdown("---")
 st.markdown(
     """
     <div class="footer-text">
-        © 2025 汉语词类隶属度检测划类平台 | Powered by LLMs | Designed with ❤️ by Ryan
+        © 2025 基于大语言模型的汉语词类隶属度检测划类平台|Ryan
     </div>
     """,
     unsafe_allow_html=True
