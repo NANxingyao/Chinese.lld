@@ -737,7 +737,7 @@ def process_and_style_excel(df, selected_model_info, target_col_name, metric_pla
 # 主页面逻辑
 # ===============================
 def main():
-    st.title("📰基于大语言模型的汉语隶属度检测划类平台")
+    st.title("📰基于大语言模型的汉语词类隶属度检测划类平台")
     st.caption(
         "Chinese Membership Detection and Classification Platform Based on Large Language Models (LLMs)"
     )
