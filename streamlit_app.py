@@ -738,7 +738,9 @@ def process_and_style_excel(df, selected_model_info, target_col_name, metric_pla
 # ===============================
 def main():
     st.title("📰 基于大语言模型的汉语隶属度检测划类平台")
-    st.caption("Chinese Affinity Detection and Classification Platform Based on Large Language Models (LLMs)")    
+    st.caption(
+        "Chinese Membership Detection and Classification Platform Based on Large Language Models (LLMs)"
+    )
     # 顶部控制区
     control_container = st.container()
     with control_container:
