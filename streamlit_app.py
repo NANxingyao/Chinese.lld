@@ -521,7 +521,7 @@ RULE_SETS = {
 
         {"name": "N4_可作中心语或作定语", "desc": "可以做中心语受其他名词修饰，或者作定语直接修饰其他名词", "match_score": 10, "mismatch_score": 0},
 
-        {"name": "N5_可后附的字结构", "desc": "可以后附助词"的"构成"的"字结构", "match_score": 10, "mismatch_score": 0},
+        {"name": "N5_可后附的字结构", "desc": "可以后附助词'的'构成'的'字结构", "match_score": 10, "mismatch_score": 0},
 
         {"name": "N6_可后附方位词构处所", "desc": "可以后附方位词构成处所结构", "match_score": 10, "mismatch_score": 0},
 
@@ -2182,7 +2182,7 @@ st.markdown("---")
 st.markdown(
     """
     <div class="footer-text">
-        © 2025 汉语词类隶属度检测划类平台 | Ryan
+        © 2025 汉语词类隶属度检测划类平台 | Powered by LLMs | Designed with ❤️ by Ryan
     </div>
     """,
     unsafe_allow_html=True
