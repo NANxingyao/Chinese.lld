@@ -526,7 +526,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         if predicted_pos not in RULE_SETS:
              st.warning(f"模型预测的词类 '{predicted_pos}' 不在分析范围内 ('名词', '动词', '名动词')。")
     else:
-        st.error("❌ 未能从模型响应中解析出有效的JSON。请检查模型输出是否符合要求。")
+        st.error(" 未能从模型响应中解析出有效的JSON。请检查模型输出是否符合要求。")
         explanation = "无法解析模型输出。原始响应：\n" + raw_text
         predicted_pos = "未知"
         raw_scores = {}
@@ -680,7 +680,7 @@ def process_and_style_excel(df, selected_model_info, target_col_name, metric_pla
                         latest_count = get_history_count(backup_file)
                         metric_placeholder.metric("已存数据量", f"{latest_count} 条")
                     else:
-                        st.error(f"⚠️ 保存第 {index+1} 条记录失败（文件写入错误）")
+                        st.error(f" 保存第 {index+1} 条记录失败（文件写入错误）")
                 except Exception as csv_err:
                     st.error(f"保存第 {index+1} 条记录失败: {csv_err}")
                     logger.error(f"保存CSV失败 - 行号:{index+1}, 错误:{csv_err}")
@@ -693,7 +693,7 @@ def process_and_style_excel(df, selected_model_info, target_col_name, metric_pla
                 
             except Exception as row_err:
                 logger.error(f"处理第{index+1}行失败（跳过）: {row_err}")
-                st.warning(f"⚠️ 跳过第 {index+1} 行（处理失败）: {row_err}")
+                st.warning(f" 跳过第 {index+1} 行（处理失败）: {row_err}")
                 progress_bar.progress((index + 1) / total)
                 continue
 
@@ -737,7 +737,7 @@ def process_and_style_excel(df, selected_model_info, target_col_name, metric_pla
 # 主页面逻辑
 # ===============================
 def main():
-    st.title("📰 基于大语言模型的汉语隶属度检测划类平台")
+    st.title("📰基于大语言模型的汉语隶属度检测划类平台")
     st.caption(
         "Chinese Membership Detection and Classification Platform Based on Large Language Models (LLMs)"
     )
@@ -747,9 +747,9 @@ def main():
         col1, col2 = st.columns([3, 1])
         
         with col1:
-            st.subheader("⚙️ 模型设置")
+            st.subheader("模型设置（LLM）")
             if not AVAILABLE_MODEL_OPTIONS:
-                st.error("❌ 找不到可用的 API Key！请设置以下任意一个环境变量来启用模型:")
+                st.error(" 找不到可用的 API Key！请设置以下任意一个环境变量来启用模型:")
                 for name, info in MODEL_OPTIONS.items():
                       st.code(f"export {info['env_var']}='你的API Key'", language="bash")
                 selected_model_display_name = list(MODEL_OPTIONS.keys())[0]
@@ -764,7 +764,7 @@ def main():
                 selected_model_info = AVAILABLE_MODEL_OPTIONS[selected_model_display_name]
                 
         with col2:
-            st.subheader("🔗 连接测试")
+            st.subheader("连接测试")
             st.write("")
             if not selected_model_info["api_key"]:
                 st.button("测试模型链接 (不可用)", type="secondary", disabled=True)
@@ -779,21 +779,21 @@ def main():
                             max_tokens=10
                         )
                     if ok:
-                        st.success("✅ 成功！")
+                        st.success("✅成功！")
                     else:
-                        st.error(f"❌ 失败: {err_msg}")
+                        st.error(f"❌失败: {err_msg}")
 
     st.markdown("---")
 
     # 分页
-    tab1, tab2 = st.tabs(["🔍 单个词语详细分析", "📂 Excel 批量处理"])
+    tab1, tab2 = st.tabs(["单个词语详细分析", " Excel 批量处理"])
 
     # 单个词语分析
     with tab1:
-        st.subheader("🔤 词语输入")
+        st.subheader(" 词语输入")
         word = st.text_input("请输入要分析的汉语词语", placeholder="例如：苹果、跑、美丽...", key="word_input")
         analyze_button = st.button(
-            "🚀 开始分析", 
+            "开始分析", 
             type="primary",
             disabled=not (selected_model_info["api_key"] and word)
         )
@@ -827,17 +827,17 @@ def main():
                 col_results_1, col_results_2 = st.columns(2)
                 
                 with col_results_1:
-                    st.subheader("🏆 词类隶属度排名")
+                    st.subheader(" 词类隶属度排名")
                     top10 = get_top_10_positions(membership)
                     top10_df = pd.DataFrame(top10, columns=["词类", "隶属度"])
                     top10_df["隶属度"] = top10_df["隶属度"].apply(lambda x: f"{x:.4f}")
                     st.table(top10_df)
                     
-                    st.subheader("📊 词类隶属度雷达图")
+                    st.subheader(" 词类隶属度雷达图")
                     plot_radar_chart_streamlit(dict(top10), f"「{word}」的词类隶属度分布")
 
                 with col_results_2:
-                    st.subheader("📋 各词类详细得分")
+                    st.subheader(" 各词类详细得分")
                     pos_total_scores = {pos: sum(scores_all[pos].values()) for pos in scores_all.keys()}
                     sorted_pos_names = sorted(pos_total_scores.keys(), key=lambda pos: pos_total_scores[pos], reverse=True)
                     
@@ -871,16 +871,16 @@ def main():
                                 height=min(len(rule_df) * 30 + 50, 400)
                             )
                     
-                    st.subheader("📥 模型原始响应")
+                    st.subheader(" 模型原始响应")
                     with st.expander("点击展开查看原始响应", expanded=False):
                         st.code(raw_text, language="text")
 
     # 批量处理
     with tab2:
-        st.header("📂 批量任务实时监控")
+        st.header(" 批量任务实时监控")
 
         # 控制面板
-        st.subheader("🛠️ 控制面板")
+        st.subheader(" 控制面板")
         ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2, 1, 1])
         
         with ctrl_col1:
@@ -898,22 +898,22 @@ def main():
             if os.path.exists(BACKUP_FILE):
                 with open(BACKUP_FILE, "rb") as f:
                     st.download_button(
-                        label="📥 下载历史文件(CSV)",
+                        label="下载历史文件(CSV)",
                         data=f,
                         file_name=f"batch_results_{time.strftime('%Y%m%d_%H%M%S')}.csv",
                         mime="text/csv",
                         use_container_width=True
                     )
             else:
-                st.button("📥 下载历史文件", disabled=True, use_container_width=True)
+                st.button("下载历史文件", disabled=True, use_container_width=True)
 
         with ctrl_col3:
-            if st.button("🗑️ 清空本地记录", use_container_width=True, type="secondary"):
+            if st.button("清空本地记录", use_container_width=True, type="secondary"):
                 if os.path.exists(BACKUP_FILE):
                     try:
                         os.remove(BACKUP_FILE)
                         clear_process_progress()  # 同时清除进度
-                        st.success("✅ 已清空本地记录和进度")
+                        st.success("已清空本地记录和进度")
                         metric_placeholder.metric("已存数据量", "0 条")
                         st.rerun()
                     except Exception as e:
@@ -924,12 +924,12 @@ def main():
         st.divider()
 
         # 运行状态
-        st.subheader("📈 运行状态")
+        st.subheader("运行状态")
         progress_bar = st.progress(0)
         status_info = st.empty()
         
         # 实时结果预览
-        st.subheader("📋 实时结果预览")
+        st.subheader("实时结果预览")
         table_placeholder = st.empty()
         if os.path.exists(BACKUP_FILE):
             try:
@@ -946,7 +946,7 @@ def main():
         st.divider()
 
         # 上传任务
-        st.subheader("📤 上传新任务")
+        st.subheader("上传新任务")
         uploaded_file = st.file_uploader("选择 Excel 文件", type=["xlsx", "xls"])
         
         if uploaded_file:
@@ -955,11 +955,11 @@ def main():
                 target_col = next((col for col in df_input.columns if "词" in str(col) or "word" in str(col).lower()), None)
                 
                 if target_col:
-                    st.write(f"✅ 识别到目标列: `{target_col}` | 待分析总数: {len(df_input)}")
+                    st.write(f"识别到目标列: `{target_col}` | 待分析总数: {len(df_input)}")
                     
-                    if st.button("🚀 开始处理 (断点续传)", type="primary", use_container_width=True):
+                    if st.button("开始处理", type="primary", use_container_width=True):
                         if not selected_model_info["api_key"]:
-                            st.error("❌ 请先在上方配置有效的 API Key")
+                            st.error("请先在上方配置有效的 API Key")
                         else:
                             # 获取已处理的词语
                             existing_words = set()
@@ -968,7 +968,7 @@ def main():
                                     existing_df = pd.read_csv(BACKUP_FILE, encoding='utf-8-sig')
                                     if "词语" in existing_df.columns:
                                         existing_words = set(existing_df["词语"].astype(str).tolist())
-                                    st.info(f"ℹ️ 已跳过 {len(existing_words)} 条已处理记录")
+                                    st.info(f"已跳过 {len(existing_words)} 条已处理记录")
                                 except Exception as e:
                                     st.warning(f"读取已处理记录失败，将重新处理所有数据: {e}")
 
@@ -979,7 +979,7 @@ def main():
                                 for index, row in df_input.iterrows():
                                     word = str(row[target_col]).strip()
                                     if not word:
-                                        status_info.write(f"⏩ **跳过空值**: 第 {index+1}/{total_rows} 行")
+                                        status_info.write(f"**跳过空值**: 第 {index+1}/{total_rows} 行")
                                         progress_bar.progress((index + 1) / total_rows)
                                         continue
                                     
@@ -987,10 +987,10 @@ def main():
                                     progress_bar.progress((index + 1) / total_rows)
                                     
                                     if word in existing_words:
-                                        status_info.write(f"⏩ **跳过已处理**: {word} ({index+1}/{total_rows}) | 进度: {pct}%")
+                                        status_info.write(f" **跳过已处理**: {word} ({index+1}/{total_rows}) | 进度: {pct}%")
                                         continue
                                     
-                                    status_info.write(f"🔍 **正在分析**: `{word}` | 进度: {index+1}/{total_rows} ({pct}%)")
+                                    status_info.write(f" **正在分析**: `{word}` | 进度: {index+1}/{total_rows} ({pct}%)")
                                     
                                     # 调用API处理（增强重试）
                                     max_retries = 3
@@ -1038,9 +1038,9 @@ def main():
                                             latest_count = get_history_count(BACKUP_FILE)
                                             metric_placeholder.metric("已存数据量", f"{latest_count} 条")
                                         else:
-                                            st.error(f"⚠️ 保存第 {index+1} 条记录失败（文件写入错误）")
+                                            st.error(f"保存第 {index+1} 条记录失败（文件写入错误）")
                                     except Exception as csv_err:
-                                        st.error(f"⚠️ 保存第 {index+1} 条记录失败: {csv_err}")
+                                        st.error(f"保存第 {index+1} 条记录失败: {csv_err}")
                                         logger.error(f"保存CSV失败 - 行号:{index+1}, 错误:{csv_err}")
                                     
                                     # 刷新表格
@@ -1058,7 +1058,7 @@ def main():
                                 st.rerun()
                             except Exception as batch_err:
                                 logger.error(f"批量处理主循环中断: {batch_err}")
-                                status_info.error(f"⚠️ 批量处理中断: {batch_err}，下次可从断点继续")
+                                status_info.error(f" 批量处理中断: {batch_err}，下次可从断点继续")
                 else:
                     st.error("❌ 未识别到包含'词'或'word'的列，请检查Excel文件结构")
             except Exception as e:
