@@ -1777,7 +1777,7 @@ def main():
     # ===== 顶部控制区 =====
     control_container = st.container()
     with control_container:
-        col1, col2 = st.columns([3, 1])
+        col1, col2 = st.columns([5, 1])
         
         with col1:
             # 模型设置高亮容器
