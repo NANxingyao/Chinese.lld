@@ -146,48 +146,7 @@ footer {visibility: hidden;}
     border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
-/* ===== 卡片标记元素（隐藏） ===== */
-.card-marker {
-    display: none !important;
-    width: 0 !important;
-    height: 0 !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    border: none !important;
-    position: absolute !important;
-    visibility: hidden !important;
-}
-
-/* ===== 模型设置卡片（作用于列容器） ===== */
-div[data-testid="column"]:has(.card-marker.model-settings) {
-    background: linear-gradient(135deg, #fbfcfe 0%, #eef3f9 100%);
-    border-radius: 16px;
-    padding: 1.25rem 1.5rem !important;
-    border: 1.5px solid rgba(45, 90, 135, 0.2);
-    box-shadow: 0 4px 16px rgba(45, 90, 135, 0.1), 0 1px 4px rgba(0, 0, 0, 0.04);
-}
-
-/* ===== 连接测试卡片（作用于列容器） ===== */
-div[data-testid="column"]:has(.card-marker.connection) {
-    background: linear-gradient(135deg, #f5f9ff 0%, #e8f0fe 100%);
-    border-radius: 16px;
-    padding: 1.25rem 1.5rem !important;
-    border: 1.5px solid rgba(59, 130, 246, 0.25);
-    box-shadow: 0 4px 16px rgba(59, 130, 246, 0.12), 0 1px 4px rgba(0, 0, 0, 0.04);
-    text-align: center;
-}
-
-/* ===== 模块卡片（作用于垂直容器） ===== */
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="stVerticalBlockBorderWrapper"] > div[data-testid="stVerticalBlock"] > div[data-testid="stMarkdownContainer"] .card-marker.module-card) {
-    background: #ffffff;
-    border-radius: 16px;
-    padding: 1.5rem;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.05);
-    border: 1px solid rgba(200, 210, 225, 0.5);
-    margin-bottom: 1rem;
-}
-
-/* ===== 模块高亮卡片（旧样式保留备用） ===== */
+/* ===== 模块高亮卡片 ===== */
 .module-card {
     background: #ffffff;
     border-radius: 16px;
@@ -204,11 +163,17 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="stVerticalBlockBorderW
 
 /* ===== 模型设置区高亮容器 ===== */
 .model-settings-card {
-    background: linear-gradient(135deg, #fbfcfe 0%, #f0f4fa 100%);
+    background: linear-gradient(135deg, #fbfcfe 0%, #eef3f9 100%);
     border-radius: 16px;
     padding: 1.25rem 1.5rem;
-    border: 1.5px solid rgba(45, 90, 135, 0.15);
-    box-shadow: 0 4px 16px rgba(45, 90, 135, 0.08), 0 1px 4px rgba(0, 0, 0, 0.04);
+    border: 1.5px solid rgba(45, 90, 135, 0.2);
+    box-shadow: 0 4px 16px rgba(45, 90, 135, 0.1), 0 1px 4px rgba(0, 0, 0, 0.04);
+    margin-bottom: 0.5rem;
+}
+.model-settings-card .section-title {
+    margin-top: 0;
+    padding-top: 0;
+    border-bottom: 2px solid rgba(45, 90, 135, 0.15);
 }
 
 /* ===== 连接测试区高亮容器 ===== */
@@ -216,9 +181,16 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="stVerticalBlockBorderW
     background: linear-gradient(135deg, #f5f9ff 0%, #e8f0fe 100%);
     border-radius: 16px;
     padding: 1.25rem 1.5rem;
-    border: 1.5px solid rgba(59, 130, 246, 0.2);
-    box-shadow: 0 4px 16px rgba(59, 130, 246, 0.1), 0 1px 4px rgba(0, 0, 0, 0.04);
+    border: 1.5px solid rgba(59, 130, 246, 0.25);
+    box-shadow: 0 4px 16px rgba(59, 130, 246, 0.12), 0 1px 4px rgba(0, 0, 0, 0.04);
     text-align: center;
+    margin-bottom: 0.5rem;
+}
+.connection-card .section-title {
+    margin-top: 0;
+    padding-top: 0;
+    border-bottom: 2px solid rgba(59, 130, 246, 0.2);
+    justify-content: center;
 }
 
 /* ===== 结果成功高亮块 ===== */
@@ -1865,9 +1837,12 @@ def main():
         col1, col2 = st.columns([3, 1])
         
         with col1:
-            # 模型设置卡片标记
-            st.markdown('<div class="card-marker model-settings"></div>', unsafe_allow_html=True)
-            st.markdown('<div class="section-title"><span class="icon-dot"></span> 模型设置（LLM）</div>', unsafe_allow_html=True)
+            # 模型设置卡片（标题在卡片内，避免空框）
+            st.markdown('''
+            <div class="model-settings-card">
+                <div class="section-title"><span class="icon-dot"></span> 模型设置（LLM）</div>
+            </div>
+            ''', unsafe_allow_html=True)
             
             if not AVAILABLE_MODEL_OPTIONS:
                 st.markdown('<div class="error-highlight">', unsafe_allow_html=True)
@@ -1894,9 +1869,12 @@ def main():
                 """, unsafe_allow_html=True)
                 
         with col2:
-            # 连接测试卡片标记
-            st.markdown('<div class="card-marker connection"></div>', unsafe_allow_html=True)
-            st.markdown('<div class="section-title" style="justify-content: center;"><span class="icon-dot"></span> 连接测试</div>', unsafe_allow_html=True)
+            # 连接测试卡片（标题在卡片内，避免空框）
+            st.markdown('''
+            <div class="connection-card">
+                <div class="section-title" style="justify-content: center;"><span class="icon-dot"></span> 连接测试</div>
+            </div>
+            ''', unsafe_allow_html=True)
             st.write("")
             if not selected_model_info["api_key"]:
                 st.button("测试模型链接 (不可用)", type="secondary", disabled=True)
