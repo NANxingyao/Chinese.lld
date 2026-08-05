@@ -312,42 +312,30 @@ footer {visibility: hidden;}
 
 /* ===== 标签页样式优化 ===== */
 .stTabs [data-baseweb="tab-list"] {
-    gap: 0.5rem !important;
-    background: #f1f5f9 !important;
-    padding: 0.6rem !important;
-    border-radius: 16px !important;
-    margin-bottom: 1.5rem !important;
-    border: 1px solid #e2e8f0 !important;
-    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.04) !important;
-    overflow: hidden !important;
+    gap: 0.5rem;
+    background: #f1f5f9;
+    padding: 0.5rem;
+    border-radius: 12px;
+    margin-bottom: 1rem;
 }
 .stTabs [data-baseweb="tab"] {
-    height: 2.8rem !important;
-    border-radius: 12px !important;
-    padding: 0 1.75rem !important;
-    font-weight: 600 !important;
-    color: #64748b !important;
-    transition: all 0.3s ease !important;
-    overflow: hidden !important;
-    position: relative !important;
-    z-index: 1 !important;
+    height: 2.5rem;
+    border-radius: 8px;
+    padding: 0 1.5rem;
+    font-weight: 600;
+    color: #64748b;
+    transition: all 0.3s ease;
 }
 .stTabs [data-baseweb="tab"]:hover {
-    color: #1e4d7b !important;
-    background: rgba(45, 108, 184, 0.08) !important;
-    border-radius: 12px !important;
+    color: #1e4d7b;
+    background: rgba(45, 108, 184, 0.08);
 }
 .stTabs [aria-selected="true"] {
-    background: linear-gradient(135deg, #1e4d7b 0%, #2d6cb8 100%) !important;
-    color: white !important;
-    font-weight: 700 !important;
-    box-shadow: 0 4px 12px rgba(30, 77, 123, 0.3) !important;
-    border-radius: 12px !important;
-    overflow: hidden !important;
-}
-.stTabs [data-baseweb="tab"] button {
-    border-radius: 12px !important;
-    overflow: hidden !important;
+    background: linear-gradient(135deg, #1e4d7b 0%, #2d6cb8 100%);
+    color: white;
+    font-weight: 700;
+    box-shadow: 0 2px 8px rgba(30, 77, 123, 0.2);
+    border-radius: 8px;
 }
 
 /* ===== 表格样式优化 ===== */
@@ -1837,12 +1825,9 @@ def main():
         col1, col2 = st.columns([3, 1])
         
         with col1:
-            # 模型设置卡片（标题在卡片内，避免空框）
-            st.markdown('''
-            <div class="model-settings-card">
-                <div class="section-title"><span class="icon-dot"></span> 模型设置（LLM）</div>
-            </div>
-            ''', unsafe_allow_html=True)
+            # 模型设置高亮容器
+            st.markdown('<div class="model-settings-card">', unsafe_allow_html=True)
+            st.markdown('<div class="section-title"><span class="icon-dot"></span> 模型设置（LLM）</div>', unsafe_allow_html=True)
             
             if not AVAILABLE_MODEL_OPTIONS:
                 st.markdown('<div class="error-highlight">', unsafe_allow_html=True)
@@ -1867,14 +1852,13 @@ def main():
                     <span style="color: #64748b; font-size: 0.85rem;">提供商: {selected_model_info['provider'].upper()}</span>
                 </div>
                 """, unsafe_allow_html=True)
+            
+            st.markdown('</div>', unsafe_allow_html=True)
                 
         with col2:
-            # 连接测试卡片（标题在卡片内，避免空框）
-            st.markdown('''
-            <div class="connection-card">
-                <div class="section-title" style="justify-content: center;"><span class="icon-dot"></span> 连接测试</div>
-            </div>
-            ''', unsafe_allow_html=True)
+            # 连接测试高亮容器
+            st.markdown('<div class="connection-card">', unsafe_allow_html=True)
+            st.markdown('<div class="section-title" style="justify-content: center;"><span class="icon-dot"></span> 连接测试</div>', unsafe_allow_html=True)
             st.write("")
             if not selected_model_info["api_key"]:
                 st.button("测试模型链接 (不可用)", type="secondary", disabled=True)
@@ -1892,6 +1876,7 @@ def main():
                         st.success("成功！")
                     else:
                         st.error(f"失败: {err_msg}")
+            st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("---")
 
