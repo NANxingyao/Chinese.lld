@@ -1871,7 +1871,6 @@ def main():
     # ===== 单个词语分析 =====
     with tab1:
         # 输入区卡片
-        st.markdown('<div class="module-card">', unsafe_allow_html=True)
         st.markdown('<div class="section-title"><span class="icon-dot"></span> 词语输入</div>', unsafe_allow_html=True)
         word = st.text_input("请输入要分析的汉语词语", placeholder="例如：苹果、跑、美丽...", key="word_input")
         analyze_button = st.button(
