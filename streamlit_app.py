@@ -1924,7 +1924,6 @@ def main():
                 
                 with col_results_1:
                     # 隶属度排名卡片
-                    st.markdown('<div class="module-card">', unsafe_allow_html=True)
                     st.markdown('<div class="section-title"><span class="icon-dot"></span> 词类隶属度排名</div>', unsafe_allow_html=True)
                     top10 = get_top_10_positions(membership)
                     
@@ -1943,14 +1942,12 @@ def main():
                     st.markdown('</div>', unsafe_allow_html=True)
                     
                     # 雷达图卡片
-                    st.markdown('<div class="module-card">', unsafe_allow_html=True)
                     st.markdown('<div class="section-title"><span class="icon-dot"></span> 词类隶属度雷达图</div>', unsafe_allow_html=True)
                     plot_radar_chart_streamlit(dict(top10), f"「{word}」的词类隶属度分布")
                     st.markdown('</div>', unsafe_allow_html=True)
 
                 with col_results_2:
                     # 详细得分卡片
-                    st.markdown('<div class="module-card">', unsafe_allow_html=True)
                     st.markdown('<div class="section-title"><span class="icon-dot"></span> 各词类详细得分</div>', unsafe_allow_html=True)
                     pos_total_scores = {pos: sum(scores_all[pos].values()) for pos in scores_all.keys()}
                     sorted_pos_names = sorted(pos_total_scores.keys(), key=lambda pos: pos_total_scores[pos], reverse=True)
@@ -1987,7 +1984,6 @@ def main():
                     st.markdown('</div>', unsafe_allow_html=True)
                     
                     # 原始响应卡片
-                    st.markdown('<div class="module-card">', unsafe_allow_html=True)
                     st.markdown('<div class="section-title"><span class="icon-dot"></span> 模型原始响应</div>', unsafe_allow_html=True)
                     with st.expander("点击展开查看原始响应", expanded=False):
                         st.code(raw_text, language="text")
