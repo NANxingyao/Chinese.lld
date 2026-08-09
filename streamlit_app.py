@@ -2201,11 +2201,21 @@ if __name__ == "__main__":
 # 页面底部说明
 # ===============================
 st.markdown("---")
+
 st.markdown(
     """
-    <div class="footer-text">
-        © 2025 汉语词类隶属度检测划类平台 | Ryan        
-        ✉通讯方式：shenrui26@gmail.com
+    <div style="
+        text-align: center;
+        color: #999;
+        font-size: 13px;
+        line-height: 1.8;
+        padding: 10px 0 5px 0;
+    ">
+        汉语词类隶属度检测划类平台 · © 2026 Ryan<br>
+        <a href="mailto:shenrui26@gmail.com"
+           style="color: #999; text-decoration: none;">
+            ✉ shenrui26@gmail.com
+        </a>
     </div>
     """,
     unsafe_allow_html=True
