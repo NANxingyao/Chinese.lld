@@ -57,7 +57,7 @@ st.set_page_config(
 
     page_title="基于大语言模型的汉语隶属度检测划类平台",
 
-    page_icon="📰",
+
 
     layout="wide",
 
@@ -92,11 +92,11 @@ footer {visibility: hidden;}
 
 /* ===== 标题高亮卡片 ===== */
 .title-header-card {
-    background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 50%, #3b7ab8 100%);
+    background: linear-gradient(135deg, #0f2942 0%, #1e4d7b 40%, #2d6cb8 75%, #3d8bd6 100%);
     padding: 2rem 2.5rem;
-    border-radius: 16px;
+    border-radius: 20px;
     margin-bottom: 1.5rem;
-    box-shadow: 0 8px 32px rgba(30, 58, 95, 0.25);
+    box-shadow: 0 12px 40px rgba(15, 41, 66, 0.35);
     position: relative;
     overflow: hidden;
 }
@@ -149,33 +149,34 @@ footer {visibility: hidden;}
 /* ===== 模块高亮卡片 ===== */
 .module-card {
     background: #ffffff;
-    border-radius: 12px;
+    border-radius: 16px;
     padding: 1.5rem;
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
-    border: 1px solid #e8ecf1;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.05);
+    border: 1px solid rgba(200, 210, 225, 0.5);
     margin-bottom: 1rem;
-    transition: box-shadow 0.3s ease;
+    transition: all 0.3s ease;
 }
 .module-card:hover {
-    box-shadow: 0 4px 20px rgba(30, 58, 95, 0.1);
+    box-shadow: 0 8px 30px rgba(30, 58, 95, 0.12), 0 2px 6px rgba(0, 0, 0, 0.06);
+    border-color: rgba(45, 90, 135, 0.2);
 }
 
 /* ===== 模型设置区高亮容器 ===== */
 .model-settings-card {
-    background: linear-gradient(135deg, #f8fafc 0%, #eef2f7 100%);
-    border-radius: 12px;
+    background: linear-gradient(135deg, #fbfcfe 0%, #f0f4fa 100%);
+    border-radius: 16px;
     padding: 1.25rem 1.5rem;
-    border-left: 4px solid #2d5a87;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+    border: 1.5px solid rgba(45, 90, 135, 0.15);
+    box-shadow: 0 4px 16px rgba(45, 90, 135, 0.08), 0 1px 4px rgba(0, 0, 0, 0.04);
 }
 
 /* ===== 连接测试区高亮容器 ===== */
 .connection-card {
-    background: linear-gradient(135deg, #f0f7ff 0%, #e0efff 100%);
-    border-radius: 12px;
+    background: linear-gradient(135deg, #f5f9ff 0%, #e8f0fe 100%);
+    border-radius: 16px;
     padding: 1.25rem 1.5rem;
-    border-left: 4px solid #3b82f6;
-    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.08);
+    border: 1.5px solid rgba(59, 130, 246, 0.2);
+    box-shadow: 0 4px 16px rgba(59, 130, 246, 0.1), 0 1px 4px rgba(0, 0, 0, 0.04);
     text-align: center;
 }
 
@@ -225,108 +226,124 @@ footer {visibility: hidden;}
     color: #1e3a5f !important;
     margin-bottom: 1rem !important;
     padding-bottom: 0.5rem;
-    border-bottom: 2px solid #e8ecf1;
+    border-bottom: 2px solid #e2e8f0;
 }
-.section-title .icon {
-    font-size: 1.3rem;
+.section-title .icon-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #2d6cb8 0%, #3d8bd6 100%);
+    box-shadow: 0 2px 6px rgba(45, 108, 184, 0.4);
+    flex-shrink: 0;
 }
 
 /* ===== 主按钮样式优化 ===== */
 .stButton > button[kind="primary"] {
-    background: linear-gradient(135deg, #2d5a87 0%, #3b7ab8 100%) !important;
+    background: linear-gradient(135deg, #1e4d7b 0%, #2d6cb8 50%, #3d8bd6 100%) !important;
     border: none !important;
-    border-radius: 8px !important;
-    padding: 0.6rem 1.5rem !important;
-    font-weight: 600 !important;
+    border-radius: 12px !important;
+    padding: 0.75rem 2rem !important;
+    font-weight: 700 !important;
+    font-size: 1rem !important;
     color: white !important;
-    box-shadow: 0 4px 12px rgba(45, 90, 135, 0.3) !important;
+    box-shadow: 0 6px 20px rgba(30, 77, 123, 0.4), 0 2px 6px rgba(0, 0, 0, 0.1) !important;
     transition: all 0.3s ease !important;
     width: 100%;
+    letter-spacing: 0.5px;
 }
 .stButton > button[kind="primary"]:hover {
-    background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%) !important;
-    box-shadow: 0 6px 20px rgba(45, 90, 135, 0.4) !important;
-    transform: translateY(-1px);
+    background: linear-gradient(135deg, #0f2942 0%, #1e4d7b 50%, #2d6cb8 100%) !important;
+    box-shadow: 0 10px 30px rgba(30, 77, 123, 0.5), 0 4px 10px rgba(0, 0, 0, 0.15) !important;
+    transform: translateY(-2px);
 }
 .stButton > button[kind="primary"]:active {
     transform: translateY(0);
+    box-shadow: 0 3px 10px rgba(30, 77, 123, 0.3) !important;
 }
 
 /* ===== 次要按钮样式 ===== */
 .stButton > button[kind="secondary"] {
     background: #ffffff !important;
-    border: 1.5px solid #d1d5db !important;
-    border-radius: 8px !important;
-    padding: 0.5rem 1.25rem !important;
-    font-weight: 500 !important;
-    color: #374151 !important;
+    border: 2px solid #cbd5e1 !important;
+    border-radius: 12px !important;
+    padding: 0.6rem 1.5rem !important;
+    font-weight: 600 !important;
+    color: #475569 !important;
     transition: all 0.3s ease !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 .stButton > button[kind="secondary"]:hover {
-    border-color: #2d5a87 !important;
-    color: #2d5a87 !important;
-    background: #f8fafc !important;
+    border-color: #2d6cb8 !important;
+    color: #1e4d7b !important;
+    background: #f5f9ff !important;
+    box-shadow: 0 4px 12px rgba(45, 108, 184, 0.15);
+    transform: translateY(-1px);
 }
 
 /* ===== 输入框样式 ===== */
 .stTextInput > div > div > input,
 .stTextArea > div > div > textarea,
 .stSelectbox > div > div > div {
-    border-radius: 8px !important;
-    border: 1.5px solid #e5e7eb !important;
-    transition: border-color 0.3s ease !important;
+    border-radius: 12px !important;
+    border: 2px solid #e2e8f0 !important;
+    transition: all 0.3s ease !important;
+    background: #fefefe !important;
 }
 .stTextInput > div > div > input:focus,
 .stTextArea > div > div > textarea:focus,
 .stSelectbox > div > div > div:focus {
-    border-color: #2d5a87 !important;
-    box-shadow: 0 0 0 3px rgba(45, 90, 135, 0.1) !important;
+    border-color: #2d6cb8 !important;
+    box-shadow: 0 0 0 4px rgba(45, 108, 184, 0.1) !important;
+    background: #ffffff !important;
 }
 
 /* ===== 标签页样式优化 ===== */
 .stTabs [data-baseweb="tab-list"] {
     gap: 0.5rem;
     background: #f1f5f9;
-    padding: 0.5rem;
-    border-radius: 12px;
+    padding: 0.6rem;
+    border-radius: 16px;
     margin-bottom: 1.5rem;
+    border: 1px solid #e2e8f0;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 .stTabs [data-baseweb="tab"] {
     height: 2.8rem;
-    border-radius: 8px !important;
-    padding: 0 1.5rem !important;
-    font-weight: 500 !important;
+    border-radius: 12px !important;
+    padding: 0 1.75rem !important;
+    font-weight: 600 !important;
     color: #64748b !important;
     transition: all 0.3s ease !important;
 }
 .stTabs [data-baseweb="tab"]:hover {
-    color: #2d5a87 !important;
-    background: rgba(45, 90, 135, 0.05);
+    color: #1e4d7b !important;
+    background: rgba(45, 108, 184, 0.08);
 }
 .stTabs [aria-selected="true"] {
-    background: linear-gradient(135deg, #2d5a87 0%, #3b7ab8 100%) !important;
+    background: linear-gradient(135deg, #1e4d7b 0%, #2d6cb8 100%) !important;
     color: white !important;
-    font-weight: 600 !important;
-    box-shadow: 0 2px 8px rgba(45, 90, 135, 0.25);
+    font-weight: 700 !important;
+    box-shadow: 0 4px 12px rgba(30, 77, 123, 0.3);
 }
 
 /* ===== 表格样式优化 ===== */
 .stDataFrame {
-    border-radius: 10px;
+    border-radius: 16px;
     overflow: hidden;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+    border: 1px solid #e2e8f0;
 }
 .dataframe {
     font-size: 13px;
 }
 .dataframe th {
-    background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%) !important;
+    background: linear-gradient(135deg, #1e4d7b 0%, #2d6cb8 100%) !important;
     color: white !important;
     font-weight: 600 !important;
-    padding: 0.75rem !important;
+    padding: 0.85rem 1rem !important;
 }
 .dataframe td {
-    padding: 0.6rem 0.75rem !important;
+    padding: 0.7rem 1rem !important;
 }
 .dataframe tr:nth-child(even) {
     background: #f8fafc;
@@ -337,69 +354,79 @@ footer {visibility: hidden;}
 
 /* ===== 指标卡片样式 ===== */
 .metric-card {
-    background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-    border-radius: 10px;
-    padding: 1rem 1.25rem;
-    border: 1px solid #e5e7eb;
+    background: linear-gradient(135deg, #ffffff 0%, #f5f9ff 100%);
+    border-radius: 16px;
+    padding: 1.25rem 1.5rem;
+    border: 1.5px solid rgba(45, 108, 184, 0.15);
     text-align: center;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+    box-shadow: 0 4px 12px rgba(45, 108, 184, 0.08);
 }
 .metric-card .metric-value {
-    font-size: 1.8rem;
-    font-weight: 700;
-    color: #2d5a87;
+    font-size: 2rem;
+    font-weight: 800;
+    color: #1e4d7b;
 }
 .metric-card .metric-label {
-    font-size: 0.85rem;
+    font-size: 0.9rem;
     color: #64748b;
-    margin-top: 0.25rem;
+    margin-top: 0.5rem;
+    font-weight: 500;
 }
 
 /* ===== 进度条样式 ===== */
 .stProgress > div > div > div > div {
-    background: linear-gradient(90deg, #2d5a87 0%, #3b7ab8 100%) !important;
-    border-radius: 4px !important;
+    background: linear-gradient(90deg, #1e4d7b 0%, #2d6cb8 50%, #3d8bd6 100%) !important;
+    border-radius: 10px !important;
+    height: 12px !important;
+}
+.stProgress > div > div > div {
+    border-radius: 10px !important;
+    background: #e2e8f0 !important;
+    height: 12px !important;
 }
 
 /* ===== 展开器样式 ===== */
 .streamlit-expanderHeader {
     background: #f8fafc;
-    border-radius: 8px;
-    padding: 0.75rem 1rem !important;
-    font-weight: 500 !important;
-    color: #1e3a5f !important;
-    border: 1px solid #e5e7eb;
+    border-radius: 12px !important;
+    padding: 0.85rem 1.25rem !important;
+    font-weight: 600 !important;
+    color: #1e4d7b !important;
+    border: 1.5px solid #e2e8f0;
     transition: all 0.3s ease;
 }
 .streamlit-expanderHeader:hover {
-    background: #eff6ff;
-    border-color: #2d5a87;
+    background: #f0f7ff;
+    border-color: #2d6cb8;
 }
 .streamlit-expanderContent {
     background: #ffffff;
-    border: 1px solid #e5e7eb;
+    border: 1.5px solid #e2e8f0;
     border-top: none;
-    border-radius: 0 0 8px 8px;
-    padding: 1rem !important;
+    border-radius: 0 0 12px 12px !important;
+    padding: 1.25rem !important;
 }
 
 /* ===== 代码块样式 ===== */
 .stCodeBlock {
-    border-radius: 8px !important;
-    border: 1px solid #e5e7eb !important;
+    border-radius: 12px !important;
+    border: 1.5px solid #e2e8f0 !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04) !important;
 }
 
 /* ===== 文件上传器样式 ===== */
 .stFileUploader {
     background: #ffffff;
-    border-radius: 10px;
-    padding: 1rem;
+    border-radius: 16px;
+    padding: 1.5rem;
     border: 2px dashed #cbd5e1;
     transition: all 0.3s ease;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
 }
 .stFileUploader:hover {
-    border-color: #2d5a87;
-    background: #f8fafc;
+    border-color: #2d6cb8;
+    background: #f5f9ff;
+    box-shadow: 0 4px 12px rgba(45, 108, 184, 0.1);
 }
 
 /* ===== 分割线样式 ===== */
@@ -446,41 +473,47 @@ hr {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0.75rem 1rem;
-    border-radius: 8px;
-    margin-bottom: 0.5rem;
-    background: #f8fafc;
-    border: 1px solid #e5e7eb;
+    padding: 0.85rem 1.25rem;
+    border-radius: 12px;
+    margin-bottom: 0.6rem;
+    background: linear-gradient(135deg, #fefefe 0%, #f5f7fa 100%);
+    border: 1.5px solid #e2e8f0;
     transition: all 0.3s ease;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03);
 }
 .rank-card:hover {
-    background: #eff6ff;
-    border-color: #2d5a87;
-    transform: translateX(4px);
+    background: linear-gradient(135deg, #f5f9ff 0%, #e8f0fe 100%);
+    border-color: #2d6cb8;
+    transform: translateX(6px);
+    box-shadow: 0 4px 12px rgba(45, 108, 184, 0.12);
 }
 .rank-card .rank-num {
-    width: 28px;
-    height: 28px;
+    width: 32px;
+    height: 32px;
     border-radius: 50%;
-    background: #e5e7eb;
+    background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%);
     color: #64748b;
     display: flex;
     align-items: center;
     justify-content: center;
     font-weight: 700;
-    font-size: 0.85rem;
+    font-size: 0.9rem;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
 }
 .rank-card.top-1 .rank-num {
     background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
     color: white;
+    box-shadow: 0 3px 8px rgba(251, 191, 36, 0.4);
 }
 .rank-card.top-2 .rank-num {
     background: linear-gradient(135deg, #9ca3af 0%, #6b7280 100%);
     color: white;
+    box-shadow: 0 3px 8px rgba(156, 163, 175, 0.4);
 }
 .rank-card.top-3 .rank-num {
     background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
     color: white;
+    box-shadow: 0 3px 8px rgba(217, 119, 6, 0.4);
 }
 
 /* ===== 响应式调整 ===== */
@@ -1539,7 +1572,7 @@ def process_and_style_excel(df, selected_model_info, target_col_name, metric_pla
 
         start_row = last_progress.get("current_row", 0)
 
-        st.info(f"📌 检测到上次未完成的任务，从第 {start_row+1} 行继续处理")
+        st.info(f"检测到上次未完成的任务，从第 {start_row+1} 行继续处理")
 
     
 
@@ -1669,7 +1702,7 @@ def process_and_style_excel(df, selected_model_info, target_col_name, metric_pla
 
                 with backup_info_placeholder:
 
-                    st.info(f"💾 已自动保存第 {index+1} 条记录。如遇中断，下次将从第 {index+2} 行继续")
+                    st.info(f"已自动保存第 {index+1} 条记录。如遇中断，下次将从第 {index+2} 行继续")
 
                 progress_bar.progress((index + 1) / total)
 
@@ -1689,7 +1722,7 @@ def process_and_style_excel(df, selected_model_info, target_col_name, metric_pla
 
     except Exception as e:
 
-        st.error(f"⚠️ 批量处理意外中断: {e}")
+        st.error(f"批量处理意外中断: {e}")
 
         logger.error(f"批量处理中断: {e}")
 
@@ -1763,13 +1796,13 @@ def main():
     # ===== 顶部标题高亮卡片 =====
     st.markdown("""
     <div class="title-header-card">
-        <h1>📰 基于大语言模型的汉语词类隶属度检测划类平台</h1>
+        <h1>基于大语言模型的汉语词类隶属度检测划类平台</h1>
         <div class="subtitle">Chinese Membership Detection and Classification Platform Based on Large Language Models (LLMs)</div>
         <div class="badges">
-            <span class="badge">🤖 多模型支持</span>
-            <span class="badge">📊 隶属度分析</span>
-            <span class="badge">📈 可视化展示</span>
-            <span class="badge">📥 批量处理</span>
+            <span class="badge">多模型支持</span>
+            <span class="badge">隶属度分析</span>
+            <span class="badge">可视化展示</span>
+            <span class="badge">批量处理</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -1782,11 +1815,11 @@ def main():
         with col1:
             # 模型设置高亮容器
             st.markdown('<div class="model-settings-card">', unsafe_allow_html=True)
-            st.markdown('<div class="section-title"><span class="icon">⚙️</span> 模型设置（LLM）</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-title"><span class="icon-dot"></span> 模型设置（LLM）</div>', unsafe_allow_html=True)
             
             if not AVAILABLE_MODEL_OPTIONS:
                 st.markdown('<div class="error-highlight">', unsafe_allow_html=True)
-                st.error("❌ 找不到可用的 API Key！请设置以下任意一个环境变量来启用模型:")
+                st.error("找不到可用的 API Key！请设置以下任意一个环境变量来启用模型:")
                 for name, info in MODEL_OPTIONS.items():
                     st.code(f"export {info['env_var']}='你的API Key'", language="bash")
                 st.markdown('</div>', unsafe_allow_html=True)
@@ -1813,7 +1846,7 @@ def main():
         with col2:
             # 连接测试高亮容器
             st.markdown('<div class="connection-card">', unsafe_allow_html=True)
-            st.markdown('<div class="section-title" style="justify-content: center;"><span class="icon">🔗</span> 连接测试</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-title" style="justify-content: center;"><span class="icon-dot"></span> 连接测试</div>', unsafe_allow_html=True)
             st.write("")
             if not selected_model_info["api_key"]:
                 st.button("测试模型链接 (不可用)", type="secondary", disabled=True)
@@ -1828,24 +1861,24 @@ def main():
                             max_tokens=10
                         )
                     if ok:
-                        st.success("✅ 成功！")
+                        st.success("成功！")
                     else:
-                        st.error(f"❌ 失败: {err_msg}")
+                        st.error(f"失败: {err_msg}")
             st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("---")
 
     # ===== 分页 =====
-    tab1, tab2 = st.tabs(["🔍 单个词语详细分析", "📊 Excel 批量处理"])
+    tab1, tab2 = st.tabs(["单个词语详细分析", "Excel 批量处理"])
 
     # ===== 单个词语分析 =====
     with tab1:
         # 输入区卡片
         st.markdown('<div class="module-card">', unsafe_allow_html=True)
-        st.markdown('<div class="section-title"><span class="icon">📝</span> 词语输入</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title"><span class="icon-dot"></span> 词语输入</div>', unsafe_allow_html=True)
         word = st.text_input("请输入要分析的汉语词语", placeholder="例如：苹果、跑、美丽...", key="word_input")
         analyze_button = st.button(
-            "🚀 开始分析", 
+            "开始分析", 
             type="primary",
             disabled=not (selected_model_info["api_key"] and word)
         )
@@ -1882,7 +1915,7 @@ def main():
                 st.markdown(f"""
                 <div class="result-success-card">
                     <div style="font-size: 1.1rem; font-weight: 600; color: #065f46;">
-                        ✅ 分析完成
+                        分析完成
                     </div>
                     <div style="margin-top: 0.5rem; font-size: 1rem; color: #065f46;">
                         词语「<strong>{word}</strong>」最可能的词类是 
@@ -1897,17 +1930,16 @@ def main():
                 with col_results_1:
                     # 隶属度排名卡片
                     st.markdown('<div class="module-card">', unsafe_allow_html=True)
-                    st.markdown('<div class="section-title"><span class="icon">🏆</span> 词类隶属度排名</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title"><span class="icon-dot"></span> 词类隶属度排名</div>', unsafe_allow_html=True)
                     top10 = get_top_10_positions(membership)
                     
                     # 自定义排名卡片展示
                     for i, (pos, score) in enumerate(top10):
                         rank_class = f"top-{i+1}" if i < 3 else ""
-                        medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"{i+1}"
                         st.markdown(f"""
                         <div class="rank-card {rank_class}">
                             <div style="display: flex; align-items: center; gap: 0.75rem;">
-                                <div class="rank-num">{medal if i < 3 else i+1}</div>
+                                <div class="rank-num">{i+1}</div>
                                 <span style="font-weight: 600; color: #1e3a5f;">{pos}</span>
                             </div>
                             <span style="font-weight: 700; color: #2d5a87; font-size: 1.1rem;">{score:.4f}</span>
@@ -1917,14 +1949,14 @@ def main():
                     
                     # 雷达图卡片
                     st.markdown('<div class="module-card">', unsafe_allow_html=True)
-                    st.markdown('<div class="section-title"><span class="icon">📊</span> 词类隶属度雷达图</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title"><span class="icon-dot"></span> 词类隶属度雷达图</div>', unsafe_allow_html=True)
                     plot_radar_chart_streamlit(dict(top10), f"「{word}」的词类隶属度分布")
                     st.markdown('</div>', unsafe_allow_html=True)
 
                 with col_results_2:
                     # 详细得分卡片
                     st.markdown('<div class="module-card">', unsafe_allow_html=True)
-                    st.markdown('<div class="section-title"><span class="icon">📋</span> 各词类详细得分</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title"><span class="icon-dot"></span> 各词类详细得分</div>', unsafe_allow_html=True)
                     pos_total_scores = {pos: sum(scores_all[pos].values()) for pos in scores_all.keys()}
                     sorted_pos_names = sorted(pos_total_scores.keys(), key=lambda pos: pos_total_scores[pos], reverse=True)
                     
@@ -1961,7 +1993,7 @@ def main():
                     
                     # 原始响应卡片
                     st.markdown('<div class="module-card">', unsafe_allow_html=True)
-                    st.markdown('<div class="section-title"><span class="icon">💬</span> 模型原始响应</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title"><span class="icon-dot"></span> 模型原始响应</div>', unsafe_allow_html=True)
                     with st.expander("点击展开查看原始响应", expanded=False):
                         st.code(raw_text, language="text")
                     st.markdown('</div>', unsafe_allow_html=True)
@@ -1970,10 +2002,10 @@ def main():
     with tab2:
         # 批量任务监控标题
         st.markdown('<div class="module-card">', unsafe_allow_html=True)
-        st.markdown('<div class="section-title"><span class="icon">📡</span> 批量任务实时监控</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title"><span class="icon-dot"></span> 批量任务实时监控</div>', unsafe_allow_html=True)
         
         # 控制面板
-        st.markdown("#### 🎛️ 控制面板")
+        st.markdown("#### 控制面板")
         ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2, 1, 1])
         
         with ctrl_col1:
@@ -1991,7 +2023,7 @@ def main():
             if os.path.exists(BACKUP_FILE):
                 with open(BACKUP_FILE, "rb") as f:
                     st.download_button(
-                        label="📥 下载历史文件(CSV)",
+                        label="下载历史文件(CSV)",
                         data=f,
                         file_name=f"batch_results_{time.strftime('%Y%m%d_%H%M%S')}.csv",
                         mime="text/csv",
@@ -2000,7 +2032,7 @@ def main():
             else:
                 st.button("下载历史文件", disabled=True, use_container_width=True)
         with ctrl_col3:
-            if st.button("🗑️ 清空本地记录", use_container_width=True, type="secondary"):
+            if st.button("清空本地记录", use_container_width=True, type="secondary"):
                 if os.path.exists(BACKUP_FILE):
                     try:
                         os.remove(BACKUP_FILE)
@@ -2011,17 +2043,17 @@ def main():
                     except Exception as e:
                         st.error(f"清空记录失败: {e}")
                 else:
-                    st.info("📄 暂无本地记录可清空")
+                    st.info("暂无本地记录可清空")
         
         st.divider()
         
         # 运行状态
-        st.markdown("#### ⏱️ 运行状态")
+        st.markdown("#### 运行状态")
         progress_bar = st.progress(0)
         status_info = st.empty()
         
         # 实时结果预览
-        st.markdown("#### 📋 实时结果预览")
+        st.markdown("#### 实时结果预览")
         table_placeholder = st.empty()
         if os.path.exists(BACKUP_FILE):
             try:
@@ -2038,7 +2070,7 @@ def main():
         st.divider()
         
         # 上传任务
-        st.markdown("#### 📤 上传新任务")
+        st.markdown("#### 上传新任务")
         uploaded_file = st.file_uploader("选择 Excel 文件", type=["xlsx", "xls"])
         
         if uploaded_file:
@@ -2049,14 +2081,14 @@ def main():
                 if target_col:
                     st.markdown(f"""
                     <div class="info-highlight">
-                        <div style="font-weight: 600; color: #1e40af;">📊 文件信息</div>
+                        <div style="font-weight: 600; color: #1e40af;">文件信息</div>
                         <div style="margin-top: 0.5rem;">
                             识别到目标列: <code>{target_col}</code> | 待分析总数: <strong>{len(df_input)}</strong> 条
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    if st.button("🚀 开始处理", type="primary", use_container_width=True):
+                    if st.button("开始处理", type="primary", use_container_width=True):
                         if not selected_model_info["api_key"]:
                             st.error("请先在上方配置有效的 API Key")
                         else:
@@ -2151,7 +2183,7 @@ def main():
                                     time.sleep(0.5)  # 限流
                                 
                                 progress_bar.progress(100)
-                                status_info.success(f"🎉 批量处理完成！总处理量: {total_rows} 条，已保存到 {BACKUP_FILE}")
+                                status_info.success(f"批量处理完成！总处理量: {total_rows} 条，已保存到 {BACKUP_FILE}")
                                 clear_process_progress()  # 清除进度
                                 st.rerun()
                             except Exception as batch_err:
@@ -2159,7 +2191,7 @@ def main():
                                 status_info.error(f" 批量处理中断: {batch_err}，下次可从断点继续")
                 else:
                     st.markdown('<div class="error-highlight">', unsafe_allow_html=True)
-                    st.error("❌ 未识别到包含'词'或'word'的列，请检查Excel文件结构")
+                    st.error("未识别到包含'词'或'word'的列，请检查Excel文件结构")
                     st.markdown('</div>', unsafe_allow_html=True)
             except Exception as e:
                 st.error(f"读取Excel文件失败: {e}")
@@ -2182,7 +2214,7 @@ st.markdown("---")
 st.markdown(
     """
     <div class="footer-text">
-        © 2025 汉语词类隶属度检测划类平台 |  Ryan
+        © 2025 汉语词类隶属度检测划类平台 | Ryan
     </div>
     """,
     unsafe_allow_html=True
