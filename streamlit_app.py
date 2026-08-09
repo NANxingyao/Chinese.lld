@@ -1814,11 +1814,9 @@ def main():
         
         with col1:
             # 模型设置高亮容器
-            st.markdown('<div class="model-settings-card">', unsafe_allow_html=True)
             st.markdown('<div class="section-title"><span class="icon-dot"></span> 模型设置（LLM）</div>', unsafe_allow_html=True)
             
             if not AVAILABLE_MODEL_OPTIONS:
-                st.markdown('<div class="error-highlight">', unsafe_allow_html=True)
                 st.error("找不到可用的 API Key！请设置以下任意一个环境变量来启用模型:")
                 for name, info in MODEL_OPTIONS.items():
                     st.code(f"export {info['env_var']}='你的API Key'", language="bash")
@@ -1845,7 +1843,6 @@ def main():
                 
         with col2:
             # 连接测试高亮容器
-            st.markdown('<div class="connection-card">', unsafe_allow_html=True)
             st.markdown('<div class="section-title" style="justify-content: center;"><span class="icon-dot"></span> 连接测试</div>', unsafe_allow_html=True)
             st.write("")
             if not selected_model_info["api_key"]:
