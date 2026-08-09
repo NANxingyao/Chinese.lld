@@ -2204,7 +2204,8 @@ st.markdown("---")
 st.markdown(
     """
     <div class="footer-text">
-        © 2025 汉语词类隶属度检测划类平台 | Ryan        ✉通讯方式：shenrui26@gmail.com
+        © 2025 汉语词类隶属度检测划类平台 | Ryan        
+        ✉通讯方式：shenrui26@gmail.com
     </div>
     """,
     unsafe_allow_html=True
