@@ -1880,7 +1880,6 @@ def main():
         )
         
         with st.expander("ℹ️ 使用说明", expanded=False):
-            st.markdown('<div class="info-highlight">', unsafe_allow_html=True)
             st.info("""
             1. **配置 API Key**: 请在运行程序前设置必要的环境变量。
             2. **词语输入**：在上方的"词语输入"框中输入一个汉语词。
@@ -1997,7 +1996,6 @@ def main():
     # ===== 批量处理 =====
     with tab2:
         # 批量任务监控标题
-        st.markdown('<div class="module-card">', unsafe_allow_html=True)
         st.markdown('<div class="section-title"><span class="icon-dot"></span> 批量任务实时监控</div>', unsafe_allow_html=True)
         
         # 控制面板
