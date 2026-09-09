@@ -397,10 +397,12 @@ MODEL_CONFIGS = {
         "payload": lambda model, messages, **kw: {
             "model": model,
             "messages": messages,
-            "max_tokens": kw.get("max_tokens", 4096),
-            # Kimi 当前该模型要求 temperature 固定为 1。
-            # 不使用调用层传入的 0.0，避免 400 invalid temperature。
-            "temperature": 1,
+            # K2.6 默认会进行深度思考；本项目只需要最终分类结果与解释，
+            # 因此关闭思考，避免 max_tokens 被 reasoning_content 消耗殆尽。
+            "thinking": {"type": "disabled"},
+            # K2.6 非思考模式使用 temperature=0.6。
+            "temperature": 0.6,
+            "max_tokens": kw.get("max_tokens", 8192),
             "stream": False,
         },
     },
@@ -607,134 +609,122 @@ def clear_process_progress(progress_file):
 # LLM调用与词类判定主函数
 # ===============================
 def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, temperature=0.0, max_retries=3):
-    """统一调用 LLM API。Kimi 使用非流式请求，先保证接口链路稳定。"""
+    """统一调用 LLM API。
+    保持原有四个模型的流式调用逻辑，仅对 Kimi K2.6 单独使用非流式模式。
+    """
     if not _api_key:
         return False, {"error": "API Key 为空"}, "API Key 未提供"
     if _provider not in MODEL_CONFIGS:
         return False, {"error": f"未知提供商 {_provider}"}, f"未知提供商 {_provider}"
 
     cfg = MODEL_CONFIGS[_provider]
-    base_url = cfg["base_url"].rstrip("/")
-    endpoint = cfg["endpoint"].lstrip("/")
+    base_url = cfg['base_url'].rstrip('/')
+    endpoint = cfg['endpoint'].lstrip('/')
     url = f"{base_url}/{endpoint}"
 
     headers = cfg["headers"](_api_key)
-    payload = cfg["payload"](
-        _model, messages, max_tokens=max_tokens, temperature=temperature
-    )
-
-    logger.info("调用模型 provider=%s model=%s url=%s", _provider, _model, url)
-
+    payload = cfg["payload"](_model, messages, max_tokens=max_tokens, temperature=temperature)
     streaming_placeholder = st.empty()
     error_msg = "未知错误"
 
+    # 只有 Kimi K2.6 走非流式；其他模型严格恢复原来的 stream=True 逻辑
+    is_kimi = _provider == "moonshot"
+
     for attempt in range(max_retries):
         try:
-            response = requests.post(
+            request_payload = dict(payload)
+            request_payload["stream"] = False if is_kimi else request_payload.get("stream", True)
+
+            with requests.post(
                 url,
                 headers=headers,
-                json=payload,
-                timeout=(15, 120),
-            )
+                json=request_payload,
+                stream=not is_kimi,
+                timeout=120
+            ) as response:
+                if response.status_code != 200:
+                    status_code = response.status_code
+                    try:
+                        detail = response.json()
+                    except Exception:
+                        detail = response.text
 
-            status_code = response.status_code
-            content_type = response.headers.get("Content-Type", "")
+                    if status_code == 404:
+                        error_msg = f"路径错误 (404)。请确保请求地址正确：{url}"
+                    elif status_code == 401:
+                        error_msg = "鉴权失败 (401)。请检查 API Key 权限。"
+                    elif status_code == 403:
+                        error_msg = f"没有 API 权限 (403)：{detail}"
+                    elif status_code == 400:
+                        error_msg = f"请求参数错误 (400)：{detail}"
+                    else:
+                        error_msg = f"API 错误: {status_code} - {detail}"
 
-            if status_code != 200:
-                try:
-                    detail = response.json()
-                except Exception:
-                    detail = response.text[:2000]
+                    if status_code in [400, 401, 403, 404]:
+                        break
+                    response.raise_for_status()
 
-                logger.error(
-                    "LLM API error provider=%s model=%s status=%s url=%s detail=%s",
-                    _provider, _model, status_code, url, detail
-                )
+                # Kimi：非流式 JSON 响应
+                if is_kimi:
+                    try:
+                        body = response.json()
+                    except Exception:
+                        body = None
 
-                if status_code == 404:
+                    if isinstance(body, dict):
+                        text = extract_text_from_response(body)
+                        if text:
+                            streaming_placeholder.empty()
+                            return True, body, ""
+
                     error_msg = (
-                        f"接口返回 404。实际请求地址：{url}\n"
-                        f"服务端原始返回：{detail}"
+                        f"接口返回 200，但没有解析到文本内容。\n"
+                        f"Content-Type: {response.headers.get('Content-Type', '')}\n"
+                        f"原始响应：{response.text[:2000]}"
                     )
-                elif status_code == 401:
-                    error_msg = (
-                        f"API Key 鉴权失败 (401)。实际请求地址：{url}\n"
-                        f"服务端原始返回：{detail}"
-                    )
-                elif status_code == 403:
-                    error_msg = f"没有 API 权限 (403)：{detail}"
-                elif status_code == 400:
-                    error_msg = f"请求参数错误 (400)：{detail}"
-                else:
-                    error_msg = f"API 错误 {status_code}：{detail}"
-
-                # 这些错误重试没有意义
-                if status_code in (400, 401, 403, 404):
                     break
 
-                time.sleep(2 ** attempt)
-                continue
-
-            # 目前 Kimi 这里使用 stream=False，因此优先按普通 JSON 处理。
-            try:
-                body = response.json()
-            except Exception:
-                body = None
-
-            if isinstance(body, dict):
-                text = extract_text_from_response(body)
-                if text:
-                    streaming_placeholder.empty()
-                    return True, body, ""
-
-            # 兼容极少数代理把结果包装成 SSE 的情况
-            full_content = ""
-            if response.text:
-                for line in response.text.splitlines():
-                    line = line.strip()
-                    if not line or line == "data: [DONE]":
+                # 其他模型：恢复原来的 SSE 流式解析
+                full_content = ""
+                for line in response.iter_lines():
+                    if not line:
                         continue
-                    json_str = line[5:].strip() if line.startswith("data:") else line
+                    line_text = line.decode('utf-8').strip()
+
+                    json_str = line_text[5:].strip() if line_text.startswith("data:") else line_text
+                    if json_str == "[DONE]":
+                        break
+
                     try:
                         chunk = json.loads(json_str)
-                    except Exception:
+                        delta_text = ""
+                        if "choices" in chunk and len(chunk["choices"]) > 0:
+                            choice = chunk["choices"][0]
+                            if "delta" in choice:
+                                delta_text = choice["delta"].get("content", "") or ""
+                            elif "message" in choice:
+                                delta_text = choice["message"].get("content", "") or ""
+                        elif "output" in chunk:
+                            output = chunk["output"]
+                            if isinstance(output, dict) and "choices" in output:
+                                delta_text = output["choices"][0].get("message", {}).get("content", "") or ""
+                            elif isinstance(output, dict) and "text" in output:
+                                delta_text = output["text"] or ""
+
+                        if delta_text:
+                            full_content += delta_text
+                    except json.JSONDecodeError:
                         continue
-                    if isinstance(chunk, dict) and chunk.get("choices"):
-                        choice = chunk["choices"][0]
-                        if isinstance(choice, dict):
-                            delta = choice.get("delta", {})
-                            message = choice.get("message", {})
-                            if isinstance(delta, dict):
-                                full_content += delta.get("content", "") or ""
-                            if not full_content and isinstance(message, dict):
-                                full_content += message.get("content", "") or ""
 
-            if full_content:
-                streaming_placeholder.empty()
-                return True, {"choices": [{"message": {"content": full_content}}]}, ""
+                if full_content:
+                    streaming_placeholder.empty()
+                    return True, {"choices": [{"message": {"content": full_content}}]}, ""
+                else:
+                    error_msg = "模型未返回有效文本内容。"
 
-            error_msg = (
-                f"接口返回 200，但没有解析到文本内容。\n"
-                f"Content-Type: {content_type}\n"
-                f"原始响应：{response.text[:2000]}"
-            )
-            break
-
-        except requests.exceptions.Timeout as e:
-            error_msg = f"请求超时（第 {attempt + 1} 次）：{e}"
-            logger.error(error_msg)
-            if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
-        except requests.exceptions.ConnectionError as e:
-            error_msg = f"网络连接失败（第 {attempt + 1} 次）：{e}"
-            logger.error(error_msg)
-            if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
         except Exception as e:
-            error_msg = f"请求异常（第 {attempt + 1} 次）：{e}"
-            logger.exception(error_msg)
-            if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
+            error_msg = f"请求异常（第{attempt+1}次尝试）: {str(e)}"
+            time.sleep(2 ** attempt)
 
     streaming_placeholder.empty()
     return False, {"error": error_msg}, error_msg
