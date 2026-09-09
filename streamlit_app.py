@@ -398,7 +398,9 @@ MODEL_CONFIGS = {
             "model": model,
             "messages": messages,
             "max_tokens": kw.get("max_tokens", 4096),
-            "temperature": kw.get("temperature", 0.0),
+            # Kimi 当前该模型要求 temperature 固定为 1。
+            # 不使用调用层传入的 0.0，避免 400 invalid temperature。
+            "temperature": 1,
             "stream": False,
         },
     },
