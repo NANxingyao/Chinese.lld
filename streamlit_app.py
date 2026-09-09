@@ -310,7 +310,6 @@ BASE_DIR = Path(__file__).parent
 
 def get_project_files(project_code: str) -> Tuple[Path, Path]:
     """根据实验批次码动态生成隔离的数据文件路径"""
-    # 过滤特殊字符，防止路径错误
     safe_code = re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', project_code)
     if not safe_code:
         safe_code = "default_task"
@@ -355,68 +354,58 @@ RULE_SETS = {
 }
 
 # ===============================
-# 模型配置
+# 模型配置 (支持 API 中转与路径修复)
 # ===============================
 MODEL_CONFIGS = {
     "deepseek": {
-        "base_url": "https://api.deepseek.com/v1",
+        "base_url": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
         "endpoint": "/chat/completions",
         "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         "payload": lambda model, messages, **kw: {
             "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), 
-            "temperature": kw.get("temperature", 0.0), 
-            "stream": True, 
+            "temperature": kw.get("temperature", 0.0), "stream": True, 
         },
     },
     "openai": {
-        "base_url": "https://api.openai.com/v1",
+        "base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
         "endpoint": "/chat/completions",
         "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         "payload": lambda model, messages, **kw: {
             "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), 
-            "temperature": kw.get("temperature", 0.0), 
-            "stream": True,
+            "temperature": kw.get("temperature", 0.0), "stream": True,
         },
     },
     "gemini": {
-        "base_url": "https://generativelanguage.googleapis.com/v1beta",
-        "endpoint": "/chat/completions",
-        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        "payload": lambda model, messages, **kw: {
-            "model": model, 
-            "messages": messages, 
-            "max_tokens": kw.get("max_tokens", 4096), 
-            "temperature": kw.get("temperature", 0.0), 
-            "stream": True,
-        },
-    },
-    "moonshot": {
-        "base_url": "https://api.moonshot.cn/v1",
+        "base_url": os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"),
         "endpoint": "/chat/completions",
         "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         "payload": lambda model, messages, **kw: {
             "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), 
-            "temperature": kw.get("temperature", 0.0), 
-            "stream": True,
+            "temperature": kw.get("temperature", 0.0), "stream": True,
+        },
+    },
+    "moonshot": {
+        "base_url": os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn"),
+        "endpoint": "/v1/chat/completions",
+        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        "payload": lambda model, messages, **kw: {
+            "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), 
+            "temperature": kw.get("temperature", 0.0), "stream": True,
         },
     },
     "qwen": {
-        "base_url": "https://dashscope.aliyuncs.com/api/v1",
+        "base_url": os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/api/v1"),
         "endpoint": "/services/aigc/text-generation/generation",
         "headers": lambda key: {
-            "Authorization": f"Bearer {key}", 
-            "Content-Type": "application/json",
-            "X-DashScope-SSE": "enable",
-            "Accept": "text/event-stream"
+            "Authorization": f"Bearer {key}", "Content-Type": "application/json",
+            "X-DashScope-SSE": "enable", "Accept": "text/event-stream"
         },
         "payload": lambda model, messages, **kw: {
-            "model": model, 
-            "input": {"messages": messages}, 
+            "model": model, "input": {"messages": messages}, 
             "parameters": {
                 "max_tokens": kw.get("max_tokens", 4096), 
                 "temperature": kw.get("temperature", 0.0),
-                "result_format": "message",
-                "incremental_output": True 
+                "result_format": "message", "incremental_output": True 
             },
         },
     },
@@ -424,49 +413,33 @@ MODEL_CONFIGS = {
 
 MODEL_OPTIONS = {
     "DeepSeek Chat": {
-        "provider": "deepseek", 
-        "model": "deepseek-chat", 
-        "api_key": os.getenv("DEEPSEEK_API_KEY"),
-        "env_var": "DEEPSEEK_API_KEY"
+        "provider": "deepseek", "model": "deepseek-chat", 
+        "api_key": os.getenv("DEEPSEEK_API_KEY"), "env_var": "DEEPSEEK_API_KEY"
     },
     "OpenAI GPT-4o（推荐）": {
-        "provider": "openai", 
-        "model": "gpt-4o-mini", 
-        "api_key": os.getenv("OPENAI_API_KEY"),
-        "env_var": "OPENAI_API_KEY"
+        "provider": "openai", "model": "gpt-4o-mini", 
+        "api_key": os.getenv("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"
     },
     "Google Gemini 1.5 Pro": {
-        "provider": "gemini", 
-        "model": "models/gemini-1.5-pro", 
-        "api_key": os.getenv("GEMINI_API_KEY"),
-        "env_var": "GEMINI_API_KEY"
+        "provider": "gemini", "model": "models/gemini-1.5-pro", 
+        "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
     },
     "Google Gemini 1.5 Flash": {
-        "provider": "gemini", 
-        "model": "models/gemini-1.5-flash", 
-        "api_key": os.getenv("GEMINI_API_KEY"),
-        "env_var": "GEMINI_API_KEY"
+        "provider": "gemini", "model": "models/gemini-1.5-flash", 
+        "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
     },
     "Moonshot（Kimi）": {
-        "provider": "moonshot", 
-        "model": "moonshot-v1-32k", 
-        "api_key": os.getenv("MOONSHOT_API_KEY"),
-        "env_var": "MOONSHOT_API_KEY"
+        "provider": "moonshot", "model": "moonshot-v1-32k", 
+        "api_key": os.getenv("MOONSHOT_API_KEY"), "env_var": "MOONSHOT_API_KEY"
     },
     "Qwen（通义千问）": {
-        "provider": "qwen", 
-        "model": "qwen-max", 
-        "api_key": os.getenv("QWEN_API_KEY"),
-        "env_var": "QWEN_API_KEY"
+        "provider": "qwen", "model": "qwen-max", 
+        "api_key": os.getenv("QWEN_API_KEY"), "env_var": "QWEN_API_KEY"
     },
 }
 
-AVAILABLE_MODEL_OPTIONS = {
-    name: info for name, info in MODEL_OPTIONS.items() if info["api_key"]
-}
-
-if not AVAILABLE_MODEL_OPTIONS:
-    AVAILABLE_MODEL_OPTIONS = MODEL_OPTIONS
+AVAILABLE_MODEL_OPTIONS = {name: info for name, info in MODEL_OPTIONS.items() if info["api_key"]}
+if not AVAILABLE_MODEL_OPTIONS: AVAILABLE_MODEL_OPTIONS = MODEL_OPTIONS
 
 # ===============================
 # 增强型工具函数
@@ -486,22 +459,46 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
         return json.dumps(resp_json, ensure_ascii=False)
 
 def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
+    if not text: return None, text
+    
+    code_block_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if code_block_match:
+        try: return json.loads(code_block_match.group(1)), code_block_match.group(1)
+        except json.JSONDecodeError: pass
+
+    last_bracket = text.rfind('}')
+    if last_bracket != -1:
+        first_bracket = text.rfind('{', 0, last_bracket)
+        while first_bracket != -1:
+            candidate = text[first_bracket:last_bracket+1]
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict) and ("scores" in parsed or "predicted_pos" in parsed):
+                    return parsed, candidate
+            except json.JSONDecodeError:
+                pass
+            first_bracket = text.rfind('{', 0, first_bracket)
+
     match = re.search(r"(\{.*\})", text.strip(), re.DOTALL)
-    if not match: return None, text
-    json_text = match.group(1).strip()
-    try:
-        parsed_json = json.loads(json_text)
-        return parsed_json, json_text
-    except json.JSONDecodeError as e:
-        logger.error(f"解析JSON失败: {e}, 原始文本: {json_text[:100]}")
-        return None, json_text
+    if match:
+        try: return json.loads(match.group(1)), match.group(1)
+        except json.JSONDecodeError: pass
+
+    return None, text
 
 def normalize_key(k: str, pos_rules: list) -> str:
     if not isinstance(k, str): return None
-    k_norm = re.sub(r'[\s_]+', '', k).upper()
+    k_clean = re.sub(r'[\s_]+', '', k).upper()
     for r in pos_rules:
-        r_norm = re.sub(r'[\s_]+', '', r["name"]).upper()
-        if r_norm == k_norm: return r["name"]
+        r_clean = re.sub(r'[\s_]+', '', r["name"]).upper()
+        if r_clean == k_clean: return r["name"]
+    for r in pos_rules:
+        r_clean = re.sub(r'[\s_]+', '', r["name"]).upper()
+        code_match = re.match(r'^(NV\d+|N\d+|V\d+)', r_clean)
+        if code_match:
+            code = code_match.group(1)
+            if k_clean == code or k_clean.startswith(code) or code in k_clean:
+                return r["name"]
     return None
 
 def map_to_allowed_score(rule: dict, raw_val) -> int:
@@ -564,7 +561,7 @@ def safe_write_csv(df, file_path, mode='a', header=False, encoding='utf-8-sig', 
     return False
 
 # ===============================
-# 进度管理（已更新以接收动态进度文件）
+# 进度管理
 # ===============================
 def save_process_progress(file_name, current_row, total_rows, progress_file):
     try:
@@ -784,11 +781,12 @@ def main():
             <span class="badge">可视化展示</span>
             <span class="badge">批量处理</span>
             <span class="badge" style="background: rgba(251, 191, 36, 0.4); border-color: rgba(251, 191, 36, 0.8);">兼类判定支持</span>
+            <span class="badge" style="background: rgba(16, 185, 129, 0.4); border-color: rgba(16, 185, 129, 0.8);">抗断流自动恢复</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # ===== 顶部控制区 (三列布局，新增实验批次码) =====
+    # ===== 顶部控制区 =====
     control_container = st.container()
     with control_container:
         col1, col2, col3 = st.columns([5, 3, 2])
@@ -817,7 +815,6 @@ def main():
             if "project_code" not in st.session_state:
                 st.session_state.project_code = "default_task"
             
-            # 使用 Project Code 进行隔离
             project_code_input = st.text_input(
                 "实验批次码 (Project Code)", 
                 value=st.session_state.project_code, 
@@ -825,7 +822,6 @@ def main():
             )
             st.session_state.project_code = project_code_input
             
-            # 动态获取当前批次对应的存储路径
             BACKUP_FILE, PROGRESS_FILE = get_project_files(st.session_state.project_code)
                 
         with col3:
@@ -1030,98 +1026,120 @@ def main():
                                     st.warning(f"读取已处理记录失败，将重新处理所有数据: {e}")
                             
                             total_rows = len(df_input)
-                            file_name = f"excel_{int(time.time())}"
+                            # 修复点1：将进度标识与批次码和实际文件名绑定，防止点击按钮生成新时间戳导致无法匹配老进度
+                            file_name = f"{st.session_state.project_code}_{uploaded_file.name}"
                             
-                            # 恢复进度加载
                             last_progress = load_process_progress(PROGRESS_FILE)
                             start_row = 0
                             if last_progress and last_progress.get("file_name") == file_name:
                                 start_row = last_progress.get("current_row", 0)
-                                st.info(f"检测到未完成的任务，从第 {start_row+1} 行继续")
+                                st.info(f"检测到未完成的任务，从第 {start_row+1} 行接续处理")
 
-                            try:
-                                for index in range(start_row, total_rows):
-                                    row = df_input.iloc[index]
-                                    word = str(row[target_col]).strip()
-                                    
-                                    # 记录进度点
-                                    save_process_progress(file_name, index, total_rows, PROGRESS_FILE)
-                                    
-                                    if not word:
-                                        status_info.write(f"**跳过空值**: 第 {index+1}/{total_rows} 行")
+                            # ========================================================
+                            # 核心修复点2：新增无限自动重试的守护循环 (Self-Healing Loop)
+                            # ========================================================
+                            max_auto_restarts = 100 # 允许连续自动恢复100次，防止遇到彻底死局时无限死循环
+                            restart_count = 0
+                            is_completed = False
+                            
+                            while not is_completed and restart_count < max_auto_restarts:
+                                try:
+                                    for index in range(start_row, total_rows):
+                                        start_row = index  # 实时记录即将处理的行，一旦崩溃下次直接从这行启动
+                                        
+                                        row = df_input.iloc[index]
+                                        word = str(row[target_col]).strip()
+                                        
+                                        save_process_progress(file_name, index, total_rows, PROGRESS_FILE)
+                                        
+                                        if not word:
+                                            status_info.write(f"**跳过空值**: 第 {index+1}/{total_rows} 行")
+                                            progress_bar.progress((index + 1) / total_rows)
+                                            continue
+                                        
+                                        pct = int((index + 1) / total_rows * 100)
                                         progress_bar.progress((index + 1) / total_rows)
-                                        continue
-                                    
-                                    pct = int((index + 1) / total_rows * 100)
-                                    progress_bar.progress((index + 1) / total_rows)
-                                    
-                                    if word in existing_words:
-                                        status_info.write(f" **跳过已处理**: {word} ({index+1}/{total_rows}) | 进度: {pct}%")
-                                        continue
-                                    
-                                    status_info.write(f" **正在分析**: `{word}` | 进度: {index+1}/{total_rows} ({pct}%)")
-                                    
-                                    max_retries = 3
-                                    success = False
-                                    scores, raw_text, pred_pos, explanation, is_dual_category = {}, "", "处理失败", "无响应", False
-                                    for attempt in range(max_retries):
+                                        
+                                        if word in existing_words:
+                                            status_info.write(f" **跳过已处理**: {word} ({index+1}/{total_rows}) | 进度: {pct}%")
+                                            continue
+                                        
+                                        status_info.write(f" **正在分析**: `{word}` | 进度: {index+1}/{total_rows} ({pct}%)")
+                                        
+                                        max_retries = 3
+                                        success = False
+                                        scores, raw_text, pred_pos, explanation, is_dual_category = {}, "", "处理失败", "无响应", False
+                                        for attempt in range(max_retries):
+                                            try:
+                                                scores, raw_text, pred_pos, explanation, is_dual_category = ask_model_for_pos_and_scores(
+                                                    word=word,
+                                                    provider=selected_model_info["provider"],
+                                                    model=selected_model_info["model"],
+                                                    api_key=selected_model_info["api_key"]
+                                                )
+                                                success = bool(scores)
+                                                if success: break
+                                                time.sleep(2)
+                                            except Exception as e:
+                                                explanation = f"调用异常: {str(e)}"
+                                                logger.error(f"处理词语{word}失败（尝试{attempt+1}）: {e}")
+                                                time.sleep(2)
+                                        
+                                        membership = calculate_membership(scores) if success else {}
+                                        new_row = {
+                                            "序数": index + 1,
+                                            "词语": word,
+                                            "动词": membership.get("动词", 0.0),
+                                            "名词": membership.get("名词", 0.0),
+                                            "名动词": membership.get("名动词", 0.0),
+                                            "差值/距离": round(abs(membership.get("动词", 0.0) - membership.get("名词", 0.0)), 4),
+                                            "预测词类": pred_pos,
+                                            "是否兼类": "是" if is_dual_category else "否",
+                                            "原始响应": raw_text if success else f"错误: {explanation}",
+                                            "时间戳": time.strftime("%Y-%m-%d %H:%M:%S")
+                                        }
+                                        
                                         try:
-                                            scores, raw_text, pred_pos, explanation, is_dual_category = ask_model_for_pos_and_scores(
-                                                word=word,
-                                                provider=selected_model_info["provider"],
-                                                model=selected_model_info["model"],
-                                                api_key=selected_model_info["api_key"]
-                                            )
-                                            success = bool(scores)
-                                            if success: break
-                                            time.sleep(2)
-                                        except Exception as e:
-                                            explanation = f"调用异常: {str(e)}"
-                                            logger.error(f"处理词语{word}失败（尝试{attempt+1}）: {e}")
-                                            time.sleep(2)
+                                            temp_df = pd.DataFrame([new_row])
+                                            header_needed = not os.path.exists(BACKUP_FILE)
+                                            write_success = safe_write_csv(temp_df, BACKUP_FILE, mode='a', header=header_needed)
+                                            if write_success:
+                                                existing_words.add(word)
+                                                latest_count = get_history_count(BACKUP_FILE)
+                                                metric_placeholder.metric("已存数据量", f"{latest_count} 条")
+                                            else:
+                                                st.error(f"保存第 {index+1} 条记录失败（文件写入错误）")
+                                        except Exception as csv_err:
+                                            st.error(f"保存第 {index+1} 条记录失败: {csv_err}")
+                                        
+                                        try:
+                                            updated_df = pd.read_csv(BACKUP_FILE, encoding='utf-8-sig')
+                                            table_placeholder.dataframe(updated_df, use_container_width=True, height=300)
+                                        except Exception as read_err:
+                                            st.warning(f"刷新表格失败: {read_err}")
+                                        
+                                        time.sleep(0.5) 
                                     
-                                    membership = calculate_membership(scores) if success else {}
-                                    new_row = {
-                                        "序数": index + 1,
-                                        "词语": word,
-                                        "动词": membership.get("动词", 0.0),
-                                        "名词": membership.get("名词", 0.0),
-                                        "名动词": membership.get("名动词", 0.0),
-                                        "差值/距离": round(abs(membership.get("动词", 0.0) - membership.get("名词", 0.0)), 4),
-                                        "预测词类": pred_pos,
-                                        "是否兼类": "是" if is_dual_category else "否",
-                                        "原始响应": raw_text if success else f"错误: {explanation}",
-                                        "时间戳": time.strftime("%Y-%m-%d %H:%M:%S")
-                                    }
+                                    # 内部 for 循环顺利跑完全程，标记整个任务已完成
+                                    is_completed = True
                                     
-                                    try:
-                                        temp_df = pd.DataFrame([new_row])
-                                        header_needed = not os.path.exists(BACKUP_FILE)
-                                        write_success = safe_write_csv(temp_df, BACKUP_FILE, mode='a', header=header_needed)
-                                        if write_success:
-                                            existing_words.add(word)
-                                            latest_count = get_history_count(BACKUP_FILE)
-                                            metric_placeholder.metric("已存数据量", f"{latest_count} 条")
-                                        else:
-                                            st.error(f"保存第 {index+1} 条记录失败（文件写入错误）")
-                                    except Exception as csv_err:
-                                        st.error(f"保存第 {index+1} 条记录失败: {csv_err}")
-                                    
-                                    try:
-                                        updated_df = pd.read_csv(BACKUP_FILE, encoding='utf-8-sig')
-                                        table_placeholder.dataframe(updated_df, use_container_width=True, height=300)
-                                    except Exception as read_err:
-                                        st.warning(f"刷新表格失败: {read_err}")
-                                    
-                                    time.sleep(0.5) 
-                                
+                                except Exception as batch_err:
+                                    restart_count += 1
+                                    logger.error(f"主循环意外中断 ({restart_count}/{max_auto_restarts}): {batch_err}")
+                                    status_info.warning(f"⚠️ 遇到网络或系统中断: {batch_err}。系统将在 3 秒后自动重试 (第 {restart_count} 次恢复)...")
+                                    time.sleep(3)
+                                    # 注意：此时因为有外层 while 循环，程序会重新进入 try 块，
+                                    # 并且由于 start_row 的值被保留，它会直接从刚才断掉的那一行精准重启！
+                            
+                            # 循环结束后的收尾工作
+                            if is_completed:
                                 progress_bar.progress(100)
-                                status_info.success(f"实验批次 {st.session_state.project_code} 批量处理完成！已保存到 {BACKUP_FILE.name}")
+                                status_info.success(f"🎉 实验批次 {st.session_state.project_code} 批量处理完成！已保存到 {BACKUP_FILE.name}")
                                 clear_process_progress(PROGRESS_FILE) 
+                                time.sleep(1.5) 
                                 st.rerun()
-                            except Exception as batch_err:
-                                logger.error(f"批量处理主循环中断: {batch_err}")
-                                status_info.error(f" 批量处理中断: {batch_err}，下次可从断点继续")
+                            else:
+                                status_info.error(f"❌ 连续报错次数超出上限（{max_auto_restarts}次），为防止死循环任务已自动暂停。请检查您的网络连接并手动点击开始。")
                 else:
                     st.markdown('<div class="error-highlight">', unsafe_allow_html=True)
                     st.error("未识别到包含'词'或'word'的列，请检查Excel文件结构")
