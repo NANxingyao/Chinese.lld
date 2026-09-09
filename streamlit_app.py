@@ -356,28 +356,6 @@ RULE_SETS = {
 # ===============================
 # 模型配置 (支持 API 中转与路径修复)
 # ===============================
-def get_moonshot_base_url() -> str:
-    """
-    获取并规范化 Kimi API 服务地址。
-    最终 base_url 只保留域名，/v1/chat/completions 由 endpoint 统一追加。
-    """
-    raw_url = os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn").strip()
-    if not raw_url:
-        raw_url = "https://api.moonshot.cn"
-
-    # 兼容旧环境变量：api.moonshot.ai -> 当前官方服务地址
-    raw_url = raw_url.replace("api.moonshot.ai", "api.moonshot.cn")
-    raw_url = raw_url.rstrip("/")
-
-    # 防止 .env 中误写成完整接口地址或带 /v1 的地址
-    for suffix in ("/v1/chat/completions", "/v1"):
-        if raw_url.endswith(suffix):
-            raw_url = raw_url[:-len(suffix)].rstrip("/")
-            break
-
-    return raw_url
-
-
 MODEL_CONFIGS = {
     "deepseek": {
         "base_url": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
@@ -406,20 +384,22 @@ MODEL_CONFIGS = {
             "temperature": kw.get("temperature", 0.0), "stream": True,
         },
     },
-   "moonshot": {
-        "base_url": get_moonshot_base_url(),
-        "endpoint": "/v1/chat/completions",
+    "moonshot": {
+        # Kimi 官方 OpenAI 兼容接口。这里不读取旧的 MOONSHOT_BASE_URL，
+        # 防止环境变量里的旧地址覆盖正确配置。最终 URL 为
+        # https://api.moonshot.cn/v1/chat/completions
+        "base_url": "https://api.moonshot.cn/v1",
+        "endpoint": "/chat/completions",
         "headers": lambda key: {
             "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-            "Accept": "text/event-stream",
+            "Content-Type": "application/json"
         },
         "payload": lambda model, messages, **kw: {
             "model": model,
             "messages": messages,
             "max_tokens": kw.get("max_tokens", 4096),
             "temperature": kw.get("temperature", 0.0),
-            "stream": True,
+            "stream": False,
         },
     },
     "qwen": {
@@ -458,7 +438,7 @@ MODEL_OPTIONS = {
         "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
     },
     "Moonshot（Kimi）": {
-        "provider": "moonshot", "model": "kimi-k2.6",
+        "provider": "moonshot", "model": "kimi-k2.6", 
         "api_key": os.getenv("MOONSHOT_API_KEY"), "env_var": "MOONSHOT_API_KEY"
     },
     "Qwen（通义千问）": {
@@ -625,71 +605,135 @@ def clear_process_progress(progress_file):
 # LLM调用与词类判定主函数
 # ===============================
 def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, temperature=0.0, max_retries=3):
-    if not _api_key: return False, {"error": "API Key 为空"}, "API Key 未提供"
-    if _provider not in MODEL_CONFIGS: return False, {"error": f"未知提供商 {_provider}"}, f"未知提供商 {_provider}"
-    
+    """统一调用 LLM API。Kimi 使用非流式请求，先保证接口链路稳定。"""
+    if not _api_key:
+        return False, {"error": "API Key 为空"}, "API Key 未提供"
+    if _provider not in MODEL_CONFIGS:
+        return False, {"error": f"未知提供商 {_provider}"}, f"未知提供商 {_provider}"
+
     cfg = MODEL_CONFIGS[_provider]
-    base_url = cfg['base_url'].rstrip('/')
-    endpoint = cfg['endpoint'].lstrip('/')
+    base_url = cfg["base_url"].rstrip("/")
+    endpoint = cfg["endpoint"].lstrip("/")
     url = f"{base_url}/{endpoint}"
-    
+
     headers = cfg["headers"](_api_key)
-    payload = cfg["payload"](_model, messages, max_tokens=max_tokens, temperature=temperature)
+    payload = cfg["payload"](
+        _model, messages, max_tokens=max_tokens, temperature=temperature
+    )
+
+    logger.info("调用模型 provider=%s model=%s url=%s", _provider, _model, url)
+
     streaming_placeholder = st.empty()
-    full_content = ""
     error_msg = "未知错误"
-    
+
     for attempt in range(max_retries):
         try:
-            with requests.post(url, headers=headers, json=payload, stream=True, timeout=120) as response:
-                if response.status_code != 200:
-                    status_code = response.status_code
-                    try: detail = response.json()
-                    except: detail = response.text
-                    
-                    if status_code == 404:
-                        if _provider == "moonshot":
-                            error_msg = (
-                                f"Kimi 路径错误 (404)：{url}\n"
-                                "当前代码要求：https://api.moonshot.cn/v1/chat/completions。"
-                                "如果 .env 中存在 MOONSHOT_BASE_URL，请确认它没有指向旧地址。"
-                            )
-                        else:
-                            error_msg = f"路径错误 (404)。请确保请求地址正确：{url}"
-                    elif status_code == 401: error_msg = "鉴权失败 (401)。请检查 API Key 权限。"
-                    else: error_msg = f"API 错误: {status_code} - {detail}"
-                    
-                    if status_code in [404, 401]: break
-                    response.raise_for_status()
-                for line in response.iter_lines():
-                    if not line: continue
-                    line_text = line.decode('utf-8').strip()
-                    
-                    json_str = line_text[5:].strip() if line_text.startswith("data:") else line_text
-                    if json_str == "[DONE]": break
-                    
+            response = requests.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=(15, 120),
+            )
+
+            status_code = response.status_code
+            content_type = response.headers.get("Content-Type", "")
+
+            if status_code != 200:
+                try:
+                    detail = response.json()
+                except Exception:
+                    detail = response.text[:2000]
+
+                logger.error(
+                    "LLM API error provider=%s model=%s status=%s url=%s detail=%s",
+                    _provider, _model, status_code, url, detail
+                )
+
+                if status_code == 404:
+                    error_msg = (
+                        f"接口返回 404。实际请求地址：{url}\n"
+                        f"服务端原始返回：{detail}"
+                    )
+                elif status_code == 401:
+                    error_msg = (
+                        f"API Key 鉴权失败 (401)。实际请求地址：{url}\n"
+                        f"服务端原始返回：{detail}"
+                    )
+                elif status_code == 403:
+                    error_msg = f"没有 API 权限 (403)：{detail}"
+                elif status_code == 400:
+                    error_msg = f"请求参数错误 (400)：{detail}"
+                else:
+                    error_msg = f"API 错误 {status_code}：{detail}"
+
+                # 这些错误重试没有意义
+                if status_code in (400, 401, 403, 404):
+                    break
+
+                time.sleep(2 ** attempt)
+                continue
+
+            # 目前 Kimi 这里使用 stream=False，因此优先按普通 JSON 处理。
+            try:
+                body = response.json()
+            except Exception:
+                body = None
+
+            if isinstance(body, dict):
+                text = extract_text_from_response(body)
+                if text:
+                    streaming_placeholder.empty()
+                    return True, body, ""
+
+            # 兼容极少数代理把结果包装成 SSE 的情况
+            full_content = ""
+            if response.text:
+                for line in response.text.splitlines():
+                    line = line.strip()
+                    if not line or line == "data: [DONE]":
+                        continue
+                    json_str = line[5:].strip() if line.startswith("data:") else line
                     try:
                         chunk = json.loads(json_str)
-                        delta_text = ""
-                        if "choices" in chunk and len(chunk["choices"]) > 0:
-                            choice = chunk["choices"][0]
-                            if "delta" in choice: delta_text = choice["delta"].get("content", "")
-                            elif "message" in choice: delta_text = choice["message"].get("content", "")
-                        elif "output" in chunk:
-                            output = chunk["output"]
-                            if "choices" in output: delta_text = output["choices"][0].get("message", {}).get("content", "")
-                            elif "text" in output: delta_text = output["text"]
-                        
-                        if delta_text: full_content += delta_text
-                    except json.JSONDecodeError: continue
+                    except Exception:
+                        continue
+                    if isinstance(chunk, dict) and chunk.get("choices"):
+                        choice = chunk["choices"][0]
+                        if isinstance(choice, dict):
+                            delta = choice.get("delta", {})
+                            message = choice.get("message", {})
+                            if isinstance(delta, dict):
+                                full_content += delta.get("content", "") or ""
+                            if not full_content and isinstance(message, dict):
+                                full_content += message.get("content", "") or ""
+
             if full_content:
                 streaming_placeholder.empty()
                 return True, {"choices": [{"message": {"content": full_content}}]}, ""
-            else:
-                error_msg = "模型未返回有效文本内容。"
+
+            error_msg = (
+                f"接口返回 200，但没有解析到文本内容。\n"
+                f"Content-Type: {content_type}\n"
+                f"原始响应：{response.text[:2000]}"
+            )
+            break
+
+        except requests.exceptions.Timeout as e:
+            error_msg = f"请求超时（第 {attempt + 1} 次）：{e}"
+            logger.error(error_msg)
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+        except requests.exceptions.ConnectionError as e:
+            error_msg = f"网络连接失败（第 {attempt + 1} 次）：{e}"
+            logger.error(error_msg)
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
         except Exception as e:
-            error_msg = f"请求异常（第{attempt+1}次尝试）: {str(e)}"
-            time.sleep(2 ** attempt)
+            error_msg = f"请求异常（第 {attempt + 1} 次）：{e}"
+            logger.exception(error_msg)
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+
     streaming_placeholder.empty()
     return False, {"error": error_msg}, error_msg
 
