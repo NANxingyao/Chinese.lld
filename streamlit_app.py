@@ -384,7 +384,7 @@ MODEL_CONFIGS = {
             "temperature": kw.get("temperature", 0.0), "stream": True,
         },
     },
-    "moonshot": {
+   "moonshot": {
         "base_url": os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn"),
         "endpoint": "/v1/chat/completions",
         "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
