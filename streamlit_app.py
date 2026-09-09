@@ -15,9 +15,8 @@ from openpyxl.styles import PatternFill
 from pathlib import Path
 
 # ===============================
-# 基础配置与日志（新增：定位中断原因）
+# 基础配置与日志
 # ===============================
-# 创建日志配置
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -28,7 +27,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 页面配置
 st.set_page_config(
     page_title="基于大语言模型的汉语隶属度检测划类平台",
     layout="wide",
@@ -37,7 +35,7 @@ st.set_page_config(
 )
 
 # ===============================
-# 自定义CSS样式（UI优化版）
+# 自定义CSS样式
 # ===============================
 custom_css = """
 <style>
@@ -113,76 +111,6 @@ footer {visibility: hidden;}
     border-radius: 20px;
     font-size: 0.8rem;
     border: 1px solid rgba(255, 255, 255, 0.2);
-}
-
-/* ===== 模块高亮卡片 ===== */
-.module-card {
-    background: #ffffff;
-    border-radius: 16px;
-    padding: 1.5rem;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.05);
-    border: 1px solid rgba(200, 210, 225, 0.5);
-    margin-bottom: 1rem;
-    transition: all 0.3s ease;
-}
-.module-card:hover {
-    box-shadow: 0 8px 30px rgba(30, 58, 95, 0.12), 0 2px 6px rgba(0, 0, 0, 0.06);
-    border-color: rgba(45, 90, 135, 0.2);
-}
-
-/* ===== 模型设置区高亮容器 ===== */
-.model-settings-card {
-    background: linear-gradient(135deg, #fbfcfe 0%, #f0f4fa 100%);
-    border-radius: 16px;
-    padding: 1.25rem 1.5rem;
-    border: 1.5px solid rgba(45, 90, 135, 0.15);
-    box-shadow: 0 4px 16px rgba(45, 90, 135, 0.08), 0 1px 4px rgba(0, 0, 0, 0.04);
-}
-
-/* ===== 连接测试区高亮容器 ===== */
-.connection-card {
-    background: linear-gradient(135deg, #f5f9ff 0%, #e8f0fe 100%);
-    border-radius: 16px;
-    padding: 1.25rem 1.5rem;
-    border: 1.5px solid rgba(59, 130, 246, 0.2);
-    box-shadow: 0 4px 16px rgba(59, 130, 246, 0.1), 0 1px 4px rgba(0, 0, 0, 0.04);
-    text-align: center;
-}
-
-/* ===== 结果成功高亮块 ===== */
-.result-success-card {
-    background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
-    border-radius: 10px;
-    padding: 1rem 1.25rem;
-    border-left: 4px solid #10b981;
-    margin: 1rem 0;
-}
-
-/* ===== 警告高亮块 ===== */
-.warning-highlight {
-    background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
-    border-radius: 10px;
-    padding: 1rem 1.25rem;
-    border-left: 4px solid #f59e0b;
-    margin: 0.75rem 0;
-}
-
-/* ===== 错误高亮块 ===== */
-.error-highlight {
-    background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
-    border-radius: 10px;
-    padding: 1rem 1.25rem;
-    border-left: 4px solid #ef4444;
-    margin: 0.75rem 0;
-}
-
-/* ===== 信息高亮块 ===== */
-.info-highlight {
-    background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
-    border-radius: 10px;
-    padding: 1rem 1.25rem;
-    border-left: 4px solid #3b82f6;
-    margin: 0.75rem 0;
 }
 
 /* ===== 子标题样式 ===== */
@@ -295,149 +223,28 @@ footer {visibility: hidden;}
     box-shadow: 0 4px 12px rgba(30, 77, 123, 0.3);
 }
 
-/* ===== 表格样式优化 ===== */
-.stDataFrame {
-    border-radius: 16px;
-    overflow: hidden;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
-    border: 1px solid #e2e8f0;
+/* ===== 其他通用样式 ===== */
+.result-success-card {
+    background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    border-left: 4px solid #10b981;
+    margin: 1rem 0;
 }
-.dataframe {
-    font-size: 13px;
+.info-highlight {
+    background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    border-left: 4px solid #3b82f6;
+    margin: 0.75rem 0;
 }
-.dataframe th {
-    background: linear-gradient(135deg, #1e4d7b 0%, #2d6cb8 100%) !important;
-    color: white !important;
-    font-weight: 600 !important;
-    padding: 0.85rem 1rem !important;
+.error-highlight {
+    background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    border-left: 4px solid #ef4444;
+    margin: 0.75rem 0;
 }
-.dataframe td {
-    padding: 0.7rem 1rem !important;
-}
-.dataframe tr:nth-child(even) {
-    background: #f8fafc;
-}
-.dataframe tr:hover {
-    background: #eff6ff !important;
-}
-
-/* ===== 指标卡片样式 ===== */
-.metric-card {
-    background: linear-gradient(135deg, #ffffff 0%, #f5f9ff 100%);
-    border-radius: 16px;
-    padding: 1.25rem 1.5rem;
-    border: 1.5px solid rgba(45, 108, 184, 0.15);
-    text-align: center;
-    box-shadow: 0 4px 12px rgba(45, 108, 184, 0.08);
-}
-.metric-card .metric-value {
-    font-size: 2rem;
-    font-weight: 800;
-    color: #1e4d7b;
-}
-.metric-card .metric-label {
-    font-size: 0.9rem;
-    color: #64748b;
-    margin-top: 0.5rem;
-    font-weight: 500;
-}
-
-/* ===== 进度条样式 ===== */
-.stProgress > div > div > div > div {
-    background: linear-gradient(90deg, #1e4d7b 0%, #2d6cb8 50%, #3d8bd6 100%) !important;
-    border-radius: 10px !important;
-    height: 12px !important;
-}
-.stProgress > div > div > div {
-    border-radius: 10px !important;
-    background: #e2e8f0 !important;
-    height: 12px !important;
-}
-
-/* ===== 展开器样式 ===== */
-.streamlit-expanderHeader {
-    background: #f8fafc;
-    border-radius: 12px !important;
-    padding: 0.85rem 1.25rem !important;
-    font-weight: 600 !important;
-    color: #1e4d7b !important;
-    border: 1.5px solid #e2e8f0;
-    transition: all 0.3s ease;
-}
-.streamlit-expanderHeader:hover {
-    background: #f0f7ff;
-    border-color: #2d6cb8;
-}
-.streamlit-expanderContent {
-    background: #ffffff;
-    border: 1.5px solid #e2e8f0;
-    border-top: none;
-    border-radius: 0 0 12px 12px !important;
-    padding: 1.25rem !important;
-}
-
-/* ===== 代码块样式 ===== */
-.stCodeBlock {
-    border-radius: 12px !important;
-    border: 1.5px solid #e2e8f0 !important;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04) !important;
-}
-
-/* ===== 文件上传器样式 ===== */
-.stFileUploader {
-    background: #ffffff;
-    border-radius: 16px;
-    padding: 1.5rem;
-    border: 2px dashed #cbd5e1;
-    transition: all 0.3s ease;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
-}
-.stFileUploader:hover {
-    border-color: #2d6cb8;
-    background: #f5f9ff;
-    box-shadow: 0 4px 12px rgba(45, 108, 184, 0.1);
-}
-
-/* ===== 分割线样式 ===== */
-hr {
-    border: none;
-    height: 1px;
-    background: linear-gradient(90deg, transparent 0%, #cbd5e1 50%, transparent 100%);
-    margin: 1.5rem 0;
-}
-
-/* ===== 底部版权 ===== */
-.footer-text {
-    text-align: center;
-    color: #64748b;
-    font-size: 0.85rem;
-    padding: 1.5rem 0;
-    margin-top: 2rem;
-    border-top: 1px solid #e5e7eb;
-}
-
-/* ===== 状态徽章 ===== */
-.status-badge {
-    display: inline-block;
-    padding: 0.25rem 0.75rem;
-    border-radius: 20px;
-    font-size: 0.8rem;
-    font-weight: 500;
-}
-.status-badge.success {
-    background: #d1fae5;
-    color: #065f46;
-}
-.status-badge.warning {
-    background: #fef3c7;
-    color: #92400e;
-}
-.status-badge.error {
-    background: #fee2e2;
-    color: #991b1b;
-}
-
-/* ===== 排名卡片 ===== */
 .rank-card {
     display: flex;
     align-items: center;
@@ -472,41 +279,44 @@ hr {
 .rank-card.top-1 .rank-num {
     background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
     color: white;
-    box-shadow: 0 3px 8px rgba(251, 191, 36, 0.4);
 }
 .rank-card.top-2 .rank-num {
     background: linear-gradient(135deg, #9ca3af 0%, #6b7280 100%);
     color: white;
-    box-shadow: 0 3px 8px rgba(156, 163, 175, 0.4);
 }
 .rank-card.top-3 .rank-num {
     background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
     color: white;
-    box-shadow: 0 3px 8px rgba(217, 119, 6, 0.4);
 }
-
-/* ===== 响应式调整 ===== */
-@media (max-width: 768px) {
-    .title-header-card {
-        padding: 1.5rem 1.25rem;
-    }
-    .title-header-card h1 {
-        font-size: 1.4rem !important;
-    }
-    .block-container {
-        padding-left: 1rem;
-        padding-right: 1rem;
-    }
+.status-badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+.status-badge.success {
+    background: #d1fae5;
+    color: #065f46;
 }
 </style>
 """
-
 st.markdown(custom_css, unsafe_allow_html=True)
 
-# 全局常量（修复：使用绝对路径避免文件路径问题）
+# ===============================
+# 全局常量与动态文件路径生成
+# ===============================
 BASE_DIR = Path(__file__).parent
-BACKUP_FILE = BASE_DIR / "batch_history_log.csv"
-PROGRESS_FILE = BASE_DIR / "process_progress.json"
+
+def get_project_files(project_code: str) -> Tuple[Path, Path]:
+    """根据实验批次码动态生成隔离的数据文件路径"""
+    # 过滤特殊字符，防止路径错误
+    safe_code = re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', project_code)
+    if not safe_code:
+        safe_code = "default_task"
+    backup_file = BASE_DIR / f"batch_history_{safe_code}.csv"
+    progress_file = BASE_DIR / f"process_progress_{safe_code}.json"
+    return backup_file, progress_file
 
 RULE_SETS = {
     "名词": [
@@ -612,9 +422,6 @@ MODEL_CONFIGS = {
     },
 }
 
-# ===============================
-# 模型选项
-# ===============================
 MODEL_OPTIONS = {
     "DeepSeek Chat": {
         "provider": "deepseek", 
@@ -665,9 +472,7 @@ if not AVAILABLE_MODEL_OPTIONS:
 # 增强型工具函数
 # ===============================
 def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
-    """从不同格式的LLM响应中安全提取文本内容。"""
-    if not isinstance(resp_json, dict):
-        return ""
+    if not isinstance(resp_json, dict): return ""
     try:
         if "output" in resp_json and "text" in resp_json["output"]:
             return resp_json["output"]["text"]
@@ -681,10 +486,8 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
         return json.dumps(resp_json, ensure_ascii=False)
 
 def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
-    """从混合文本中提取并解析JSON对象。"""
     match = re.search(r"(\{.*\})", text.strip(), re.DOTALL)
-    if not match:
-        return None, text
+    if not match: return None, text
     json_text = match.group(1).strip()
     try:
         parsed_json = json.loads(json_text)
@@ -694,27 +497,21 @@ def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
         return None, json_text
 
 def normalize_key(k: str, pos_rules: list) -> str:
-    """标准化模型返回的规则名称"""
     if not isinstance(k, str): return None
     k_norm = re.sub(r'[\s_]+', '', k).upper()
     for r in pos_rules:
         r_norm = re.sub(r'[\s_]+', '', r["name"]).upper()
-        if r_norm == k_norm:
-            return r["name"]
+        if r_norm == k_norm: return r["name"]
     return None
 
 def map_to_allowed_score(rule: dict, raw_val) -> int:
-    """将模型返回值映射为规则得分"""
     match_score, mismatch_score = rule["match_score"], rule["mismatch_score"]
     try:
-        if isinstance(raw_val, bool):
-            return match_score if raw_val else mismatch_score
+        if isinstance(raw_val, bool): return match_score if raw_val else mismatch_score
         if isinstance(raw_val, str):
             s = raw_val.strip().lower()
-            if s in ("yes", "y", "true", "是", "√", "符合"):
-                return match_score
-            if s in ("no", "n", "false", "否", "×", "不符合"):
-                return mismatch_score
+            if s in ("yes", "y", "true", "是", "√", "符合"): return match_score
+            if s in ("no", "n", "false", "否", "×", "不符合"): return mismatch_score
         if isinstance(raw_val, (int, float)):
             raw_val_int = int(raw_val)
             if raw_val_int == match_score: return match_score
@@ -724,7 +521,6 @@ def map_to_allowed_score(rule: dict, raw_val) -> int:
     return mismatch_score
 
 def calculate_membership(scores_all: Dict[str, Dict[str, int]]) -> Dict[str, float]:
-    """计算隶属度"""
     membership = {}
     try:
         for pos, scores in scores_all.items():
@@ -736,7 +532,6 @@ def calculate_membership(scores_all: Dict[str, Dict[str, int]]) -> Dict[str, flo
     return membership
 
 def get_top_10_positions(membership: Dict[str, float]) -> List[Tuple[str, float]]:
-    """获取隶属度最高的前 10 个词类"""
     try:
         return sorted(membership.items(), key=lambda x: x[1], reverse=True)[:10]
     except Exception as e:
@@ -744,9 +539,7 @@ def get_top_10_positions(membership: Dict[str, float]) -> List[Tuple[str, float]
         return []
 
 def get_history_count(backup_file):
-    """获取最新的历史记录数量（实时更新用）"""
-    if not os.path.exists(backup_file):
-        return 0
+    if not os.path.exists(backup_file): return 0
     try:
         temp_history = pd.read_csv(backup_file, encoding='utf-8-sig')
         return len(temp_history)
@@ -755,14 +548,13 @@ def get_history_count(backup_file):
         return 0
 
 def safe_write_csv(df, file_path, mode='a', header=False, encoding='utf-8-sig', max_retries=3):
-    """安全写入CSV，加文件锁避免冲突，失败自动重试"""
     retry_count = 0
     while retry_count < max_retries:
         try:
             with open(file_path, mode, encoding=encoding) as f:
-                fcntl.flock(f, fcntl.LOCK_EX)  # 排他锁
+                fcntl.flock(f, fcntl.LOCK_EX) 
                 df.to_csv(f, mode=mode, header=header, index=False)
-                fcntl.flock(f, fcntl.LOCK_UN)  # 释放锁
+                fcntl.flock(f, fcntl.LOCK_UN)
             return True
         except Exception as e:
             retry_count += 1
@@ -771,8 +563,10 @@ def safe_write_csv(df, file_path, mode='a', header=False, encoding='utf-8-sig', 
     logger.error(f"写入CSV最终失败: {file_path}")
     return False
 
-def save_process_progress(file_name, current_row, total_rows):
-    """保存处理进度"""
+# ===============================
+# 进度管理（已更新以接收动态进度文件）
+# ===============================
+def save_process_progress(file_name, current_row, total_rows, progress_file):
     try:
         progress_data = {
             "file_name": file_name,
@@ -780,39 +574,34 @@ def save_process_progress(file_name, current_row, total_rows):
             "total_rows": total_rows,
             "last_update": time.strftime("%Y-%m-%d %H:%M:%S")
         }
-        with open(PROGRESS_FILE, 'w', encoding='utf-8') as f:
+        with open(progress_file, 'w', encoding='utf-8') as f:
             json.dump(progress_data, f, ensure_ascii=False, indent=2)
     except Exception as e:
         logger.error(f"保存进度失败: {e}")
 
-def load_process_progress():
-    """加载处理进度"""
-    if not os.path.exists(PROGRESS_FILE):
-        return None
+def load_process_progress(progress_file):
+    if not os.path.exists(progress_file): return None
     try:
-        with open(PROGRESS_FILE, 'r', encoding='utf-8') as f:
+        with open(progress_file, 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception as e:
         logger.error(f"加载进度失败: {e}")
         return None
 
-def clear_process_progress():
-    """清除进度文件"""
-    if os.path.exists(PROGRESS_FILE):
+def clear_process_progress(progress_file):
+    if os.path.exists(progress_file):
         try:
-            os.remove(PROGRESS_FILE)
+            os.remove(progress_file)
         except Exception as e:
             logger.error(f"清除进度文件失败: {e}")
 
 # ===============================
-# 增强型LLM调用
+# LLM调用与词类判定主函数
 # ===============================
 def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, temperature=0.0, max_retries=3):
-    """封装LLM调用逻辑"""
-    if not _api_key: 
-        return False, {"error": "API Key 为空"}, "API Key 未提供"
-    if _provider not in MODEL_CONFIGS: 
-        return False, {"error": f"未知提供商 {_provider}"}, f"未知提供商 {_provider}"
+    if not _api_key: return False, {"error": "API Key 为空"}, "API Key 未提供"
+    if _provider not in MODEL_CONFIGS: return False, {"error": f"未知提供商 {_provider}"}, f"未知提供商 {_provider}"
+    
     cfg = MODEL_CONFIGS[_provider]
     base_url = cfg['base_url'].rstrip('/')
     endpoint = cfg['endpoint'].lstrip('/')
@@ -823,22 +612,18 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
     streaming_placeholder = st.empty()
     full_content = ""
     error_msg = "未知错误"
+    
     for attempt in range(max_retries):
         try:
             with requests.post(url, headers=headers, json=payload, stream=True, timeout=120) as response:
                 if response.status_code != 200:
                     status_code = response.status_code
-                    try:
-                        detail = response.json()
-                    except:
-                        detail = response.text
+                    try: detail = response.json()
+                    except: detail = response.text
                     
-                    if status_code == 404:
-                        error_msg = f"路径错误 (404)。请确保请求地址正确：{url}"
-                    elif status_code == 401:
-                        error_msg = "鉴权失败 (401)。请检查 API Key 权限。"
-                    else:
-                        error_msg = f"API 错误: {status_code} - {detail}"
+                    if status_code == 404: error_msg = f"路径错误 (404)。请确保请求地址正确：{url}"
+                    elif status_code == 401: error_msg = "鉴权失败 (401)。请检查 API Key 权限。"
+                    else: error_msg = f"API 错误: {status_code} - {detail}"
                     
                     if status_code in [404, 401]: break
                     response.raise_for_status()
@@ -854,21 +639,15 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
                         delta_text = ""
                         if "choices" in chunk and len(chunk["choices"]) > 0:
                             choice = chunk["choices"][0]
-                            if "delta" in choice:
-                                delta_text = choice["delta"].get("content", "")
-                            elif "message" in choice:
-                                delta_text = choice["message"].get("content", "")
+                            if "delta" in choice: delta_text = choice["delta"].get("content", "")
+                            elif "message" in choice: delta_text = choice["message"].get("content", "")
                         elif "output" in chunk:
                             output = chunk["output"]
-                            if "choices" in output:
-                                delta_text = output["choices"][0].get("message", {}).get("content", "")
-                            elif "text" in output:
-                                delta_text = output["text"]
+                            if "choices" in output: delta_text = output["choices"][0].get("message", {}).get("content", "")
+                            elif "text" in output: delta_text = output["text"]
                         
-                        if delta_text:
-                            full_content += delta_text
-                    except json.JSONDecodeError:
-                        continue
+                        if delta_text: full_content += delta_text
+                    except json.JSONDecodeError: continue
             if full_content:
                 streaming_placeholder.empty()
                 return True, {"choices": [{"message": {"content": full_content}}]}, ""
@@ -880,13 +659,8 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
     streaming_placeholder.empty()
     return False, {"error": error_msg}, error_msg
 
-# ===============================
-# 词类判定主函数（新增：判断兼类）
-# ===============================
 def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str) -> Tuple[Dict[str, Dict[str, int]], str, str, str, bool]:
-    """词类判定核心函数，返回元组新增一项表示是否为兼类的布尔值"""
-    if not word:
-        return {}, "", "未知", "", False
+    if not word: return {}, "", "未知", "", False
     
     full_rules_by_pos = {
         pos: "\n".join([f"- {r['name']}: {r['desc']}（符合: {r['match_score']} 分，不符合: {r['mismatch_score']} 分）" for r in rules])
@@ -894,57 +668,34 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     }
     
     system_msg = f"""你是一名中文词法与语法方面的专家。现在要分析词语「{word}」在下列词类中的表现：
-
 - 需要判断的词类：名词、动词、名动词
 - 评分规则已经由系统定义，你**不要**自己设计分值，也**不要**在 JSON 中给出具体数字分数。程序将根据你的判断（true/false）自动赋值。
 - 你只需要判断每一条规则是"符合"还是"不符合"。
 
 【各词类的规则说明（仅供你判断使用）】
-【名词】
-{full_rules_by_pos["名词"]}
-
-【动词】
-{full_rules_by_pos["动词"]}
-
-【名动词】
-{full_rules_by_pos["名动词"]}
+【名词】\n{full_rules_by_pos["名词"]}
+【动词】\n{full_rules_by_pos["动词"]}
+【名动词】\n{full_rules_by_pos["名动词"]}
 
 【输出要求】
-1. 在 explanation 字段中，必须**逐条规则**说明判断依据，并举例（可以自己造句）：
-   - 格式示例：
-     - 「名词-N1_可受数量词修饰：符合。理由：……。例句：……。」
-     - 「动词-V2_可后附/插入时体助词'着/了/过'：不符合。理由：……。例句：……。」
-   - explanation 里要覆盖 **三个词类的所有规则**，不能只写几条。
-2. 在 JSON 中的 scores 字段里：
-   - 每一类下的每一条规则，只能给出 **布尔值 true / false**，表示是否符合该规则
-   - 严禁在 scores 里使用数值分数（例如 0, 5, 10 等）
-   - 如果你不确定，也必须做出判断（true 或 false），不要用 null、0 或其它值
-3. predicted_pos：
-   - 请选择「名词」「动词」「名动词」之一，作为该词语最典型的词类。
+1. 在 explanation 字段中，必须**逐条规则**说明判断依据，并举例。explanation 里要覆盖 **三个词类的所有规则**。
+2. 在 JSON 中的 scores 字段里，每一类下的每一条规则，只能给出 **布尔值 true / false**，表示是否符合该规则。
+3. predicted_pos：请选择「名词」「动词」「名动词」之一，作为该词语最典型的词类。
 4. 判断兼类：请结合词类典型性特征，判断该词在现代汉语中是否属于“兼类词”（即具备多种词类的句法功能，如兼具动词和名词特征）。在 JSON 中新增字段 `is_dual_category`，用 true 或 false 表示。
-5. **最后输出时，先写详细的文字推理，最后单独且完整地给出一段合法的 JSON（不要再加注释）。**
+5. 最后单独且完整地给出一段合法的 JSON。
 
 JSON 结构示例：
 {{"explanation": "...", "predicted_pos": "...", "is_dual_category": true, "scores": {{"名词": {{...}}, "动词": {{...}}, "名动词": {{...}}}}}}
 """
 
-    user_prompt = f"""
-请严格按照上述要求分析词语「{word}」。
-特别注意：
-- 在 JSON 的 scores 部分，只能用 true/false 表示"是否符合规则"，不能使用任何数字。
-- explanation 中必须对每一条规则写明"符合/不符合 + 理由 + 例句"。
-请先给出详细推理过程，然后在最后单独输出一个 JSON 对象。
-"""
+    user_prompt = f"""请严格按照上述要求分析词语「{word}」。
+特别注意：scores 部分只能用 true/false；explanation 必须包含理由和例句。
+请先给出详细推理过程，然后在最后单独输出一个 JSON 对象。"""
 
     with st.spinner(f"正在调用大模型 ({model}) 进行分析，请稍候..."):
         ok, resp_json, err_msg = call_llm_api_cached(
-            _provider=provider,
-            _model=model,
-            _api_key=api_key,
-            messages=[
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_prompt}
-            ]
+            _provider=provider, _model=model, _api_key=api_key,
+            messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": user_prompt}]
         )
         
     if not ok:
@@ -954,13 +705,12 @@ JSON 结构示例：
 
     raw_text = extract_text_from_response(resp_json)
     parsed_json, cleaned_json_text = extract_json_from_text(raw_text)
-    
     is_dual_category = False
     
     if parsed_json and isinstance(parsed_json, dict):
         explanation = parsed_json.get("explanation", "模型未提供详细推理过程。")
         predicted_pos = parsed_json.get("predicted_pos", "未知")
-        is_dual_category = parsed_json.get("is_dual_category", False)  # 提取兼类判断
+        is_dual_category = parsed_json.get("is_dual_category", False)
         raw_scores = parsed_json.get("scores", {})
         if predicted_pos not in RULE_SETS:
              st.warning(f"模型预测的词类 '{predicted_pos}' 不在分析范围内 ('名词', '动词', '名动词')。")
@@ -969,7 +719,6 @@ JSON 结构示例：
         explanation = "无法解析模型输出。原始响应：\n" + raw_text
         predicted_pos = "未知"
         raw_scores = {}
-        cleaned_json_text = raw_text
 
     scores_out = {pos: {} for pos in RULE_SETS.keys()}
     try:
@@ -981,7 +730,6 @@ JSON 结构示例：
                     if normalized_key:
                         rule_def = next(r for r in rules if r["name"] == normalized_key)
                         scores_out[pos][normalized_key] = map_to_allowed_score(rule_def, v)
-        # 补全缺失的规则得分
         for pos, rules in RULE_SETS.items():
             for rule in rules:
                 rule_name = rule["name"]
@@ -993,184 +741,39 @@ JSON 结构示例：
         
     return scores_out, raw_text, predicted_pos, explanation, is_dual_category
 
-# ===============================
-# 雷达图绘制函数
-# ===============================
 def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
-    """绘制词类隶属度雷达图"""
     if not scores_norm:
         st.warning("无法绘制雷达图：没有有效数据。")
         return
-    
     categories = list(scores_norm.keys())
-    if not categories:
-        st.warning("无法绘制雷达图：没有有效词类。")
-        return
-        
     values = list(scores_norm.values())
     categories += [categories[0]]
     values += [values[0]]
     
-    min_val = min(values)
-    max_val = max(values)
-    axis_min = min(min_val, -0.1) 
-    axis_max = max(max_val, 1.0)
+    min_val, max_val = min(values), max(values)
+    axis_min, axis_max = min(min_val, -0.1), max(max_val, 1.0)
     
     fig = go.Figure(data=[
         go.Scatterpolar(
-            r=values, 
-            theta=categories, 
-            fill="toself", 
-            name="隶属度",
+            r=values, theta=categories, fill="toself", name="隶属度",
             hovertemplate = '<b>%{theta}</b><br>隶属度: %{r:.4f}<extra></extra>'
         )
     ])
     fig.update_layout(
         polar=dict(
             radialaxis=dict(
-                visible=True, 
-                range=[axis_min, axis_max],
+                visible=True, range=[axis_min, axis_max],
                 tickvals=[0, 0.25, 0.5, 0.75, 1.0] if axis_min >= 0 else [-1.0, -0.5, 0, 0.5, 1.0]
             )
         ),
-        showlegend=False,
-        title=dict(text=title, x=0.5, font=dict(size=16))
+        showlegend=False, title=dict(text=title, x=0.5, font=dict(size=16))
     )
     st.plotly_chart(fig, use_container_width=True)
-
-# ===============================
-# 增强型批量处理
-# ===============================
-def process_and_style_excel(df, selected_model_info, target_col_name, metric_placeholder, backup_file):
-    """批量处理Excel并实时更新数据量，增强鲁棒性"""
-    output = io.BytesIO()
-    if 'processed_history' not in st.session_state:
-        st.session_state.processed_history = []
-    
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    backup_info_placeholder = st.container()
-    total = len(df)
-    file_name = f"excel_{int(time.time())}"  
-    
-    # 加载上次进度
-    last_progress = load_process_progress()
-    start_row = 0
-    if last_progress and last_progress.get("file_name") == file_name:
-        start_row = last_progress.get("current_row", 0)
-        st.info(f"检测到上次未完成的任务，从第 {start_row+1} 行继续处理")
-    
-    try:
-        for index in range(start_row, total):
-            row = df.iloc[index]
-            word = str(row[target_col_name]).strip()
-            
-            # 保存当前进度
-            save_process_progress(file_name, index, total)
-            
-            try:
-                max_retries = 3
-                success = False
-                scores_all, raw_text, predicted_pos, explanation, is_dual_category = {}, "", "请求失败", "", False
-                
-                for attempt in range(max_retries):
-                    try:
-                        status_text.text(f"正在处理 ({index + 1}/{total}): {word} ... (尝试 {attempt + 1})")
-                        # 接收新增的兼类判定返回值
-                        scores_all, raw_text, predicted_pos, explanation, is_dual_category = ask_model_for_pos_and_scores(
-                            word=word,
-                            provider=selected_model_info["provider"],
-                            model=selected_model_info["model"],
-                            api_key=selected_model_info["api_key"]
-                        )
-                        if scores_all:
-                            success = True
-                            break
-                        time.sleep(2)
-                    except Exception as e:
-                        logger.error(f"处理词语{word}失败（尝试{attempt+1}）: {e}")
-                        time.sleep(2)
-                
-                # 构造数据行（新增：是否兼类）
-                membership = calculate_membership(scores_all) if success else {}
-                new_row = {
-                    "序数": index + 1,
-                    "词语": word,
-                    "动词": membership.get("动词", 0.0),
-                    "名词": membership.get("名词", 0.0),
-                    "名动词": membership.get("名动词", 0.0),
-                    "差值/距离": round(abs(membership.get("动词", 0.0) - membership.get("名词", 0.0)), 4),
-                    "预测词类": predicted_pos,
-                    "是否兼类": "是" if is_dual_category else "否",
-                    "原始响应": raw_text if success else f"错误: {explanation}",
-                    "时间戳": time.strftime("%Y-%m-%d %H:%M:%S")
-                }
-                
-                # 保存到SessionState
-                st.session_state.processed_history.append(new_row)
-                
-                # 安全写入CSV并实时更新数据量
-                try:
-                    temp_df = pd.DataFrame([new_row])
-                    header_needed = not os.path.exists(backup_file)
-                    write_success = safe_write_csv(temp_df, backup_file, mode='a', header=header_needed)
-                    if write_success:
-                        latest_count = get_history_count(backup_file)
-                        metric_placeholder.metric("已存数据量", f"{latest_count} 条")
-                    else:
-                        st.error(f" 保存第 {index+1} 条记录失败（文件写入错误）")
-                except Exception as csv_err:
-                    st.error(f"保存第 {index+1} 条记录失败: {csv_err}")
-                    logger.error(f"保存CSV失败 - 行号:{index+1}, 错误:{csv_err}")
-                with backup_info_placeholder:
-                    st.info(f"已自动保存第 {index+1} 条记录。如遇中断，下次将从第 {index+2} 行继续")
-                progress_bar.progress((index + 1) / total)
-                time.sleep(0.5) 
-                
-            except Exception as row_err:
-                logger.error(f"处理第{index+1}行失败（跳过）: {row_err}")
-                st.warning(f" 跳过第 {index+1} 行（处理失败）: {row_err}")
-                progress_bar.progress((index + 1) / total)
-                continue
-    except Exception as e:
-        st.error(f"批量处理意外中断: {e}")
-        logger.error(f"批量处理中断: {e}")
-        return None
-    finally:
-        clear_process_progress()
-    
-    # 导出Excel（新增：导出列中加入是否兼类）
-    final_data = st.session_state.processed_history
-    if not final_data:
-        return None
-    result_df = pd.DataFrame(final_data)
-    try:
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            cols = ["词语", "动词", "名词", "名动词", "差值/距离", "预测词类", "是否兼类", "原始响应"]
-            result_df[cols].to_excel(writer, index=False, sheet_name='分析结果')
-            
-            workbook = writer.book
-            worksheet = writer.sheets['分析结果']
-            yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-            
-            for i, data_row in enumerate(final_data):
-                row_num = i + 2
-                pred = data_row["预测词类"]
-                target_idx = {"动词": 2, "名词": 3, "名动词": 4}.get(pred)
-                if target_idx:
-                    worksheet.cell(row=row_num, column=target_idx).fill = yellow_fill
-                    
-        return output.getvalue()
-    except Exception as e:
-        st.error(f"Excel 生成失败: {e}")
-        logger.error(f"生成Excel失败: {e}")
-        return None
 
 # ===============================
 # 主页面逻辑
 # ===============================
 def main():
-    # ===== 顶部标题高亮卡片 =====
     st.markdown("""
     <div class="title-header-card">
         <h1>基于大语言模型的汉语词类隶属度检测划类平台</h1>
@@ -1185,27 +788,21 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    # ===== 顶部控制区 =====
+    # ===== 顶部控制区 (三列布局，新增实验批次码) =====
     control_container = st.container()
     with control_container:
-        col1, col2 = st.columns([3, 1])
+        col1, col2, col3 = st.columns([5, 3, 2])
         
         with col1:
             st.markdown('<div class="section-title"><span class="icon-dot"></span> 模型设置（LLM）</div>', unsafe_allow_html=True)
-            
             if not AVAILABLE_MODEL_OPTIONS:
-                st.error("找不到可用的 API Key！请设置以下任意一个环境变量来启用模型:")
-                for name, info in MODEL_OPTIONS.items():
-                    st.code(f"export {info['env_var']}='你的API Key'", language="bash")
-                st.markdown('</div>', unsafe_allow_html=True)
+                st.error("找不到可用的 API Key！请设置环境变量。")
                 selected_model_display_name = list(MODEL_OPTIONS.keys())[0]
                 selected_model_info = MODEL_OPTIONS[selected_model_display_name]
                 st.selectbox("选择大模型 (不可用)", list(MODEL_OPTIONS.keys()), disabled=True)
             else:
                 selected_model_display_name = st.selectbox(
-                    "选择大模型", 
-                    list(AVAILABLE_MODEL_OPTIONS.keys()), 
-                    key="model_select"
+                    "选择大模型", list(AVAILABLE_MODEL_OPTIONS.keys()), key="model_select"
                 )
                 selected_model_info = AVAILABLE_MODEL_OPTIONS[selected_model_display_name]
                 st.markdown(f"""
@@ -1214,16 +811,30 @@ def main():
                     <span style="color: #64748b; font-size: 0.85rem;">提供商: {selected_model_info['provider'].upper()}</span>
                 </div>
                 """, unsafe_allow_html=True)
-            
-            st.markdown('</div>', unsafe_allow_html=True)
                 
         with col2:
+            st.markdown('<div class="section-title"><span class="icon-dot"></span> 实验配置</div>', unsafe_allow_html=True)
+            if "project_code" not in st.session_state:
+                st.session_state.project_code = "default_task"
+            
+            # 使用 Project Code 进行隔离
+            project_code_input = st.text_input(
+                "实验批次码 (Project Code)", 
+                value=st.session_state.project_code, 
+                help="用于隔离不同词表集的量化分析任务。在不同设备输入相同的批次码即可接续处理进度。"
+            )
+            st.session_state.project_code = project_code_input
+            
+            # 动态获取当前批次对应的存储路径
+            BACKUP_FILE, PROGRESS_FILE = get_project_files(st.session_state.project_code)
+                
+        with col3:
             st.markdown('<div class="section-title" style="justify-content: center;"><span class="icon-dot"></span> 连接测试</div>', unsafe_allow_html=True)
             st.write("")
             if not selected_model_info["api_key"]:
-                st.button("测试模型链接 (不可用)", type="secondary", disabled=True)
+                st.button("测试模型链接 (不可用)", type="secondary", disabled=True, use_container_width=True)
             else:
-                if st.button("测试模型链接", type="secondary"):
+                if st.button("测试模型链接", type="secondary", use_container_width=True):
                     with st.spinner("正在测试连接..."):
                         ok, _, err_msg = call_llm_api_cached(
                             _provider=selected_model_info["provider"],
@@ -1232,11 +843,8 @@ def main():
                             messages=[{"role": "user", "content": "请回复'pong'"}],
                             max_tokens=10
                         )
-                    if ok:
-                        st.success("成功！")
-                    else:
-                        st.error(f"失败: {err_msg}")
-            st.markdown('</div>', unsafe_allow_html=True)
+                    if ok: st.success("成功！")
+                    else: st.error(f"失败: {err_msg}")
 
     st.markdown("---")
 
@@ -1248,31 +856,19 @@ def main():
         st.markdown('<div class="section-title"><span class="icon-dot"></span> 词语输入</div>', unsafe_allow_html=True)
         word = st.text_input("请输入要分析的汉语词语", placeholder="例如：苹果、跑、美丽...", key="word_input")
         analyze_button = st.button(
-            "开始分析", 
-            type="primary",
-            disabled=not (selected_model_info["api_key"] and word)
+            "开始分析", type="primary", disabled=not (selected_model_info["api_key"] and word)
         )
         
         with st.expander("ℹ️ 使用说明", expanded=False):
-            st.info("""
-            1. **配置 API Key**: 请在运行程序前设置必要的环境变量。
-            2. **词语输入**：在上方的"词语输入"框中输入一个汉语词。
-            3. **开始分析**：点击"开始分析"按钮。
-            4. **结果解析**：系统将显示隶属度、兼类属性、雷达图和详细规则得分。
-            """)
-            st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+            st.info("在上方输入词语，点击开始分析。系统将显示隶属度、兼类属性、雷达图和详细规则得分。")
 
         if analyze_button and word and selected_model_info["api_key"]:
             status_placeholder = st.empty()
             status_placeholder.info(f"正在为词语「{word}」启动分析，使用模型：{selected_model_display_name}...")
 
-            # 接收新增的兼类判定返回值
             scores_all, raw_text, predicted_pos, explanation, is_dual_category = ask_model_for_pos_and_scores(
-                word=word,
-                provider=selected_model_info["provider"],
-                model=selected_model_info["model"],
-                api_key=selected_model_info["api_key"]
+                word=word, provider=selected_model_info["provider"],
+                model=selected_model_info["model"], api_key=selected_model_info["api_key"]
             )
             
             status_placeholder.empty()
@@ -1284,12 +880,9 @@ def main():
                 jianlei_badge_color = "#f59e0b" if is_dual_category else "#3b82f6"
                 jianlei_text = "属于兼类词" if is_dual_category else "非兼类词"
                 
-                # 成功结果高亮卡片（新增兼类判定展示）
                 st.markdown(f"""
                 <div class="result-success-card">
-                    <div style="font-size: 1.1rem; font-weight: 600; color: #065f46;">
-                        分析完成
-                    </div>
+                    <div style="font-size: 1.1rem; font-weight: 600; color: #065f46;">分析完成</div>
                     <div style="margin-top: 0.5rem; font-size: 1rem; color: #065f46; line-height: 1.8;">
                         词语「<strong>{word}</strong>」最可能的词类是 
                         <span style="background: #10b981; color: white; padding: 0.2rem 0.6rem; border-radius: 6px; font-weight: 600;">{predicted_pos}</span>
@@ -1305,7 +898,6 @@ def main():
                 with col_results_1:
                     st.markdown('<div class="section-title"><span class="icon-dot"></span> 词类隶属度排名</div>', unsafe_allow_html=True)
                     top10 = get_top_10_positions(membership)
-                    
                     for i, (pos, score) in enumerate(top10):
                         rank_class = f"top-{i+1}" if i < 3 else ""
                         st.markdown(f"""
@@ -1317,11 +909,9 @@ def main():
                             <span style="font-weight: 700; color: #2d5a87; font-size: 1.1rem;">{score:.4f}</span>
                         </div>
                         """, unsafe_allow_html=True)
-                    st.markdown('</div>', unsafe_allow_html=True)
                     
                     st.markdown('<div class="section-title"><span class="icon-dot"></span> 词类隶属度雷达图</div>', unsafe_allow_html=True)
                     plot_radar_chart_streamlit(dict(top10), f"「{word}」的词类隶属度分布")
-                    st.markdown('</div>', unsafe_allow_html=True)
 
                 with col_results_2:
                     st.markdown('<div class="section-title"><span class="icon-dot"></span> 各词类详细得分</div>', unsafe_allow_html=True)
@@ -1334,39 +924,22 @@ def main():
                         with st.expander(f"**{pos}** (总分: {total_score}, 最高分规则: {max_rule[0]} - {max_rule[1]}分)"):
                             rule_data = []
                             for rule_name, rule_score in scores_all[pos].items():
-                                rule_desc = ""
-                                if pos in RULE_SETS:
-                                    for rule in RULE_SETS[pos]:
-                                        if rule["name"] == rule_name:
-                                            rule_desc = rule["desc"]
-                                            break
-                                rule_data.append({
-                                    "规则代码": rule_name,
-                                    "规则描述": rule_desc,
-                                    "得分": rule_score
-                                })
-                            rule_data_sorted = sorted(rule_data, key=lambda x: x["得分"], reverse=True)
-                            rule_df = pd.DataFrame(rule_data_sorted)
+                                rule_desc = next((r["desc"] for r in RULE_SETS.get(pos, []) if r["name"] == rule_name), "")
+                                rule_data.append({"规则代码": rule_name, "规则描述": rule_desc, "得分": rule_score})
+                            rule_df = pd.DataFrame(sorted(rule_data, key=lambda x: x["得分"], reverse=True))
                             styled_df = rule_df.style.map(
-                                lambda x: "color: #ff4b4b; font-weight: bold"
-                                if isinstance(x, (int, float)) and x < 0 else "",
+                                lambda x: "color: #ff4b4b; font-weight: bold" if isinstance(x, (int, float)) and x < 0 else "",
                                 subset=["得分"]
                             )
-                            st.dataframe(
-                                styled_df,
-                                use_container_width=True,
-                                height=min(len(rule_df) * 30 + 50, 400)
-                            )
-                    st.markdown('</div>', unsafe_allow_html=True)
+                            st.dataframe(styled_df, use_container_width=True, height=min(len(rule_df) * 30 + 50, 400))
                     
                     st.markdown('<div class="section-title"><span class="icon-dot"></span> 模型原始响应</div>', unsafe_allow_html=True)
                     with st.expander("点击展开查看原始响应", expanded=False):
                         st.code(raw_text, language="text")
-                    st.markdown('</div>', unsafe_allow_html=True)
 
     # ===== 批量处理 =====
     with tab2:
-        st.markdown('<div class="section-title"><span class="icon-dot"></span> 批量任务实时监控</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="section-title"><span class="icon-dot"></span> 批量任务实时监控 (当前批次: <code>{st.session_state.project_code}</code>)</div>', unsafe_allow_html=True)
         
         st.markdown("#### 控制面板")
         ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2, 1, 1])
@@ -1378,36 +951,34 @@ def main():
             
             has_history = os.path.exists(BACKUP_FILE)
             if has_history:
-                st.caption(f"存储位置: `{BACKUP_FILE}`")
+                st.caption(f"当前存储表: `{BACKUP_FILE.name}`")
         
         with ctrl_col2:
             if os.path.exists(BACKUP_FILE):
                 with open(BACKUP_FILE, "rb") as f:
                     st.download_button(
-                        label="下载历史文件(CSV)",
-                        data=f,
-                        file_name=f"batch_results_{time.strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv",
-                        use_container_width=True
+                        label="下载历史文件(CSV)", data=f,
+                        file_name=f"{st.session_state.project_code}_results_{time.strftime('%Y%m%d')}.csv",
+                        mime="text/csv", use_container_width=True
                     )
             else:
                 st.button("下载历史文件", disabled=True, use_container_width=True)
+                
         with ctrl_col3:
-            if st.button("清空本地记录", use_container_width=True, type="secondary"):
+            if st.button("清空本批次记录", use_container_width=True, type="secondary"):
                 if os.path.exists(BACKUP_FILE):
                     try:
                         os.remove(BACKUP_FILE)
-                        clear_process_progress() 
-                        st.success("已清空本地记录和进度")
+                        clear_process_progress(PROGRESS_FILE) 
+                        st.success(f"已清空批次 {st.session_state.project_code} 的本地记录")
                         metric_placeholder.metric("已存数据量", "0 条")
                         st.rerun()
                     except Exception as e:
                         st.error(f"清空记录失败: {e}")
                 else:
-                    st.info("暂无本地记录可清空")
+                    st.info("当前批次暂无记录可清空")
         
         st.divider()
-        
         st.markdown("#### 运行状态")
         progress_bar = st.progress(0)
         status_info = st.empty()
@@ -1418,8 +989,7 @@ def main():
             try:
                 table_placeholder.dataframe(
                     pd.read_csv(BACKUP_FILE, encoding='utf-8-sig'), 
-                    use_container_width=True, 
-                    height=300
+                    use_container_width=True, height=300
                 )
             except Exception as e:
                 table_placeholder.error(f"显示历史记录失败: {e}")
@@ -1427,7 +997,6 @@ def main():
             table_placeholder.info("暂无数据。上传文件并点击开始后，结果将在此逐行实时显示。")
         
         st.divider()
-        
         st.markdown("#### 上传新任务")
         uploaded_file = st.file_uploader("选择 Excel 文件", type=["xlsx", "xls"])
         
@@ -1459,11 +1028,25 @@ def main():
                                     st.info(f"已跳过 {len(existing_words)} 条已处理记录")
                                 except Exception as e:
                                     st.warning(f"读取已处理记录失败，将重新处理所有数据: {e}")
-                            total_rows = len(df_input)
                             
+                            total_rows = len(df_input)
+                            file_name = f"excel_{int(time.time())}"
+                            
+                            # 恢复进度加载
+                            last_progress = load_process_progress(PROGRESS_FILE)
+                            start_row = 0
+                            if last_progress and last_progress.get("file_name") == file_name:
+                                start_row = last_progress.get("current_row", 0)
+                                st.info(f"检测到未完成的任务，从第 {start_row+1} 行继续")
+
                             try:
-                                for index, row in df_input.iterrows():
+                                for index in range(start_row, total_rows):
+                                    row = df_input.iloc[index]
                                     word = str(row[target_col]).strip()
+                                    
+                                    # 记录进度点
+                                    save_process_progress(file_name, index, total_rows, PROGRESS_FILE)
+                                    
                                     if not word:
                                         status_info.write(f"**跳过空值**: 第 {index+1}/{total_rows} 行")
                                         progress_bar.progress((index + 1) / total_rows)
@@ -1483,7 +1066,6 @@ def main():
                                     scores, raw_text, pred_pos, explanation, is_dual_category = {}, "", "处理失败", "无响应", False
                                     for attempt in range(max_retries):
                                         try:
-                                            # 接收新增的兼类判定返回值
                                             scores, raw_text, pred_pos, explanation, is_dual_category = ask_model_for_pos_and_scores(
                                                 word=word,
                                                 provider=selected_model_info["provider"],
@@ -1491,15 +1073,13 @@ def main():
                                                 api_key=selected_model_info["api_key"]
                                             )
                                             success = bool(scores)
-                                            if success:
-                                                break
+                                            if success: break
                                             time.sleep(2)
                                         except Exception as e:
                                             explanation = f"调用异常: {str(e)}"
                                             logger.error(f"处理词语{word}失败（尝试{attempt+1}）: {e}")
                                             time.sleep(2)
                                     
-                                    # 构造数据行（新增：是否兼类）
                                     membership = calculate_membership(scores) if success else {}
                                     new_row = {
                                         "序数": index + 1,
@@ -1526,7 +1106,6 @@ def main():
                                             st.error(f"保存第 {index+1} 条记录失败（文件写入错误）")
                                     except Exception as csv_err:
                                         st.error(f"保存第 {index+1} 条记录失败: {csv_err}")
-                                        logger.error(f"保存CSV失败 - 行号:{index+1}, 错误:{csv_err}")
                                     
                                     try:
                                         updated_df = pd.read_csv(BACKUP_FILE, encoding='utf-8-sig')
@@ -1537,8 +1116,8 @@ def main():
                                     time.sleep(0.5) 
                                 
                                 progress_bar.progress(100)
-                                status_info.success(f"批量处理完成！总处理量: {total_rows} 条，已保存到 {BACKUP_FILE}")
-                                clear_process_progress() 
+                                status_info.success(f"实验批次 {st.session_state.project_code} 批量处理完成！已保存到 {BACKUP_FILE.name}")
+                                clear_process_progress(PROGRESS_FILE) 
                                 st.rerun()
                             except Exception as batch_err:
                                 logger.error(f"批量处理主循环中断: {batch_err}")
@@ -1549,13 +1128,9 @@ def main():
                     st.markdown('</div>', unsafe_allow_html=True)
             except Exception as e:
                 st.error(f"读取Excel文件失败: {e}")
-                logger.error(f"读取Excel失败: {e}")
         
         st.markdown('</div>', unsafe_allow_html=True)
 
-# ===============================
-# 运行主函数
-# ===============================
 if __name__ == "__main__":
     main()
 
