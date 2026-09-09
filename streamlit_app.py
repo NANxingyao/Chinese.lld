@@ -356,6 +356,28 @@ RULE_SETS = {
 # ===============================
 # 模型配置 (支持 API 中转与路径修复)
 # ===============================
+def get_moonshot_base_url() -> str:
+    """
+    获取并规范化 Kimi API 服务地址。
+    最终 base_url 只保留域名，/v1/chat/completions 由 endpoint 统一追加。
+    """
+    raw_url = os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn").strip()
+    if not raw_url:
+        raw_url = "https://api.moonshot.cn"
+
+    # 兼容旧环境变量：api.moonshot.ai -> 当前官方服务地址
+    raw_url = raw_url.replace("api.moonshot.ai", "api.moonshot.cn")
+    raw_url = raw_url.rstrip("/")
+
+    # 防止 .env 中误写成完整接口地址或带 /v1 的地址
+    for suffix in ("/v1/chat/completions", "/v1"):
+        if raw_url.endswith(suffix):
+            raw_url = raw_url[:-len(suffix)].rstrip("/")
+            break
+
+    return raw_url
+
+
 MODEL_CONFIGS = {
     "deepseek": {
         "base_url": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
@@ -385,12 +407,19 @@ MODEL_CONFIGS = {
         },
     },
    "moonshot": {
-        "base_url": os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn"),
+        "base_url": get_moonshot_base_url(),
         "endpoint": "/v1/chat/completions",
-        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        "headers": lambda key: {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        },
         "payload": lambda model, messages, **kw: {
-            "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), 
-            "temperature": kw.get("temperature", 0.0), "stream": True,
+            "model": model,
+            "messages": messages,
+            "max_tokens": kw.get("max_tokens", 4096),
+            "temperature": kw.get("temperature", 0.0),
+            "stream": True,
         },
     },
     "qwen": {
@@ -429,7 +458,7 @@ MODEL_OPTIONS = {
         "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
     },
     "Moonshot（Kimi）": {
-        "provider": "moonshot", "model": "moonshot-v1-32k", 
+        "provider": "moonshot", "model": "kimi-k2.6",
         "api_key": os.getenv("MOONSHOT_API_KEY"), "env_var": "MOONSHOT_API_KEY"
     },
     "Qwen（通义千问）": {
@@ -618,7 +647,15 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
                     try: detail = response.json()
                     except: detail = response.text
                     
-                    if status_code == 404: error_msg = f"路径错误 (404)。请确保请求地址正确：{url}"
+                    if status_code == 404:
+                        if _provider == "moonshot":
+                            error_msg = (
+                                f"Kimi 路径错误 (404)：{url}\n"
+                                "当前代码要求：https://api.moonshot.cn/v1/chat/completions。"
+                                "如果 .env 中存在 MOONSHOT_BASE_URL，请确认它没有指向旧地址。"
+                            )
+                        else:
+                            error_msg = f"路径错误 (404)。请确保请求地址正确：{url}"
                     elif status_code == 401: error_msg = "鉴权失败 (401)。请检查 API Key 权限。"
                     else: error_msg = f"API 错误: {status_code} - {detail}"
                     
