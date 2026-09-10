@@ -10,6 +10,10 @@ import logging
 import subprocess
 import sys
 import traceback
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 if os.name != "nt":
     import fcntl
@@ -249,109 +253,161 @@ def _file_lock(path: Path):
     return _cm()
 
 
+
 def _normalize_word(word: str) -> str:
     if word is None:
         return ""
     return re.sub(r"[\s\u200b\ufeff]+", "", str(word)).strip()
 
 
-def clean_csv_duplicates(file_path: Path):
-    """按“序数”清理历史重复；同一个词语出现在不同 Excel 行时必须保留。"""
+def _read_result_df_locked(file_path: Path) -> pd.DataFrame:
     if not file_path.exists():
-        return
-    try:
-        with _file_lock(file_path):
-            df = pd.read_csv(file_path, encoding="utf-8-sig")
-            original_len = len(df)
-            if "序数" in df.columns:
-                # 序数是本批任务真正的唯一键；保留最后一次结果
-                seq = pd.to_numeric(df["序数"], errors="coerce")
-                valid_seq = seq.notna()
-                if valid_seq.any():
-                    df = df.copy()
-                    df.loc[valid_seq, "序数"] = seq[valid_seq].astype(int)
-                    df = df.drop_duplicates(subset=["序数"], keep="last")
-            # 对完全相同的残留记录再做一次清理
-            df = df.drop_duplicates(keep="last")
-            if len(df) != original_len:
-                tmp = file_path.with_suffix(file_path.suffix + ".tmp")
-                df.to_csv(tmp, index=False, encoding="utf-8-sig")
-                os.replace(tmp, file_path)
-                logger.warning(f"已清理 {original_len - len(df)} 条历史重复记录：{file_path.name}")
-    except Exception as e:
-        logger.error(f"清理 CSV 重复项失败: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+        return pd.DataFrame()
+    return pd.read_csv(file_path, encoding="utf-8-sig")
 
 
-def get_processed_row_numbers(file_path: Path) -> set[int]:
-    """读取结果表中已经成功提交的 Excel 行号（序数）。"""
-    if not file_path.exists():
-        return set()
-    try:
-        df = pd.read_csv(file_path, encoding="utf-8-sig", usecols=["序数"])
-        vals = pd.to_numeric(df["序数"], errors="coerce").dropna().astype(int)
-        return set(vals.tolist())
-    except Exception as e:
-        logger.warning(f"读取已处理序数失败: {type(e).__name__}: {e}")
-        return set()
-
-
-def find_first_unprocessed_row(file_path: Path, total_rows: int) -> int:
-    """从 0 开始返回第一个尚未成功写入结果表的 Excel 行索引。
-    即使后面的行已经存在，也不会跳过最前面的缺口。
+def repair_result_file(file_path: Path, total_rows: int) -> int:
     """
-    if total_rows <= 0:
-        return 0
+    严格修复历史结果，建立“连续前缀”不变量：
+    1. 每个序数最多一条；
+    2. 结果按序数升序；
+    3. 只保留从 1 开始连续成功的结果；
+    4. 一旦发现第一个缺口，缺口后的历史结果全部删除，之后从缺口重新计算。
+    返回下一个应该处理的 0-based index。
+    """
+    file_path.parent.mkdir(parents=True, exist_ok=True)
     with _file_lock(file_path):
-        processed = get_processed_row_numbers(file_path)
-    for idx in range(total_rows):
-        if idx + 1 not in processed:
-            return idx
+        if not file_path.exists():
+            return 0
+        try:
+            df = pd.read_csv(file_path, encoding="utf-8-sig")
+        except Exception as e:
+            raise RuntimeError(f"读取结果 CSV 失败：{type(e).__name__}: {e}") from e
+
+        if df.empty:
+            return 0
+        if "序数" not in df.columns:
+            # 旧文件没有序数，无法安全续跑；保留文件但从头开始。
+            backup = file_path.with_suffix(".legacy.csv")
+            try:
+                os.replace(file_path, backup)
+            except OSError:
+                pass
+            return 0
+
+        seq = pd.to_numeric(df["序数"], errors="coerce")
+        df = df[seq.notna()].copy()
+        if df.empty:
+            file_path.unlink(missing_ok=True)
+            return 0
+
+        df["序数"] = pd.to_numeric(df["序数"], errors="coerce").astype(int)
+        df = df[(df["序数"] >= 1) & (df["序数"] <= total_rows)].copy()
+        if df.empty:
+            file_path.unlink(missing_ok=True)
+            return 0
+
+        # 同一序数只保留最后一条，然后排序。
+        df = df.drop_duplicates(subset=["序数"], keep="last")
+        df = df.sort_values("序数", kind="stable")
+
+        present = set(df["序数"].tolist())
+        contiguous_end = 0
+        for n in range(1, total_rows + 1):
+            if n in present:
+                contiguous_end = n
+            else:
+                break
+
+        repaired = df[df["序数"] <= contiguous_end].copy()
+        tmp = file_path.with_suffix(file_path.suffix + ".repair.tmp")
+        repaired.to_csv(tmp, index=False, encoding="utf-8-sig")
+        os.replace(tmp, file_path)
+
+        removed = len(df) - len(repaired)
+        if removed:
+            logger.warning(
+                f"结果文件发现非连续/重复历史数据，已删除 {removed} 条缺口后的旧记录；"
+                f"本次从序数 {contiguous_end + 1} 继续。"
+            )
+
+        return contiguous_end
+
+
+def get_contiguous_completed_row(file_path: Path, total_rows: int) -> int:
+    """返回已经连续完成的条数。必须持锁读取。"""
+    if total_rows <= 0 or not file_path.exists():
+        return 0
+    df = pd.read_csv(file_path, encoding="utf-8-sig", usecols=["序数"])
+    seq = pd.to_numeric(df["序数"], errors="coerce").dropna().astype(int)
+    present = set(seq.tolist())
+    for n in range(1, total_rows + 1):
+        if n not in present:
+            return n - 1
     return total_rows
 
 
-def append_result_once(result_df: pd.DataFrame, file_path: Path, row_number: int) -> tuple[bool, str]:
-    """Exactly-once 提交：检查与写入在同一把锁中完成，绝不写同一“序数”两次。"""
+def append_result_strict(result_df: pd.DataFrame, file_path: Path, row_number: int) -> tuple[bool, str]:
+    """
+    严格顺序提交。
+    只有 row_number == CSV 当前连续完成数 + 1 时才允许写入。
+    绝不允许把后面的行提前写进结果表。
+    """
     file_path.parent.mkdir(parents=True, exist_ok=True)
     with _file_lock(file_path):
         try:
-            if file_path.exists():
-                try:
-                    current = pd.read_csv(file_path, encoding="utf-8-sig")
-                except Exception as e:
-                    raise RuntimeError(f"读取结果文件失败：{type(e).__name__}: {e}") from e
+            current = _read_result_df_locked(file_path)
+
+            if current.empty:
+                expected = 1
             else:
-                current = pd.DataFrame()
+                if "序数" not in current.columns:
+                    return False, "结果文件缺少“序数”列，无法安全继续"
+                seq = pd.to_numeric(current["序数"], errors="coerce").dropna().astype(int)
+                current = current[seq.notna()].copy()
+                current["序数"] = seq.values
 
-            if not current.empty and "序数" in current.columns:
-                nums = pd.to_numeric(current["序数"], errors="coerce").dropna().astype(int)
-                if int(row_number) in set(nums.tolist()):
-                    return True, "already_exists"
+                # 去重并排序，确保旧文件不会破坏顺序不变量。
+                current = current.drop_duplicates(subset=["序数"], keep="last")
+                current = current.sort_values("序数", kind="stable")
+                expected = 1
+                present = set(current["序数"].tolist())
+                while expected in present:
+                    expected += 1
 
-            combined = pd.concat([current, result_df], ignore_index=True) if not current.empty else result_df.copy()
-            if "序数" in combined.columns:
-                seq = pd.to_numeric(combined["序数"], errors="coerce")
-                combined = combined[seq.notna()].copy()
-                combined["序数"] = pd.to_numeric(combined["序数"], errors="coerce").astype(int)
-                combined = combined.drop_duplicates(subset=["序数"], keep="last")
-                combined = combined.sort_values("序数", kind="stable")
-            combined = combined.drop_duplicates(keep="last")
+            if row_number < expected:
+                return True, "already_exists"
+            if row_number > expected:
+                return False, f"顺序冲突：当前只能提交序数 {expected}，收到 {row_number}"
+
+            result = result_df.copy()
+            result["序数"] = int(row_number)
+
+            combined = pd.concat([current, result], ignore_index=True) if not current.empty else result
+            combined = combined.drop_duplicates(subset=["序数"], keep="last")
+            combined = combined.sort_values("序数", kind="stable")
+
+            # 最终硬校验：序数必须严格从 1..N 连续。
+            final_seq = combined["序数"].astype(int).tolist()
+            if final_seq != list(range(1, len(final_seq) + 1)):
+                return False, "结果文件连续序数校验失败，拒绝写入"
 
             tmp = file_path.with_suffix(file_path.suffix + ".tmp")
             combined.to_csv(tmp, index=False, encoding="utf-8-sig")
             os.replace(tmp, file_path)
             return True, "written"
         except Exception as e:
-            logger.error(f"结果提交失败（序数={row_number}）: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+            logger.error(f"严格提交失败（序数={row_number}）:\n{traceback.format_exc()}")
             return False, f"{type(e).__name__}: {e}"
 
 
 def spawn_detached(cmd, cwd):
-    """跨平台脱离式进程启动，防止 Streamlit 页面刷新误杀子进程。"""
+    """跨平台脱离式进程启动。"""
     kwargs = {}
-    if os.name == 'nt':
-        kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
-        kwargs['start_new_session'] = True
+        kwargs["start_new_session"] = True
     return subprocess.Popen(cmd, cwd=cwd, **kwargs)
 
 # ===============================
@@ -597,6 +653,34 @@ def _load_job_state(state_file: Path):
         return {}
 
 
+
+def _terminate_stale_job_processes(job_state_file: Path, keep_pids=None):
+    """清理同一批次残留的旧 Worker/Supervisor，避免旧版本进程继续向同一 CSV 写数据。"""
+    keep_pids = {int(p) for p in (keep_pids or []) if p}
+    if psutil is None:
+        return
+    target = str(job_state_file.resolve())
+    current_pid = os.getpid()
+    for proc in psutil.process_iter(["pid", "cmdline"]):
+        try:
+            pid = int(proc.info["pid"])
+            if pid == current_pid or pid in keep_pids:
+                continue
+            cmdline = " ".join(proc.info.get("cmdline") or [])
+            if target not in cmdline:
+                continue
+            if "--worker" not in cmdline and "--supervisor" not in cmdline:
+                continue
+            logger.warning(f"发现同一批次残留服务进程 PID={pid}，准备终止以防止重复写入。")
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except psutil.TimeoutExpired:
+                proc.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, ProcessLookupError, OSError):
+            continue
+
+
 def _pid_alive(pid):
     """严格判断进程是否存在；不再使用会永远返回 True 的兜底逻辑。"""
     try:
@@ -622,47 +706,58 @@ def _service_file(job_state_file: Path, suffix: str) -> Path:
     return job_state_file.with_name(job_state_file.stem + suffix)
 
 
-def _batch_worker(df_input, target_col, file_name, backup_file, provider, model, api_key, job_state_file):
-    total_rows = len(df_input)
-    # 只在真正开始执行任务时清理一次旧历史；不让前端渲染阶段碰 CSV。
-    clean_csv_duplicates(backup_file)
 
-    # 不盲目信任 next_row：以 CSV 中“已经成功提交的序数”为准，寻找最前面的缺口。
-    start_row = find_first_unprocessed_row(backup_file, total_rows)
+def _batch_worker(df_input, target_col, file_name, backup_file, provider, model, api_key, job_state_file):
+    """
+    单 Worker、严格串行、连续提交。
+    不做并发，不允许后序号提前写入。
+    """
+    total_rows = len(df_input)
+
+    # 启动时一次性修复旧结果：去重、排序、删除第一个缺口之后的历史结果。
+    try:
+        start_row = repair_result_file(backup_file, total_rows)
+    except Exception as e:
+        _write_job_state(
+            job_state_file,
+            status="failed",
+            error=f"启动时修复结果文件失败：{type(e).__name__}: {e}\n{traceback.format_exc()}"
+        )
+        return
+
     _write_job_state(
-        job_state_file, status="running", file_name=file_name, total_rows=total_rows,
-        next_row=start_row, current_row=max(start_row - 1, 0), current_word="",
-        retry_count=0, error="", completed_rows=start_row
+        job_state_file,
+        status="running",
+        file_name=file_name,
+        total_rows=total_rows,
+        next_row=start_row,
+        current_row=max(0, start_row - 1),
+        current_word="",
+        retry_count=0,
+        error="",
+        completed_rows=start_row
     )
 
     while start_row < total_rows:
         index = start_row
         row_number = index + 1
-        word = str(df_input.iloc[index][target_col]).strip()
+        word = _normalize_word(df_input.iloc[index][target_col])
 
         if not word or word.lower() == "nan":
-            start_row = index + 1
-            _write_job_state(job_state_file, status="running", next_row=start_row,
-                             current_row=index, current_word="（空值，跳过）", completed_rows=start_row,
-                             retry_count=0, error="")
+            start_row = row_number
+            _write_job_state(
+                job_state_file,
+                status="running",
+                current_row=index,
+                current_word="（空值，跳过）",
+                next_row=start_row,
+                completed_rows=start_row,
+                retry_count=0,
+                error=""
+            )
             continue
 
-        # 如果该行已经由另一个 Worker 提交，直接顺延；按序数判断，绝不按词语判断。
-        with _file_lock(backup_file):
-            processed = False
-            if backup_file.exists():
-                try:
-                    current = pd.read_csv(backup_file, encoding="utf-8-sig", usecols=["序数"])
-                    processed = row_number in set(pd.to_numeric(current["序数"], errors="coerce").dropna().astype(int).tolist())
-                except Exception as e:
-                    raise RuntimeError(f"检查已处理序数失败：{type(e).__name__}: {e}") from e
-        if processed:
-            start_row = index + 1
-            _write_job_state(job_state_file, status="running", next_row=start_row,
-                             current_row=index, current_word=word, completed_rows=start_row,
-                             retry_count=0, error="")
-            continue
-
+        # 绝不跳过后面的行。当前行必须先成功。
         success = False
         last_error = ""
         retry_count = 0
@@ -680,6 +775,7 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
                 error=last_error,
                 completed_rows=index
             )
+
             try:
                 scores, raw_text, pred_pos, explanation, is_dual_category = ask_model_for_pos_and_scores(
                     word, provider, model, api_key, show_ui=False
@@ -690,17 +786,25 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
                     last_error = explanation or "模型未返回有效结果"
             except BaseException as e:
                 last_error = f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
-                logger.error(f"词语“{word}”请求失败（第{retry_count}次）:\n{last_error}")
+                logger.error(f"当前任务序数 {row_number}、词语“{word}”第 {retry_count} 次请求失败：\n{last_error}")
 
             if not success:
                 wait_seconds = min(60, max(2, 2 ** min(retry_count - 1, 5)))
-                _write_job_state(job_state_file, status="waiting_retry", current_row=index,
-                                 current_word=word, next_row=index, retry_count=retry_count,
-                                 error=last_error, retry_in_seconds=wait_seconds, completed_rows=index)
+                _write_job_state(
+                    job_state_file,
+                    status="waiting_retry",
+                    current_row=index,
+                    current_word=word,
+                    next_row=index,
+                    retry_count=retry_count,
+                    error=last_error,
+                    retry_in_seconds=wait_seconds,
+                    completed_rows=index
+                )
                 time.sleep(wait_seconds)
 
         membership = calculate_membership(scores)
-        new_row = pd.DataFrame([{
+        result = pd.DataFrame([{
             "序数": row_number,
             "词语": word,
             "动词": membership.get("动词", 0.0),
@@ -713,29 +817,41 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
             "时间戳": time.strftime("%Y-%m-%d %H:%M:%S")
         }])
 
-        _write_job_state(job_state_file, status="saving", current_row=index,
-                         current_word=word, next_row=index, retry_count=retry_count,
-                         completed_rows=index, error="")
-
         committed = False
-        save_error = ""
         save_attempt = 0
         while not committed:
             save_attempt += 1
-            committed, save_result = append_result_once(new_row, backup_file, row_number)
-            if not committed:
-                save_error = save_result
-                wait_seconds = min(30, max(2, 2 ** min(save_attempt - 1, 4)))
-                _write_job_state(job_state_file, status="waiting_save_retry", current_row=index,
-                                 current_word=word, next_row=index, retry_count=save_attempt,
-                                 error=save_error, retry_in_seconds=wait_seconds, completed_rows=index)
-                time.sleep(wait_seconds)
-            else:
-                # already_exists 也算成功提交：另一个进程已经完成了这一行。
+            _write_job_state(
+                job_state_file,
+                status="saving" if save_attempt == 1 else "waiting_save_retry",
+                current_row=index,
+                current_word=word,
+                next_row=index,
+                retry_count=save_attempt,
+                completed_rows=index,
+                error=""
+            )
+            committed, save_message = append_result_strict(result, backup_file, row_number)
+
+            if committed:
                 break
 
-        # 只有结果已经存在于 CSV 后，才能把游标推进到下一行。
-        start_row = index + 1
+            wait_seconds = min(30, max(2, 2 ** min(save_attempt - 1, 4)))
+            _write_job_state(
+                job_state_file,
+                status="waiting_save_retry",
+                current_row=index,
+                current_word=word,
+                next_row=index,
+                retry_count=save_attempt,
+                error=save_message,
+                retry_in_seconds=wait_seconds,
+                completed_rows=index
+            )
+            time.sleep(wait_seconds)
+
+        # 只有严格提交成功以后才能推进。
+        start_row = row_number
         _write_job_state(
             job_state_file,
             status="running",
@@ -748,8 +864,15 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
         )
 
     _write_job_state(
-        job_state_file, status="completed", file_name=file_name, total_rows=total_rows,
-        next_row=total_rows, completed_rows=total_rows, current_word="", retry_count=0, error=""
+        job_state_file,
+        status="completed",
+        file_name=file_name,
+        total_rows=total_rows,
+        next_row=total_rows,
+        completed_rows=total_rows,
+        current_word="",
+        retry_count=0,
+        error=""
     )
 
 
@@ -785,6 +908,8 @@ def _supervisor_entry(job_state_file: Path):
                 if state.get("status") == "completed":
                     return
 
+                # Supervisor 每次重新拉起 Worker 前，清理同一批次残留的旧 Worker。
+                _terminate_stale_job_processes(job_state_file, keep_pids={os.getpid()})
                 worker = spawn_detached(
                     [sys.executable, str(Path(__file__).resolve()), "--worker", str(job_state_file)],
                     str(Path(__file__).resolve().parent)
@@ -832,16 +957,28 @@ def _supervisor_entry(job_state_file: Path):
                     pass
 
 
+
 def start_or_resume_batch_job(df_input, target_col, uploaded_file, file_name, backup_file, provider, model, env_var, job_state_file):
-    # 启动动作本身也加 Supervisor 锁，避免双击/页面并发产生两个 Supervisor。
+    """
+    启动/继续任务。
+    任何时候同一批次最多只有一个 Supervisor；Supervisor 最多只有一个 Worker。
+    启动新一轮前，会清理同一批次的残留旧进程。
+    """
     supervisor_lock_file = _service_file(job_state_file, ".supervisor.lock")
     with _file_lock(supervisor_lock_file):
         state = _load_job_state(job_state_file)
+
+        # 有活跃 Supervisor：绝不重复启动。
         if _pid_alive(state.get("supervisor_pid")):
             return False, state
 
+        # 现在没有活跃 Supervisor，先把同一批次可能残留的旧 Worker/旧 Supervisor 清掉。
+        _terminate_stale_job_processes(job_state_file, keep_pids=[])
+
         spec = {
-            "input_file": str(BASE_DIR / f"batch_input_{re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', job_state_file.stem)}.xlsx"),
+            "input_file": str(
+                BASE_DIR / f"batch_input_{re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', job_state_file.stem)}.xlsx"
+            ),
             "target_col": target_col,
             "file_name": file_name,
             "backup_file": str(backup_file),
@@ -850,23 +987,38 @@ def start_or_resume_batch_job(df_input, target_col, uploaded_file, file_name, ba
             "env_var": env_var
         }
         Path(spec["input_file"]).write_bytes(uploaded_file.getvalue())
-        tmp = _service_file(job_state_file, ".spec.json.tmp")
-        tmp.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, _service_file(job_state_file, ".spec.json"))
 
-        # 以 CSV 中真实已经提交的行计算续跑点，不依赖旧版本可能错误的 next_row。
-        resume_row = find_first_unprocessed_row(backup_file, len(df_input))
+        spec_file = _service_file(job_state_file, ".spec.json")
+        tmp_spec = spec_file.with_suffix(spec_file.suffix + ".tmp")
+        tmp_spec.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp_spec, spec_file)
+
+        # 先修复旧 CSV，再计算真正的连续提交前缀。
+        resume_row = repair_result_file(backup_file, len(df_input))
         _write_job_state(
             job_state_file,
-            status="starting", file_name=file_name, total_rows=len(df_input),
-            next_row=resume_row, completed_rows=resume_row, current_row=max(resume_row - 1, 0),
-            current_word="", retry_count=0, error=""
+            status="starting",
+            file_name=file_name,
+            total_rows=len(df_input),
+            next_row=resume_row,
+            completed_rows=resume_row,
+            current_row=max(resume_row - 1, 0),
+            current_word="",
+            retry_count=0,
+            error=""
         )
+
         proc = spawn_detached(
             [sys.executable, str(Path(__file__).resolve()), "--supervisor", str(job_state_file)],
             str(Path(__file__).resolve().parent)
         )
-        _write_job_state(job_state_file, status="starting", supervisor_pid=proc.pid, worker_pid=None, error="")
+        _write_job_state(
+            job_state_file,
+            status="starting",
+            supervisor_pid=proc.pid,
+            worker_pid=None,
+            error=""
+        )
         return True, _load_job_state(job_state_file)
 
 
@@ -897,6 +1049,7 @@ def _auto_recover_if_needed(job_state_file: Path):
         if not spec_file.exists():
             return state
 
+        _terminate_stale_job_processes(job_state_file, keep_pids=[])
         proc = spawn_detached(
             [sys.executable, str(Path(__file__).resolve()), "--supervisor", str(job_state_file)],
             str(Path(__file__).resolve().parent)
