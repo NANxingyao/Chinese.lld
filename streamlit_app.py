@@ -5,16 +5,11 @@ import re
 import os
 import pandas as pd
 import plotly.graph_objects as go
-import io
 import time
 import logging
-import threading
 import subprocess
 import sys
-import fcntl
 from typing import Tuple, Dict, Any, List
-from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
 from pathlib import Path
 
 SERVICE_MODE = "--worker" in sys.argv or "--supervisor" in sys.argv
@@ -308,7 +303,7 @@ footer {visibility: hidden;}
 
 /* ===== 后台任务运行转动圈 ===== */
 .running-status{display:flex;align-items:center;gap:.75rem;padding:.9rem 1.1rem;margin:.5rem 0 1rem 0;border-radius:12px;background:linear-gradient(135deg,#eff6ff 0%,#dbeafe 100%);border:1px solid #bfdbfe;color:#1e40af;font-weight:600;}
-.running-spinner{display:inline-block;width:18px;height:18px;min-width:18px;border:3px solid rgba(45,108,184,.22);border-top-color:#2d6cb8;border-radius:50%;animation:batch-spin .75s linear infinite;flex:0 0 auto;}
+.running-spinner{width:18px;height:18px;border:3px solid rgba(45,108,184,.2);border-top-color:#2d6cb8;border-radius:50%;animation:batch-spin .9s linear infinite;flex:0 0 auto;}
 @keyframes batch-spin{to{transform:rotate(360deg);}}
 .batch-detail{margin-top:.35rem;font-size:.9rem;font-weight:500;color:#475569;}
 </style>
@@ -366,77 +361,6 @@ RULE_SETS = {
     ]
 }
 
-# ===============================
-# 模型配置 (支持 API 中转与路径修复)
-# ===============================
-MODEL_CONFIGS = {
-    "deepseek": {
-        "base_url": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-        "endpoint": "/chat/completions",
-        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        "payload": lambda model, messages, **kw: {
-            "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), 
-            "temperature": kw.get("temperature", 0.0), "stream": True, 
-        },
-    },
-    "openai": {
-        "base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-        "endpoint": "/chat/completions",
-        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        "payload": lambda model, messages, **kw: {
-            "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), 
-            "temperature": kw.get("temperature", 0.0), "stream": True,
-        },
-    },
-    "gemini": {
-        "base_url": os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"),
-        "endpoint": "/chat/completions",
-        "headers": lambda key: {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        "payload": lambda model, messages, **kw: {
-            "model": model, "messages": messages, "max_tokens": kw.get("max_tokens", 4096), 
-            "temperature": kw.get("temperature", 0.0), "stream": True,
-        },
-    },
-    "moonshot": {
-        # Kimi 官方 OpenAI 兼容接口。这里不读取旧的 MOONSHOT_BASE_URL，
-        # 防止环境变量里的旧地址覆盖正确配置。最终 URL 为
-        # https://api.moonshot.cn/v1/chat/completions
-        "base_url": "https://api.moonshot.cn/v1",
-        "endpoint": "/chat/completions",
-        "headers": lambda key: {
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json"
-        },
-        "payload": lambda model, messages, **kw: {
-            "model": model,
-            "messages": messages,
-            # K2.6 默认会进行深度思考；本项目只需要最终分类结果与解释，
-            # 因此关闭思考，避免 max_tokens 被 reasoning_content 消耗殆尽。
-            "thinking": {"type": "disabled"},
-            # K2.6 非思考模式使用 temperature=0.6。
-            "temperature": 0.6,
-            "max_tokens": kw.get("max_tokens", 8192),
-            "stream": False,
-        },
-    },
-    "qwen": {
-        "base_url": os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/api/v1"),
-        "endpoint": "/services/aigc/text-generation/generation",
-        "headers": lambda key: {
-            "Authorization": f"Bearer {key}", "Content-Type": "application/json",
-            "X-DashScope-SSE": "enable", "Accept": "text/event-stream"
-        },
-        "payload": lambda model, messages, **kw: {
-            "model": model, "input": {"messages": messages}, 
-            "parameters": {
-                "max_tokens": kw.get("max_tokens", 4096), 
-                "temperature": kw.get("temperature", 0.0),
-                "result_format": "message", "incremental_output": True 
-            },
-        },
-    },
-}
-
 MODEL_OPTIONS = {
     "DeepSeek Chat": {
         "provider": "deepseek", "model": "deepseek-chat", 
@@ -447,11 +371,11 @@ MODEL_OPTIONS = {
         "api_key": os.getenv("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"
     },
     "Google Gemini 1.5 Pro": {
-        "provider": "gemini", "model": "models/gemini-1.5-pro", 
+        "provider": "gemini", "model": "gemini-1.5-pro", 
         "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
     },
     "Google Gemini 1.5 Flash": {
-        "provider": "gemini", "model": "models/gemini-1.5-flash", 
+        "provider": "gemini", "model": "gemini-1.5-flash", 
         "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
     },
     "Moonshot（Kimi）": {
@@ -575,9 +499,7 @@ def safe_write_csv(df, file_path, mode='a', header=False, encoding='utf-8-sig', 
     while retry_count < max_retries:
         try:
             with open(file_path, mode, encoding=encoding) as f:
-                fcntl.flock(f, fcntl.LOCK_EX) 
                 df.to_csv(f, mode=mode, header=header, index=False)
-                fcntl.flock(f, fcntl.LOCK_UN)
             return True
         except Exception as e:
             retry_count += 1
@@ -619,41 +541,66 @@ def clear_process_progress(progress_file):
             logger.error(f"清除进度文件失败: {e}")
 
 # ===============================
+# 进程辅助
+# ===============================
+def spawn_detached(cmd, cwd):
+    """跨平台脱离式进程启动，防止 Streamlit 重启误杀子进程"""
+    kwargs = {}
+    if os.name == 'nt':
+        kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs['start_new_session'] = True
+    return subprocess.Popen(cmd, cwd=cwd, **kwargs)
+
+# ===============================
 # LLM调用与词类判定主函数
 # ===============================
+def get_provider_config(provider, api_key, model, messages, max_tokens, temperature):
+    """生成标准化的大模型统一请求配置（全部对齐 OpenAI SSE 格式）"""
+    base_urls = {
+        "deepseek": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+        "openai": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        # 使用兼容层保障 SSE 解析统一不异常
+        "gemini": os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"), 
+        "moonshot": os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1"),
+        "qwen": os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+    }
+    
+    url = f"{base_urls.get(provider, base_urls['openai']).rstrip('/')}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "stream": provider != "moonshot"  # 保留 kimi 的非流式限制
+    }
+    
+    if provider == "moonshot":
+        payload["max_tokens"] = 8192
+        payload["thinking"] = {"type": "disabled"}
+        payload["temperature"] = 0.6
+    else:
+        payload["max_tokens"] = max_tokens
+        
+    return url, headers, payload
+
 def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, temperature=0.0, max_retries=3, show_ui=True):
-    """统一调用 LLM API。
-    保持原有四个模型的流式调用逻辑，仅对 Kimi K2.6 单独使用非流式模式。
-    """
     if not _api_key:
         return False, {"error": "API Key 为空"}, "API Key 未提供"
-    if _provider not in MODEL_CONFIGS:
-        return False, {"error": f"未知提供商 {_provider}"}, f"未知提供商 {_provider}"
-
-    cfg = MODEL_CONFIGS[_provider]
-    base_url = cfg['base_url'].rstrip('/')
-    endpoint = cfg['endpoint'].lstrip('/')
-    url = f"{base_url}/{endpoint}"
-
-    headers = cfg["headers"](_api_key)
-    payload = cfg["payload"](_model, messages, max_tokens=max_tokens, temperature=temperature)
+        
+    url, headers, payload = get_provider_config(_provider, _api_key, _model, messages, max_tokens, temperature)
     streaming_placeholder = st.empty() if show_ui else None
     error_msg = "未知错误"
-
-    # 只有 Kimi K2.6 走非流式；其他模型严格恢复原来的 stream=True 逻辑
     is_kimi = _provider == "moonshot"
 
     for attempt in range(max_retries):
         try:
-            request_payload = dict(payload)
-            request_payload["stream"] = False if is_kimi else request_payload.get("stream", True)
-
             with requests.post(
-                url,
-                headers=headers,
-                json=request_payload,
-                stream=not is_kimi,
-                timeout=120
+                url, headers=headers, json=payload, stream=not is_kimi, timeout=120
             ) as response:
                 if response.status_code != 200:
                     status_code = response.status_code
@@ -672,70 +619,48 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
                         error_msg = f"请求参数错误 (400)：{detail}"
                     else:
                         error_msg = f"API 错误: {status_code} - {detail}"
-
+                    
                     if status_code in [400, 401, 403, 404]:
                         break
                     response.raise_for_status()
 
-                # Kimi：非流式 JSON 响应
+                # 非流式 (Kimi)
                 if is_kimi:
-                    try:
-                        body = response.json()
-                    except Exception:
-                        body = None
-
+                    try: body = response.json()
+                    except Exception: body = None
                     if isinstance(body, dict):
                         text = extract_text_from_response(body)
                         if text:
-                            if streaming_placeholder is not None:
-                                streaming_placeholder.empty()
+                            if streaming_placeholder is not None: streaming_placeholder.empty()
                             return True, body, ""
-
-                    error_msg = (
-                        f"接口返回 200，但没有解析到文本内容。\n"
-                        f"Content-Type: {response.headers.get('Content-Type', '')}\n"
-                        f"原始响应：{response.text[:2000]}"
-                    )
+                    error_msg = f"接口返回 200，但没有解析到文本内容。\n原始响应：{response.text[:2000]}"
                     break
 
-                # 其他模型：恢复原来的 SSE 流式解析
+                # 标准化 OpenAI 格式 SSE 解析流式 (支持 DeepSeek, OpenAI, Qwen, Gemini)
                 full_content = ""
                 for line in response.iter_lines():
-                    if not line:
-                        continue
+                    if not line: continue
                     line_text = line.decode('utf-8').strip()
-
-                    json_str = line_text[5:].strip() if line_text.startswith("data:") else line_text
-                    if json_str == "[DONE]":
-                        break
+                    if not line_text.startswith("data:"): continue
+                    
+                    json_str = line_text[5:].strip()
+                    if json_str == "[DONE]": break
 
                     try:
                         chunk = json.loads(json_str)
-                        delta_text = ""
                         if "choices" in chunk and len(chunk["choices"]) > 0:
                             choice = chunk["choices"][0]
-                            if "delta" in choice:
-                                delta_text = choice["delta"].get("content", "") or ""
-                            elif "message" in choice:
-                                delta_text = choice["message"].get("content", "") or ""
-                        elif "output" in chunk:
-                            output = chunk["output"]
-                            if isinstance(output, dict) and "choices" in output:
-                                delta_text = output["choices"][0].get("message", {}).get("content", "") or ""
-                            elif isinstance(output, dict) and "text" in output:
-                                delta_text = output["text"] or ""
-
-                        if delta_text:
-                            full_content += delta_text
+                            delta_text = choice.get("delta", {}).get("content", "") or ""
+                            if delta_text:
+                                full_content += delta_text
                     except json.JSONDecodeError:
                         continue
 
                 if full_content:
-                    if streaming_placeholder is not None:
-                        streaming_placeholder.empty()
+                    if streaming_placeholder is not None: streaming_placeholder.empty()
                     return True, {"choices": [{"message": {"content": full_content}}]}, ""
                 else:
-                    error_msg = "模型未返回有效文本内容。"
+                    error_msg = "模型未返回有效文本内容或由于格式不兼容导致解析失败。"
 
         except Exception as e:
             error_msg = f"请求异常（第{attempt+1}次尝试）: {str(e)}"
@@ -869,14 +794,11 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
 # 独立进程批处理：Supervisor + Worker
 # ===============================
 def _write_job_state(state_file: Path, **updates):
-    """原子写入任务状态。服务进程与 Streamlit 页面只通过磁盘通信。"""
     try:
         current = {}
         if state_file.exists():
-            try:
-                current = json.loads(state_file.read_text(encoding="utf-8"))
-            except Exception:
-                current = {}
+            try: current = json.loads(state_file.read_text(encoding="utf-8"))
+            except Exception: current = {}
         current.update(updates)
         current["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
         tmp = state_file.with_suffix(state_file.suffix + ".tmp")
@@ -884,7 +806,6 @@ def _write_job_state(state_file: Path, **updates):
         os.replace(tmp, state_file)
     except Exception as e:
         logger.exception(f"写入任务状态失败: {e}")
-
 
 def _load_job_state(state_file: Path):
     try:
@@ -894,37 +815,20 @@ def _load_job_state(state_file: Path):
         logger.exception(f"读取任务状态失败: {e}")
     return None
 
-
 def _pid_alive(pid):
     try:
         pid = int(pid)
-        if pid <= 0:
-            return False
+        if pid <= 0: return False
         os.kill(pid, 0)
         return True
     except Exception:
         return False
 
-
-def _state_age_seconds(state):
-    """返回任务状态距离当前时间的秒数；无法解析时返回一个保守的较小值。"""
-    try:
-        updated_at = state.get("updated_at")
-        if not updated_at:
-            return 0
-        ts = time.mktime(time.strptime(updated_at, "%Y-%m-%d %H:%M:%S"))
-        return max(0, time.time() - ts)
-    except Exception:
-        return 0
-
-
 def _service_file(job_state_file: Path, suffix: str) -> Path:
     return job_state_file.with_name(job_state_file.stem + suffix)
 
-
 def _batch_worker(df_input, target_col, file_name, backup_file, progress_file,
                   provider, model, api_key, job_state_file):
-    """Worker：只做数据/API/文件操作，不调用任何 Streamlit UI。"""
     total_rows = len(df_input)
     existing_words = set()
     try:
@@ -937,8 +841,7 @@ def _batch_worker(df_input, target_col, file_name, backup_file, progress_file,
 
     state = _load_job_state(job_state_file) or {}
     start_row = int(state.get("next_row", 0))
-    if start_row < 0 or start_row > total_rows:
-        start_row = 0
+    if start_row < 0 or start_row > total_rows: start_row = 0
 
     _write_job_state(
         job_state_file,
@@ -968,11 +871,10 @@ def _batch_worker(df_input, target_col, file_name, backup_file, progress_file,
             continue
 
         success = False
-        last_error = "未知错误"
+        last_error = ""  # [FIX] 修复初始化为未知错误导致的闪现问题
         retry_count = 0
         scores, raw_text, pred_pos, explanation, is_dual_category = {}, "", "处理失败", "无响应", False
 
-        # 当前词永久重试：成功之前绝不跳过。
         while not success:
             retry_count += 1
             _write_job_state(
@@ -1053,9 +955,7 @@ def _batch_worker(df_input, target_col, file_name, backup_file, progress_file,
         completed_rows=total_rows, current_word="", retry_count=0, error=""
     )
 
-
 def _worker_entry(job_state_file: Path):
-    """独立 Worker 进程入口。任何未预期异常都主动退出，让 Supervisor 重启。"""
     spec_file = _service_file(job_state_file, ".spec.json")
     spec = json.loads(spec_file.read_text(encoding="utf-8"))
     input_file = Path(spec["input_file"])
@@ -1065,21 +965,16 @@ def _worker_entry(job_state_file: Path):
     model = spec["model"]
     env_var = spec["env_var"]
     api_key = os.getenv(env_var, "")
-    if not api_key:
-        raise RuntimeError(f"环境变量 {env_var} 未配置")
+    if not api_key: raise RuntimeError(f"环境变量 {env_var} 未配置")
     _batch_worker(
-        df_input=df_input,
-        target_col=target_col,
-        file_name=spec["file_name"],
-        backup_file=Path(spec["backup_file"]),
+        df_input=df_input, target_col=target_col,
+        file_name=spec["file_name"], backup_file=Path(spec["backup_file"]),
         progress_file=Path(spec["progress_file"]),
         provider=provider, model=model, api_key=api_key,
         job_state_file=job_state_file
     )
 
-
 def _supervisor_entry(job_state_file: Path):
-    """Supervisor：Worker 真正退出后自动重新拉起，直到任务完成。"""
     spec_file = _service_file(job_state_file, ".spec.json")
     supervisor_pid_file = _service_file(job_state_file, ".supervisor.pid")
     worker_pid_file = _service_file(job_state_file, ".worker.pid")
@@ -1089,41 +984,31 @@ def _supervisor_entry(job_state_file: Path):
         while True:
             state = _load_job_state(job_state_file) or {}
             status = state.get("status", "")
-            if status == "completed":
-                return
+            if status == "completed": return
             if not spec_file.exists():
                 _write_job_state(job_state_file, status="failed", error="任务配置文件不存在")
                 return
 
             worker = None
-            worker_pid = None
             try:
                 worker_cmd = [sys.executable, str(Path(__file__).resolve()), "--worker", str(job_state_file)]
-                worker = subprocess.Popen(
-                    worker_cmd,
-                    cwd=str(Path(__file__).resolve().parent),
-                    start_new_session=True
-                )
-                worker_pid = worker.pid
+                worker = spawn_detached(worker_cmd, str(Path(__file__).resolve().parent))
                 worker_pid_file.write_text(str(worker.pid), encoding="utf-8")
                 restart_count += 1
                 _write_job_state(
                     job_state_file, status="running", supervisor_pid=os.getpid(),
                     worker_pid=worker.pid, supervisor_restart_count=restart_count
                 )
-                logger.info(f"Supervisor启动Worker PID={worker.pid}，第{restart_count}次启动")
-
+                
                 while True:
                     rc = worker.poll()
                     state = _load_job_state(job_state_file) or {}
-                    if state.get("status") == "completed":
-                        return
+                    if state.get("status") == "completed": return
                     if rc is not None:
                         logger.warning(f"Worker PID={worker.pid} 已退出，返回码={rc}")
                         break
                     time.sleep(2)
 
-                # Worker异常退出：不结束任务，自动拉起新的 Worker。
                 state = _load_job_state(job_state_file) or {}
                 if state.get("status") != "completed":
                     delay = min(30, max(2, 2 ** min(restart_count - 1, 4)))
@@ -1131,7 +1016,7 @@ def _supervisor_entry(job_state_file: Path):
                         job_state_file, status="supervisor_restarting",
                         supervisor_pid=os.getpid(), worker_pid=None,
                         supervisor_restart_count=restart_count,
-                        error=f"Worker意外退出（返回码 {rc}），{delay} 秒后自动重新启动"
+                        error=f"Worker意外退出（返回码 {rc}），{delay} 秒后自动启动"
                     )
                     time.sleep(delay)
             except BaseException as e:
@@ -1145,15 +1030,11 @@ def _supervisor_entry(job_state_file: Path):
     finally:
         for f in (supervisor_pid_file, worker_pid_file):
             try:
-                if f.exists():
-                    f.unlink()
-            except Exception:
-                pass
-
+                if f.exists(): f.unlink()
+            except Exception: pass
 
 def _create_job_spec(job_state_file, uploaded_file, target_col, file_name,
                      backup_file, progress_file, provider, model, env_var):
-    """把上传文件落盘，Supervisor/Worker 后续只依赖磁盘。"""
     project_safe = re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', job_state_file.stem.replace("batch_job_", ""))
     input_file = BASE_DIR / f"batch_input_{project_safe}.xlsx"
     input_file.write_bytes(uploaded_file.getvalue())
@@ -1169,24 +1050,19 @@ def _create_job_spec(job_state_file, uploaded_file, target_col, file_name,
     os.replace(tmp, spec_file)
     return spec
 
-
 def start_or_resume_batch_job(df_input, target_col, uploaded_file, file_name,
                               backup_file, progress_file, provider, model,
                               env_var, job_state_file):
-    """启动独立 Supervisor；页面刷新/重跑不会创建重复任务。"""
     state = _load_job_state(job_state_file) or {}
     supervisor_pid = state.get("supervisor_pid")
-    if _pid_alive(supervisor_pid):
-        return False, state
+    if _pid_alive(supervisor_pid): return False, state
 
     supervisor_pid_file = _service_file(job_state_file, ".supervisor.pid")
     if supervisor_pid_file.exists():
         try:
             old_pid = int(supervisor_pid_file.read_text(encoding="utf-8").strip())
-            if _pid_alive(old_pid):
-                return False, state
-        except Exception:
-            pass
+            if _pid_alive(old_pid): return False, state
+        except Exception: pass
 
     _create_job_spec(job_state_file, uploaded_file, target_col, file_name,
                      backup_file, progress_file, provider, model, env_var)
@@ -1201,96 +1077,26 @@ def start_or_resume_batch_job(df_input, target_col, uploaded_file, file_name,
     )
 
     cmd = [sys.executable, str(Path(__file__).resolve()), "--supervisor", str(job_state_file)]
-    supervisor_proc = subprocess.Popen(
-        cmd,
-        cwd=str(Path(__file__).resolve().parent),
-        start_new_session=True
-    )
-    # 关键：立即写入 Supervisor PID，避免页面自动刷新时误以为 Supervisor 尚未启动，
-    # 从而重复拉起多个 Supervisor。
-    _write_job_state(
-        job_state_file,
-        status="starting",
-        supervisor_pid=supervisor_proc.pid,
-        worker_pid=None,
-        supervisor_restart_count=0,
-        error="守护进程已启动，正在启动 Worker..."
-    )
-    try:
-        _service_file(job_state_file, ".supervisor.pid").write_text(
-            str(supervisor_proc.pid), encoding="utf-8"
-        )
-    except Exception:
-        pass
+    spawn_detached(cmd, str(Path(__file__).resolve().parent))
     return True, _load_job_state(job_state_file) or {}
 
-
 def _auto_recover_if_needed(job_state_file: Path):
-    """
-    页面刷新时仅在 Supervisor 确认真正死亡后才恢复。
-    尤其避免“starting 状态下 PID 尚未写入”的竞态导致重复启动。
-    """
     state = _load_job_state(job_state_file) or {}
-    active_states = {
-        "running", "retrying", "waiting_retry", "saving",
-        "waiting_save_retry", "starting", "supervisor_restarting"
-    }
-    if state.get("status") not in active_states:
-        return state
-
-    state_pid_alive = _pid_alive(state.get("supervisor_pid"))
-    supervisor_file = _service_file(job_state_file, ".supervisor.pid")
-    file_pid_alive = False
-    file_pid = None
-    if supervisor_file.exists():
-        try:
-            file_pid = int(supervisor_file.read_text(encoding="utf-8").strip())
-            file_pid_alive = _pid_alive(file_pid)
-        except Exception:
-            file_pid_alive = False
-
-    if state_pid_alive or file_pid_alive:
-        return state
-
-    # 刚刚创建 Supervisor 时给它一个启动窗口；不要在这个窗口内重复拉起。
-    # 若状态已经明确是 supervisor_restarting，则允许立即恢复。
-    age = _state_age_seconds(state)
-    if state.get("status") == "starting" and age < 15:
-        return state
-
-    spec_file = _service_file(job_state_file, ".spec.json")
-    if not spec_file.exists():
-        return state
-
-    try:
-        cmd = [sys.executable, str(Path(__file__).resolve()), "--supervisor", str(job_state_file)]
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(Path(__file__).resolve().parent),
-            start_new_session=True
-        )
-        _write_job_state(
-            job_state_file,
-            status="starting",
-            supervisor_pid=proc.pid,
-            worker_pid=None,
-            error="检测到 Supervisor 已退出，页面已自动重新拉起守护进程。",
-        )
-        try:
-            supervisor_file.write_text(str(proc.pid), encoding="utf-8")
-        except Exception:
-            pass
-        return _load_job_state(job_state_file) or state
-    except Exception as e:
-        _write_job_state(
-            job_state_file,
-            status="supervisor_restarting",
-            supervisor_pid=None,
-            worker_pid=None,
-            error=f"自动恢复 Supervisor 失败：{type(e).__name__}: {e}"
-        )
-        return _load_job_state(job_state_file) or state
-
+    if state.get("status") in {"running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "starting", "supervisor_restarting"}:
+        supervisor_file = _service_file(job_state_file, ".supervisor.pid")
+        file_pid_alive = False
+        if supervisor_file.exists():
+            try: file_pid_alive = _pid_alive(int(supervisor_file.read_text(encoding="utf-8").strip()))
+            except Exception: file_pid_alive = False
+        
+        if not _pid_alive(state.get("supervisor_pid")) and not file_pid_alive:
+            spec_file = _service_file(job_state_file, ".spec.json")
+            if spec_file.exists():
+                cmd = [sys.executable, str(Path(__file__).resolve()), "--supervisor", str(job_state_file)]
+                spawn_detached(cmd, str(Path(__file__).resolve().parent))
+                _write_job_state(job_state_file, status="starting", error="检测到后台守护退出，系统已全自动原地接续。")
+                state = _load_job_state(job_state_file) or state
+    return state
 
 def main():
 
@@ -1535,25 +1341,30 @@ def main():
                     """, unsafe_allow_html=True)
                     
                     job_state_file = BASE_DIR / f"batch_job_{re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', st.session_state.project_code)}.json"
-
-                    # 页面只负责显示状态和发起任务；批处理本身由独立 Supervisor/Worker 完成。
                     current_state = _auto_recover_if_needed(job_state_file)
-
-                    # ===== 启动/继续任务按钮 =====
                     supervisor_alive = _pid_alive(current_state.get("supervisor_pid"))
-                    state_status = current_state.get("status", "")
-                    can_start = not supervisor_alive and state_status not in {
-                        "starting", "running", "retrying", "waiting_retry",
-                        "saving", "waiting_save_retry"
-                    }
 
-                    if st.button(
-                        "开始处理 / 继续任务",
-                        type="primary",
-                        use_container_width=True,
-                        disabled=not can_start,
-                        key=f"start_batch_{st.session_state.project_code}"
-                    ):
+                    state_status = current_state.get("status", "")
+                    if state_status in {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "supervisor_restarting"}:
+                        current_row = int(current_state.get("current_row", current_state.get("next_row", 0)) or 0)
+                        total_now = int(current_state.get("total_rows", len(df_input)))
+                        retry_now = int(current_state.get("retry_count", 0) or 0)
+                        word_now = current_state.get("current_word", "")
+                        label = "守护任务运行中" if supervisor_alive else "正在恢复守护任务"
+                        st.info(
+                            f"{label}：第 {current_row + 1}/{total_now} 行"
+                            + (f"，当前词语「{word_now}」" if word_now else "")
+                            + (f"，当前重试 {retry_now} 次" if retry_now else "")
+                        )
+                        if current_state.get("error"):
+                            st.warning(f"最近状态：{current_state['error']}")
+                    elif state_status == "completed":
+                        st.success(f"🎉 批量任务已完成，共 {current_state.get('completed_rows', len(df_input))} 条")
+                    elif state_status == "failed":
+                        st.error(f"任务失败：{current_state.get('error', '未知错误')}")
+
+                    can_start = not supervisor_alive
+                    if st.button("开始处理 / 继续任务", type="primary", use_container_width=True, disabled=not can_start):
                         if not selected_model_info["api_key"]:
                             st.error("请先在上方配置有效的 API Key")
                         else:
@@ -1569,89 +1380,50 @@ def main():
                                     job_state_file=job_state_file
                                 )
                                 if started:
-                                    st.success("守护任务已启动，将在后台持续处理并自动恢复。")
-                                    st.rerun()
+                                    st.success("守护任务已启动。Worker 即使异常退出，Supervisor 也会自动重新启动并从断点继续。")
                                 else:
                                     st.info("任务已经在后台运行，无需重复启动。")
                             except Exception as e:
                                 st.error(f"启动后台任务失败：{e}")
 
-                    # ===== 实时运行状态：使用 st.fragment 每 2 秒刷新 =====
-                    def render_batch_status():
-                        latest_state = _auto_recover_if_needed(job_state_file)
-                        total_display = int(latest_state.get("total_rows", len(df_input)) or len(df_input))
-                        completed = int(latest_state.get("completed_rows", latest_state.get("next_row", 0) or 0) or 0)
-                        current_row_display = int(latest_state.get("current_row", latest_state.get("next_row", 0) or 0) or 0)
-                        current_word_display = str(latest_state.get("current_word", "") or "")
-                        retry_display = int(latest_state.get("retry_count", 0) or 0)
-                        state_display = str(latest_state.get("status", "") or "")
-                        error_display = str(latest_state.get("error", "") or "")
-                        supervisor_now_alive = _pid_alive(latest_state.get("supervisor_pid"))
-                        worker_now_alive = _pid_alive(latest_state.get("worker_pid"))
+                    latest_state = _auto_recover_if_needed(job_state_file)
+                    completed = int(latest_state.get("completed_rows", latest_state.get("next_row", 0) or 0))
+                    total_display = int(latest_state.get("total_rows", len(df_input)))
+                    current_row_display = int(latest_state.get("current_row", latest_state.get("next_row", 0)) or 0)
+                    current_word_display = str(latest_state.get("current_word", "") or "")
+                    retry_display = int(latest_state.get("retry_count", 0) or 0)
+                    state_display = str(latest_state.get("status", "") or "")
 
-                        progress = min(1.0, max(0.0, completed / total_display)) if total_display else 0.0
-                        progress_bar.progress(progress)
+                    if total_display:
+                        progress_bar.progress(min(1.0, completed / total_display))
 
-                        active_states = {
-                            "starting", "running", "retrying", "waiting_retry",
-                            "saving", "waiting_save_retry", "supervisor_restarting"
-                        }
-
-                        if state_display in active_states:
-                            if state_display == "starting":
-                                spinner_text = "正在启动守护任务…"
-                            elif state_display == "retrying":
-                                spinner_text = "当前词语请求失败，正在自动重试…"
-                            elif state_display == "waiting_retry":
-                                spinner_text = "等待重试中…"
-                            elif state_display == "saving":
-                                spinner_text = "正在保存结果…"
-                            elif state_display == "waiting_save_retry":
-                                spinner_text = "保存失败，正在自动重试…"
-                            elif state_display == "supervisor_restarting":
-                                spinner_text = "Supervisor 正在自动恢复 Worker…"
-                            else:
-                                spinner_text = "任务正在运行…"
-
-                            detail_parts = [f"第 {min(current_row_display + 1, total_display)}/{total_display} 行",
-                                            f"已完成 {completed}/{total_display}"]
-                            if current_word_display:
-                                detail_parts.append(f"当前词语「{current_word_display}」")
-                            if retry_display:
-                                detail_parts.append(f"当前重试 {retry_display} 次")
-
-                            process_detail = " · ".join(detail_parts)
-                            worker_text = "Worker 正常运行" if worker_now_alive else "等待 Worker 启动/恢复"
-                            supervisor_text = "Supervisor 正常运行" if supervisor_now_alive else "Supervisor 正在恢复"
-
-                            status_html = (
-                                '<div class="running-status">'
-                                '<span class="running-spinner" aria-label="running"></span>'
-                                '<div style="flex:1">'
-                                f'<div style="font-size:1rem;font-weight:700">{spinner_text}</div>'
-                                f'<div class="batch-detail">{process_detail}</div>'
-                                f'<div class="batch-detail">{supervisor_text} · {worker_text}</div>'
-                                + (f'<div class="batch-detail">最近状态：{error_display}</div>' if error_display else '')
-                                + '</div></div>'
-                            )
-                            status_info.markdown(status_html, unsafe_allow_html=True)
-                        elif state_display == "completed":
-                            progress_bar.progress(1.0)
-                            status_info.success(f"🎉 批量处理已完成，共 {total_display} 条")
-                        elif state_display == "failed":
-                            status_info.error(f"❌ 批量任务停止：{error_display or '未知错误'}")
-                        else:
-                            # 没有任务时也保持清晰的待机状态，避免页面空白。
-                            status_info.info("等待开始任务。点击上方“开始处理 / 继续任务”即可启动。")
-
-                    if hasattr(st, "fragment"):
-                        @st.fragment(run_every="2s")
-                        def _live_batch_status():
-                            render_batch_status()
-                        _live_batch_status()
-                    else:
-                        # 兼容老版本 Streamlit：没有 fragment 时至少正常显示一次状态。
-                        render_batch_status()
+                    active_states = {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "supervisor_restarting"}
+                    if state_display in active_states:
+                        spinner_text = {
+                            "starting": "正在启动守护任务…",
+                            "running": "正在处理…",
+                            "retrying": "当前词语请求失败，正在重试…",
+                            "waiting_retry": "正在等待下一次重试…",
+                            "saving": "正在保存结果…",
+                            "waiting_save_retry": "保存失败，正在重试…",
+                            "supervisor_restarting": "Worker 已退出，Supervisor 正在自动恢复…"
+                        }.get(state_display, "任务运行中…")
+                        detail_parts = [f"第 {current_row_display + 1}/{total_display} 行"]
+                        if current_word_display: detail_parts.append(f"当前词语「{current_word_display}」")
+                        if retry_display: detail_parts.append(f"当前重试 {retry_display} 次")
+                        detail = " · ".join(detail_parts)
+                        status_info.markdown(
+                            '<div class="running-status">'
+                            '<span class="running-spinner"></span>'
+                            '<div><div>' + spinner_text + '</div>'
+                            '<div class="batch-detail">' + detail + '</div></div></div>',
+                            unsafe_allow_html=True
+                        )
+                    elif state_display == "completed":
+                        progress_bar.progress(1.0)
+                        status_info.success(f"🎉 批量处理已完成，共 {total_display} 条")
+                    elif state_display == "failed":
+                        status_info.error(f"❌ 批量任务停止：{latest_state.get('error', '未知错误')}")
 
                 else:
                     st.markdown('<div class="error-highlight">', unsafe_allow_html=True)
