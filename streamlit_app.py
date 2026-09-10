@@ -9,6 +9,7 @@ import time
 import logging
 import subprocess
 import sys
+import traceback
 from typing import Tuple, Dict, Any, List
 from pathlib import Path
 
@@ -201,59 +202,130 @@ if not AVAILABLE_MODEL_OPTIONS: AVAILABLE_MODEL_OPTIONS = MODEL_OPTIONS
 # ===============================
 # 安全操作辅助函数
 # ===============================
-def clean_csv_duplicates(file_path: Path):
-    """清理并移除 CSV 中已有的重复词语，以历史最后一条为准"""
-    if file_path.exists():
-        try:
-            df = pd.read_csv(file_path, encoding='utf-8-sig')
-            if '词语' in df.columns and df.duplicated(subset=['词语']).any():
-                df = df.drop_duplicates(subset=['词语'], keep='last')
-                df.to_csv(file_path, index=False, encoding='utf-8-sig')
-        except Exception as e:
-            logger.error(f"清理 CSV 重复项失败: {e}")
 
-def is_word_processed(file_path: Path, word: str) -> bool:
-    """严格判断某词语是否已经存在于 CSV 中"""
+def _lock_file(lock_path: Path, timeout=30, poll=0.2):
+    """跨进程排他锁：基于 O_EXCL，避免多进程同时检查/写入。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+            return fd
+        except FileExistsError:
+            time.sleep(poll)
+    raise TimeoutError(f"获取文件锁超时: {lock_path}")
+
+
+def _unlock_file(lock_path: Path, fd):
+    try:
+        os.close(fd)
+    finally:
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _make_task_id(file_name: str, row_index: int) -> str:
+    """批次内每个 Excel 行的稳定唯一 ID。"""
+    return f"{file_name}::row::{row_index + 1}"
+
+
+def clean_csv_duplicates(file_path: Path):
+    """只按稳定的任务ID/Excel序数清理重复，不按词语清理，避免误删合法同词多行。"""
+    if not file_path.exists():
+        return
+    lock_path = file_path.with_suffix(file_path.suffix + '.maintenance.lock')
+    fd = None
+    try:
+        fd = _lock_file(lock_path, timeout=20)
+        df = pd.read_csv(file_path, encoding='utf-8-sig')
+        key_col = None
+        if '任务ID' in df.columns:
+            key_col = '任务ID'
+        elif '序数' in df.columns:
+            key_col = '序数'
+        if key_col and df.duplicated(subset=[key_col]).any():
+            df = df.drop_duplicates(subset=[key_col], keep='last')
+            tmp = file_path.with_suffix(file_path.suffix + '.clean.tmp')
+            df.to_csv(tmp, index=False, encoding='utf-8-sig')
+            os.replace(tmp, file_path)
+    except Exception as e:
+        logger.exception(f"清理 CSV 重复项失败: {file_path}")
+    finally:
+        if fd is not None:
+            _unlock_file(lock_path, fd)
+
+
+def append_unique_csv(df: pd.DataFrame, file_path: Path, task_id: str, max_retries=30):
+    """原子执行：加锁 -> 再检查任务ID -> 追加写入。返回(success, detail, already_exists)。"""
+    lock_path = file_path.with_suffix(file_path.suffix + '.write.lock')
+    last_error = ''
+    for attempt in range(1, max_retries + 1):
+        fd = None
+        try:
+            fd = _lock_file(lock_path, timeout=5)
+            if file_path.exists():
+                existing_all = pd.read_csv(file_path, encoding='utf-8-sig')
+                serial = int(df.iloc[0]['序数']) if '序数' in df.columns else None
+
+                # 旧 CSV 没有任务ID时，先升级一次表头，避免把新列直接追加到旧表头造成错列。
+                if '任务ID' not in existing_all.columns:
+                    if '序数' in existing_all.columns:
+                        existing_all['任务ID'] = existing_all['序数'].apply(
+                            lambda x: f'legacy::row::{int(x)}' if pd.notna(x) else f'legacy::row::{x}'
+                        )
+                    else:
+                        existing_all['任务ID'] = [f'legacy::index::{i+1}' for i in range(len(existing_all))]
+                    upgrade_tmp = file_path.with_suffix(file_path.suffix + '.upgrade.tmp')
+                    existing_all.to_csv(upgrade_tmp, index=False, encoding='utf-8-sig')
+                    os.replace(upgrade_tmp, file_path)
+
+                # 同时检查稳定任务ID和Excel序数，兼容从旧版本迁移过来的结果。
+                existing_ids = set(existing_all.get('任务ID', pd.Series(dtype=str)).astype(str).tolist())
+                if task_id in existing_ids:
+                    return True, '该任务ID已经写入，跳过重复写入。', True
+                if serial is not None and '序数' in existing_all.columns:
+                    serials = set(pd.to_numeric(existing_all['序数'], errors='coerce').dropna().astype(int).tolist())
+                    if serial in serials:
+                        return True, '该 Excel 行已有结果，跳过重复写入。', True
+
+            header_needed = not file_path.exists() or file_path.stat().st_size == 0
+            with open(file_path, 'a', encoding='utf-8-sig', newline='') as f:
+                df.to_csv(f, header=header_needed, index=False)
+            return True, '写入成功。', False
+        except Exception as e:
+            last_error = f"{type(e).__name__}: {e}"
+            logger.warning(f"CSV原子写入失败（第{attempt}/{max_retries}次）: {last_error}")
+            time.sleep(min(2, 0.2 * attempt))
+        finally:
+            if fd is not None:
+                _unlock_file(lock_path, fd)
+    return False, f"CSV写入最终失败：{last_error}", False
+
+
+def is_task_processed(file_path: Path, task_id: str, row_number: int) -> bool:
+    """判断具体 Excel 行是否已经处理，优先任务ID，兼容旧CSV的序数。"""
     if not file_path.exists():
         return False
     try:
-        df = pd.read_csv(file_path, encoding='utf-8-sig', usecols=['词语'])
-        return word in set(df['词语'].astype(str).tolist())
-    except Exception:
-        return False
-
-def safe_write_csv(df, file_path, mode='a', header=False, encoding='utf-8-sig', max_retries=10):
-    """基于跨平台原子锁的文件安全追加写入，杜绝多进程冲突破坏文件"""
-    lock_path = file_path.with_suffix('.lock')
-    retry_count = 0
-    while retry_count < max_retries:
-        try:
-            # 尝试原子性地创建 Lock 文件（排他模式）
-            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_RDWR)
-            try:
-                with open(file_path, mode, encoding=encoding) as f:
-                    df.to_csv(f, mode=mode, header=header, index=False)
-                return True
-            finally:
-                os.close(fd)
-                try: os.remove(lock_path)
-                except OSError: pass
-        except OSError:
-            # 文件已存在说明被其他进程锁定，等待重试
-            retry_count += 1
-            time.sleep(0.5)
-        except Exception as e:
-            retry_count += 1
-            logger.warning(f"写入CSV遇到未知错误（重试{retry_count}/{max_retries}）: {e}")
-            time.sleep(1)
-    logger.error(f"写入CSV超时最终失败: {file_path}")
+        cols = pd.read_csv(file_path, encoding='utf-8-sig', nrows=0).columns.tolist()
+        if '任务ID' in cols:
+            existing = pd.read_csv(file_path, encoding='utf-8-sig', usecols=['任务ID'])
+            return task_id in set(existing['任务ID'].astype(str).tolist())
+        if '序数' in cols:
+            existing = pd.read_csv(file_path, encoding='utf-8-sig', usecols=['序数'])
+            vals = pd.to_numeric(existing['序数'], errors='coerce').dropna().astype(int)
+            return row_number in set(vals.tolist())
+    except Exception as e:
+        logger.warning(f"检查任务是否已处理失败（将继续处理并在写入时再次原子检查）：{type(e).__name__}: {e}")
     return False
 
+
 def spawn_detached(cmd, cwd):
-    """跨平台脱离式进程启动，防止 Streamlit 页面刷新误杀子进程"""
+    """跨平台脱离式进程启动，防止 Streamlit 页面刷新误杀子进程。"""
     kwargs = {}
     if os.name == 'nt':
-        kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
+        kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
     else:
         kwargs['start_new_session'] = True
     return subprocess.Popen(cmd, cwd=cwd, **kwargs)
@@ -474,170 +546,373 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
 # ===============================
 # 独立进程批处理：Supervisor + Worker
 # ===============================
+
 def _write_job_state(state_file: Path, **updates):
+    """带锁的原子状态更新；任何失败都写入日志，不再静默吞掉。"""
+    lock_path = state_file.with_suffix(state_file.suffix + '.state.lock')
+    fd = None
     try:
-        current = json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {}
+        fd = _lock_file(lock_path, timeout=10, poll=0.1)
+        current = {}
+        if state_file.exists():
+            try:
+                current = json.loads(state_file.read_text(encoding='utf-8'))
+            except Exception as e:
+                logger.warning(f"读取任务状态失败，将以空状态继续：{type(e).__name__}: {e}")
         current.update(updates)
-        current["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        tmp = state_file.with_suffix(state_file.suffix + ".tmp")
-        tmp.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+        current['updated_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        tmp = state_file.with_suffix(state_file.suffix + '.tmp')
+        tmp.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding='utf-8')
         os.replace(tmp, state_file)
-    except Exception: pass
+        return True
+    except Exception as e:
+        logger.exception(f"写入任务状态失败: {state_file}: {e}")
+        return False
+    finally:
+        if fd is not None:
+            _unlock_file(lock_path, fd)
+
 
 def _load_job_state(state_file: Path):
-    try: return json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {}
-    except Exception: return {}
+    try:
+        return json.loads(state_file.read_text(encoding='utf-8')) if state_file.exists() else {}
+    except Exception as e:
+        logger.warning(f"读取任务状态失败: {type(e).__name__}: {e}")
+        return {}
+
 
 def _pid_alive(pid):
-    try: return pid and int(pid) > 0 and os.kill(int(pid), 0) is None or True
-    except Exception: return False
+    """正确判断 PID 是否存在。原代码的 'or True' 会导致已死亡进程永远被判定为存活。"""
+    if not pid:
+        return False
+    try:
+        pid = int(pid)
+        if pid <= 0:
+            return False
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except (ValueError, OSError):
+        return False
+
 
 def _state_age_seconds(state):
-    try: return max(0, time.time() - time.mktime(time.strptime(state.get("updated_at"), "%Y-%m-%d %H:%M:%S")))
-    except Exception: return 0
+    try:
+        ts = state.get('updated_at')
+        if not ts:
+            return 0
+        return max(0, time.time() - time.mktime(time.strptime(ts, '%Y-%m-%d %H:%M:%S')))
+    except Exception:
+        return 0
 
-def _service_file(job_state_file: Path, suffix: str) -> Path: return job_state_file.with_name(job_state_file.stem + suffix)
+
+def _service_file(job_state_file: Path, suffix: str) -> Path:
+    return job_state_file.with_name(job_state_file.stem + suffix)
+
 
 def _batch_worker(df_input, target_col, file_name, backup_file, provider, model, api_key, job_state_file):
-    # 刚启动 Worker 时强制执行一次全量去重清洗
-    clean_csv_duplicates(backup_file)
-    
     total_rows = len(df_input)
     state = _load_job_state(job_state_file)
-    start_row = int(state.get("next_row", 0)) if state else 0
-    if start_row < 0 or start_row > total_rows: start_row = 0
+    start_row = int(state.get('next_row', 0)) if state else 0
+    if state.get('file_name') != file_name:
+        start_row = 0
+    if start_row < 0 or start_row > total_rows:
+        start_row = 0
 
-    _write_job_state(job_state_file, status="running", file_name=file_name, total_rows=total_rows,
-                     next_row=start_row, current_row=start_row, current_word="", retry_count=0, error="", completed_rows=start_row)
+    clean_csv_duplicates(backup_file)
+    _write_job_state(
+        job_state_file,
+        status='running', file_name=file_name, total_rows=total_rows,
+        next_row=start_row, current_row=start_row, current_word='', retry_count=0,
+        error='', completed_rows=start_row
+    )
 
     while start_row < total_rows:
         index = start_row
+        row_number = index + 1
         word = str(df_input.iloc[index][target_col]).strip()
+        task_id = _make_task_id(file_name, index)
 
         if not word:
             start_row = index + 1
-            _write_job_state(job_state_file, status="running", next_row=start_row, current_row=index, current_word="", completed_rows=start_row)
+            _write_job_state(job_state_file, status='running', next_row=start_row,
+                             current_row=index, current_word='', completed_rows=start_row,
+                             retry_count=0, error='')
             continue
 
-        # 在调用大模型前，直接探查 CSV 防止“Excel重复数据”或多并发导致写入冗余
-        if is_word_processed(backup_file, word):
+        if is_task_processed(backup_file, task_id, row_number):
             start_row = index + 1
-            _write_job_state(job_state_file, status="running", next_row=start_row, current_row=index, current_word=word, completed_rows=start_row)
+            _write_job_state(job_state_file, status='running', next_row=start_row,
+                             current_row=index, current_word=word, completed_rows=start_row,
+                             retry_count=0, error='检测到该 Excel 行已有结果，已跳过重复处理')
             continue
 
-        success, last_error, retry_count = False, "", 0
-        scores, raw_text, pred_pos, explanation, is_dual_category = {}, "", "处理失败", "无响应", False
+        success = False
+        last_error = ''
+        retry_count = 0
+        scores, raw_text, pred_pos, explanation, is_dual_category = {}, '', '处理失败', '无响应', False
 
         while not success:
             retry_count += 1
-            _write_job_state(job_state_file, status="retrying" if retry_count > 1 else "running",
-                             current_row=index, current_word=word, next_row=index, retry_count=retry_count, error=last_error, completed_rows=index)
+            _write_job_state(job_state_file,
+                             status='retrying' if retry_count > 1 else 'running',
+                             current_row=index, current_word=word, next_row=index,
+                             retry_count=retry_count, error=last_error, completed_rows=index)
             try:
-                scores, raw_text, pred_pos, explanation, is_dual_category = ask_model_for_pos_and_scores(word, provider, model, api_key, show_ui=False)
+                scores, raw_text, pred_pos, explanation, is_dual_category = ask_model_for_pos_and_scores(
+                    word, provider, model, api_key, show_ui=False
+                )
                 if scores:
                     success = True
                     break
-                last_error = explanation or "模型未返回有效结果"
+                last_error = explanation or '模型返回为空或 JSON 解析失败'
             except BaseException as e:
-                last_error = f"{type(e).__name__}: {e}"
+                last_error = f'{type(e).__name__}: {e}'
+                logger.exception(f'Worker处理第{row_number}行失败：{word}')
 
             wait_seconds = min(60, max(2, 2 ** min(retry_count - 1, 5)))
-            _write_job_state(job_state_file, status="waiting_retry", current_row=index, current_word=word, next_row=index,
-                             retry_count=retry_count, error=last_error, retry_in_seconds=wait_seconds, completed_rows=index)
+            _write_job_state(job_state_file, status='waiting_retry', current_row=index,
+                             current_word=word, next_row=index, retry_count=retry_count,
+                             error=last_error, retry_in_seconds=wait_seconds, completed_rows=index)
             time.sleep(wait_seconds)
 
         membership = calculate_membership(scores)
         new_row = pd.DataFrame([{
-            "序数": index + 1, "词语": word,
-            "动词": membership.get("动词", 0.0), "名词": membership.get("名词", 0.0), "名动词": membership.get("名动词", 0.0),
-            "差值/距离": round(abs(membership.get("动词", 0.0) - membership.get("名词", 0.0)), 4),
-            "预测词类": pred_pos, "是否兼类": "是" if is_dual_category else "否",
-            "原始响应": raw_text, "时间戳": time.strftime("%Y-%m-%d %H:%M:%S")
+            '任务ID': task_id,
+            '序数': row_number,
+            '词语': word,
+            '动词': membership.get('动词', 0.0),
+            '名词': membership.get('名词', 0.0),
+            '名动词': membership.get('名动词', 0.0),
+            '差值/距离': round(abs(membership.get('动词', 0.0) - membership.get('名词', 0.0)), 4),
+            '预测词类': pred_pos,
+            '是否兼类': '是' if is_dual_category else '否',
+            '原始响应': raw_text,
+            '时间戳': time.strftime('%Y-%m-%d %H:%M:%S')
         }])
 
-        # 使用基于 .lock 文件的安全追加方式，拒绝覆盖和错行
-        header_needed = not backup_file.exists()
-        if safe_write_csv(new_row, backup_file, mode="a", header=header_needed):
-            start_row = index + 1
-            _write_job_state(job_state_file, status="running", current_row=index, current_word=word, next_row=start_row, completed_rows=start_row, retry_count=0, error="")
-        else:
-            _write_job_state(job_state_file, status="failed", error="由于文件被外部锁定，彻底写入失败退出。")
-            break
+        _write_job_state(job_state_file, status='saving', current_row=index,
+                         current_word=word, next_row=index, completed_rows=index,
+                         retry_count=0, error='')
+        write_ok, write_detail, already_exists = append_unique_csv(new_row, backup_file, task_id)
+        if not write_ok:
+            # 保存失败不推进行号，进入持续重试，而不是把任务静默结束
+            save_retry = 0
+            while not write_ok:
+                save_retry += 1
+                _write_job_state(job_state_file, status='waiting_save_retry', current_row=index,
+                                 current_word=word, next_row=index, completed_rows=index,
+                                 retry_count=save_retry, error=write_detail,
+                                 retry_in_seconds=min(30, max(2, 2 ** min(save_retry - 1, 4))))
+                time.sleep(min(30, max(2, 2 ** min(save_retry - 1, 4))))
+                write_ok, write_detail, already_exists = append_unique_csv(new_row, backup_file, task_id)
+            _write_job_state(job_state_file, status='saving', current_row=index,
+                             current_word=word, next_row=index, completed_rows=index,
+                             retry_count=0, error='')
 
-    _write_job_state(job_state_file, status="completed", file_name=file_name, total_rows=total_rows, next_row=total_rows, completed_rows=total_rows, current_word="", retry_count=0, error="")
+        # 到这里意味着结果已经存在于磁盘：无论是本次新写入还是发现已经写过，都推进断点
+        start_row = index + 1
+        _write_job_state(job_state_file, status='running', current_row=index,
+                         current_word=word, next_row=start_row, completed_rows=start_row,
+                         retry_count=0, error=write_detail if already_exists else '')
+
+    _write_job_state(job_state_file, status='completed', file_name=file_name,
+                     total_rows=total_rows, next_row=total_rows, completed_rows=total_rows,
+                     current_word='', retry_count=0, error='')
+
 
 def _worker_entry(job_state_file: Path):
-    spec = json.loads(_service_file(job_state_file, ".spec.json").read_text(encoding="utf-8"))
-    api_key = os.getenv(spec["env_var"], "")
-    if not api_key: raise RuntimeError(f"环境变量 {spec['env_var']} 未配置")
-    _batch_worker(pd.read_excel(Path(spec["input_file"])), spec["target_col"], spec["file_name"], Path(spec["backup_file"]), spec["provider"], spec["model"], api_key, job_state_file)
+    try:
+        spec_file = _service_file(job_state_file, '.spec.json')
+        if not spec_file.exists():
+            raise FileNotFoundError(f'找不到任务配置文件：{spec_file}')
+        spec = json.loads(spec_file.read_text(encoding='utf-8'))
+        api_key = os.getenv(spec['env_var'], '')
+        if not api_key:
+            raise RuntimeError(f"环境变量 {spec['env_var']} 未配置")
+        df_input = pd.read_excel(Path(spec['input_file']))
+        _batch_worker(df_input, spec['target_col'], spec['file_name'], Path(spec['backup_file']),
+                      spec['provider'], spec['model'], api_key, job_state_file)
+    except BaseException as e:
+        detail = f'{type(e).__name__}: {e}\n{traceback.format_exc()}'
+        logger.error(f'Worker致命退出：\n{detail}')
+        _write_job_state(job_state_file, status='failed', error=detail,
+                         worker_fatal_error=True)
+        raise
+
+
+def _acquire_pid_guard(lock_file: Path):
+    """防止同一批次同时出现两个 Supervisor。"""
+    try:
+        fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        os.write(fd, str(os.getpid()).encode('utf-8'))
+        return fd
+    except FileExistsError:
+        try:
+            old_pid = int(lock_file.read_text(encoding='utf-8').strip())
+        except Exception:
+            old_pid = 0
+        if not _pid_alive(old_pid):
+            try:
+                lock_file.unlink()
+            except FileNotFoundError:
+                pass
+            fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+            os.write(fd, str(os.getpid()).encode('utf-8'))
+            return fd
+        raise RuntimeError(f'同一批次已有 Supervisor 在运行（PID {old_pid}）')
+
+
+def _release_pid_guard(lock_file: Path, fd):
+    try:
+        os.close(fd)
+    finally:
+        try:
+            lock_file.unlink()
+        except FileNotFoundError:
+            pass
+
 
 def _supervisor_entry(job_state_file: Path):
-    supervisor_pid_file = _service_file(job_state_file, ".supervisor.pid")
-    worker_pid_file = _service_file(job_state_file, ".worker.pid")
-    supervisor_pid_file.write_text(str(os.getpid()), encoding="utf-8")
+    supervisor_pid_file = _service_file(job_state_file, '.supervisor.pid')
+    worker_pid_file = _service_file(job_state_file, '.worker.pid')
+    supervisor_lock_file = _service_file(job_state_file, '.supervisor.lock')
+    guard_fd = None
     try:
-        restart_count = 0
+        guard_fd = _acquire_pid_guard(supervisor_lock_file)
+        supervisor_pid_file.write_text(str(os.getpid()), encoding='utf-8')
+        restart_count = int(_load_job_state(job_state_file).get('supervisor_restart_count', 0) or 0)
+
         while True:
             state = _load_job_state(job_state_file)
-            if state.get("status") == "completed": return
-            worker = spawn_detached([sys.executable, str(Path(__file__).resolve()), "--worker", str(job_state_file)], str(Path(__file__).resolve().parent))
-            worker_pid_file.write_text(str(worker.pid), encoding="utf-8")
+            if state.get('status') == 'completed':
+                return
+            if state.get('status') == 'cancelled':
+                return
+
+            worker = spawn_detached(
+                [sys.executable, str(Path(__file__).resolve()), '--worker', str(job_state_file)],
+                str(Path(__file__).resolve().parent)
+            )
+            worker_pid_file.write_text(str(worker.pid), encoding='utf-8')
             restart_count += 1
-            _write_job_state(job_state_file, status="running", supervisor_pid=os.getpid(), worker_pid=worker.pid, supervisor_restart_count=restart_count)
+            _write_job_state(job_state_file, status='running', supervisor_pid=os.getpid(),
+                             worker_pid=worker.pid, supervisor_restart_count=restart_count,
+                             error='')
+
             while True:
                 rc = worker.poll()
-                if _load_job_state(job_state_file).get("status") == "completed": return
-                if rc is not None: break
-                time.sleep(2)
+                state = _load_job_state(job_state_file)
+                if state.get('status') == 'completed':
+                    return
+                if rc is not None:
+                    break
+                time.sleep(1)
+
+            # Worker非正常退出：记录精确错误，并自动重启，不把任务当成完成
+            if rc == 0:
+                detail = 'Worker正常退出，但任务状态未标记完成。将自动检查并继续。'
+            else:
+                detail = f'Worker退出，状态码 {rc}。{("错误详情：" + str(_load_job_state(job_state_file).get("error"))) if _load_job_state(job_state_file).get("error") else "未捕获到错误详情。请查看 process_log.log。"}'
             delay = min(30, max(2, 2 ** min(restart_count - 1, 4)))
-            _write_job_state(job_state_file, status="supervisor_restarting", supervisor_pid=os.getpid(), worker_pid=None, supervisor_restart_count=restart_count, error=f"Worker退出 (状态码 {rc})，{delay} 秒后自动启动")
+            _write_job_state(job_state_file, status='supervisor_restarting', supervisor_pid=os.getpid(),
+                             worker_pid=None, supervisor_restart_count=restart_count,
+                             error=f'{detail} {delay} 秒后自动重启 Worker')
             time.sleep(delay)
+    except BaseException as e:
+        detail = f'Supervisor异常：{type(e).__name__}: {e}\n{traceback.format_exc()}'
+        logger.error(detail)
+        _write_job_state(job_state_file, status='failed', supervisor_pid=os.getpid(),
+                         worker_pid=None, error=detail, supervisor_fatal_error=True)
+        raise
     finally:
         for f in (supervisor_pid_file, worker_pid_file):
             try:
-                if f.exists(): f.unlink()
-            except Exception: pass
+                if f.exists() and f.read_text(encoding='utf-8').strip() in {'', str(os.getpid())}:
+                    f.unlink()
+            except Exception:
+                pass
+        if guard_fd is not None:
+            _release_pid_guard(supervisor_lock_file, guard_fd)
 
-def start_or_resume_batch_job(df_input, target_col, uploaded_file, file_name, backup_file, provider, model, env_var, job_state_file):
+
+def start_or_resume_batch_job(df_input, target_col, uploaded_file, file_name, backup_file,
+                              provider, model, env_var, job_state_file):
     state = _load_job_state(job_state_file)
-    if _pid_alive(state.get("supervisor_pid")): return False, state
-    
-    spec = {
-        "input_file": str(BASE_DIR / f"batch_input_{re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', job_state_file.stem)}.xlsx"),
-        "target_col": target_col, "file_name": file_name, "backup_file": str(backup_file),
-        "provider": provider, "model": model, "env_var": env_var
-    }
-    Path(spec["input_file"]).write_bytes(uploaded_file.getvalue())
-    tmp = _service_file(job_state_file, ".spec.json.tmp")
-    tmp.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, _service_file(job_state_file, ".spec.json"))
+    if _pid_alive(state.get('supervisor_pid')):
+        return False, state
 
-    resume_row = int(state.get("next_row", 0)) if state.get("file_name") == file_name else 0
-    _write_job_state(job_state_file, status="starting", file_name=file_name, total_rows=len(df_input), next_row=resume_row, completed_rows=resume_row, current_word="", retry_count=0, error="")
-    proc = spawn_detached([sys.executable, str(Path(__file__).resolve()), "--supervisor", str(job_state_file)], str(Path(__file__).resolve().parent))
-    _write_job_state(job_state_file, status="starting", supervisor_pid=proc.pid, worker_pid=None, error="")
+    spec = {
+        'input_file': str(BASE_DIR / f"batch_input_{re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', job_state_file.stem)}.xlsx"),
+        'target_col': target_col,
+        'file_name': file_name,
+        'backup_file': str(backup_file),
+        'provider': provider,
+        'model': model,
+        'env_var': env_var
+    }
+    Path(spec['input_file']).write_bytes(uploaded_file.getvalue())
+    spec_tmp = _service_file(job_state_file, '.spec.json.tmp')
+    spec_tmp.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding='utf-8')
+    os.replace(spec_tmp, _service_file(job_state_file, '.spec.json'))
+
+    resume_row = int(state.get('next_row', 0)) if state.get('file_name') == file_name else 0
+    _write_job_state(job_state_file, status='starting', file_name=file_name,
+                     total_rows=len(df_input), next_row=resume_row, completed_rows=resume_row,
+                     current_row=max(0, resume_row - 1), current_word='', retry_count=0, error='')
+
+    try:
+        proc = spawn_detached([sys.executable, str(Path(__file__).resolve()), '--supervisor', str(job_state_file)],
+                              str(Path(__file__).resolve().parent))
+    except Exception as e:
+        detail = f'启动 Supervisor 失败：{type(e).__name__}: {e}'
+        _write_job_state(job_state_file, status='failed', error=detail)
+        raise
+
+    # 立刻记录父进程PID，防止启动竞态导致页面重复拉起
+    _write_job_state(job_state_file, status='starting', supervisor_pid=proc.pid,
+                     worker_pid=None, error='Supervisor 已启动，等待 Worker')
     return True, _load_job_state(job_state_file)
+
 
 def _auto_recover_if_needed(job_state_file: Path):
     state = _load_job_state(job_state_file)
-    if state.get("status") not in {"running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "starting", "supervisor_restarting"}:
+    active_statuses = {'running', 'retrying', 'waiting_retry', 'saving', 'waiting_save_retry', 'starting', 'supervisor_restarting'}
+    if state.get('status') not in active_statuses:
         return state
-        
-    if _pid_alive(state.get("supervisor_pid")): return state
+
+    if _pid_alive(state.get('supervisor_pid')):
+        return state
+
+    # 再检查 Supervisor PID 文件
     try:
-        if _pid_alive(int(_service_file(job_state_file, ".supervisor.pid").read_text(encoding="utf-8").strip())): return state
-    except Exception: pass
+        pid_text = _service_file(job_state_file, '.supervisor.pid').read_text(encoding='utf-8').strip()
+        if _pid_alive(int(pid_text)):
+            return state
+    except Exception:
+        pass
 
-    # 防双开：如果刚好正处于启动期（距离上次状态刷新不到 15 秒），放弃重复拉起
-    if state.get("status") == "starting" and _state_age_seconds(state) < 15:
+    # 启动窗口内不要重复拉起
+    if state.get('status') == 'starting' and _state_age_seconds(state) < 15:
         return state
 
-    if _service_file(job_state_file, ".spec.json").exists():
-        proc = spawn_detached([sys.executable, str(Path(__file__).resolve()), "--supervisor", str(job_state_file)], str(Path(__file__).resolve().parent))
-        _write_job_state(job_state_file, status="starting", supervisor_pid=proc.pid, worker_pid=None, error="检测到守护退出，系统自动原地接续任务")
+    spec_file = _service_file(job_state_file, '.spec.json')
+    if not spec_file.exists():
+        return state
+
+    try:
+        proc = spawn_detached([sys.executable, str(Path(__file__).resolve()), '--supervisor', str(job_state_file)],
+                              str(Path(__file__).resolve().parent))
+        _write_job_state(job_state_file, status='starting', supervisor_pid=proc.pid, worker_pid=None,
+                         error='检测到 Supervisor 已退出，系统正在自动重新启动并接续任务')
         return _load_job_state(job_state_file)
-    return state
+    except Exception as e:
+        detail = f'自动恢复 Supervisor 失败：{type(e).__name__}: {e}'
+        _write_job_state(job_state_file, status='failed', error=detail)
+        return _load_job_state(job_state_file)
 
 def main():
     st.markdown("""
@@ -745,14 +1020,65 @@ def main():
 
         st.divider()
         progress_bar, status_info = st.progress(0), st.empty()
-        
+
         st.markdown("#### 实时结果预览")
         table_placeholder = st.empty()
-        if os.path.exists(BACKUP_FILE):
-            clean_csv_duplicates(BACKUP_FILE) # 每次呈现表格前洗刷一遍残留重复项，防范旧文件污染
-            try: table_placeholder.dataframe(pd.read_csv(BACKUP_FILE, encoding='utf-8-sig'), use_container_width=True, height=300)
-            except Exception as e: table_placeholder.error(f"显示历史记录失败: {e}")
-        else: table_placeholder.info("暂无数据。开始后结果将在此逐行实时显示。")
+
+        def render_live_table():
+            """实时读取 CSV，避免表格停留在首次渲染时的数据。"""
+            try:
+                if BACKUP_FILE.exists():
+                    # Worker 正在追加写入时，短暂读取失败属于正常竞争，稍后下一次 fragment 刷新会再次读取。
+                    for _ in range(3):
+                        try:
+                            live_df = pd.read_csv(BACKUP_FILE, encoding='utf-8-sig')
+                            table_placeholder.dataframe(live_df, use_container_width=True, height=300)
+                            metric_placeholder.metric("已存数据量", f"{len(live_df)} 条")
+                            return
+                        except (pd.errors.EmptyDataError, PermissionError, OSError):
+                            time.sleep(0.15)
+                    table_placeholder.info("正在写入最新结果，下一次刷新会自动更新表格……")
+                else:
+                    table_placeholder.info("暂无数据。开始后结果将在此逐行实时显示。")
+            except Exception as e:
+                table_placeholder.warning(f"实时表格刷新失败（下一轮会自动重试）: {e}")
+
+        def render_batch_status():
+            latest_state = _auto_recover_if_needed(job_state_file)
+            total = int(latest_state.get("total_rows", len(df_input)) or len(df_input))
+            completed = int(latest_state.get("completed_rows", latest_state.get("next_row", 0)) or 0)
+            status_str = str(latest_state.get("status", ""))
+            error_str = str(latest_state.get("error", ""))
+
+            progress_bar.progress(min(1.0, max(0.0, completed / total)) if total else 0.0)
+
+            # 状态和结果表必须在同一个定时刷新 fragment 中更新。
+            # 这样 Worker 在后台写入 CSV 后，前端会自动看到新增结果。
+            if status_str in {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "supervisor_restarting"}:
+                spinner_text = {"starting": "启动任务中…", "retrying": "调用失败自动重试中…", "waiting_retry": "等待重试…", "saving": "安全保存中…", "supervisor_restarting": "断流重连中…"}.get(status_str, "任务正常运行中…")
+                details = f"第 {min(int(latest_state.get('current_row', 0)) + 1, total)}/{total} 行 · 当前词语「{latest_state.get('current_word', '')}」"
+                if latest_state.get("retry_count", 0): details += f" · 重试 {latest_state.get('retry_count')} 次"
+                status_html = f'<div class="running-status"><span class="running-spinner"></span><div style="flex:1"><div style="font-size:1rem;font-weight:700">{spinner_text}</div><div class="batch-detail">{details}</div>'
+                if error_str: status_html += f'<div class="batch-detail">最近状态：{error_str}</div>'
+                status_html += '</div></div>'
+                status_info.markdown(status_html, unsafe_allow_html=True)
+            elif status_str == "completed":
+                progress_bar.progress(1.0)
+                status_info.success(f"🎉 任务完毕，共 {total} 条。")
+            elif status_str == "failed":
+                status_info.error(f"❌ 任务停止：{error_str or '未记录到具体异常。请查看 process_log.log 获取 Worker/Supervisor 的异常堆栈。'}")
+            else:
+                status_info.info("等待开始任务。点击上方“开始处理 / 继续任务”即可启动。")
+
+            render_live_table()
+
+        if hasattr(st, "fragment"):
+            @st.fragment(run_every="2s")
+            def _live_batch_status():
+                render_batch_status()
+            _live_batch_status()
+        else:
+            render_batch_status()
         
         st.divider()
         st.markdown("#### 上传新任务")
@@ -768,7 +1094,7 @@ def main():
                     job_state_file = BASE_DIR / f"batch_job_{re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', st.session_state.project_code)}.json"
                     current_state = _auto_recover_if_needed(job_state_file)
                     
-                    can_start = not _pid_alive(current_state.get("supervisor_pid")) and current_state.get("status") not in {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry"}
+                    can_start = not _pid_alive(current_state.get("supervisor_pid")) and current_state.get("status") not in {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "supervisor_restarting"}
 
                     if st.button("开始处理 / 继续任务", type="primary", use_container_width=True, disabled=not can_start):
                         if not selected_model_info["api_key"]: st.error("请配置有效的 API Key")
@@ -778,36 +1104,6 @@ def main():
                                 if started: st.success("守护任务已启动，将在后台持续处理并自动恢复。"); st.rerun()
                             except Exception as e: st.error(f"启动失败：{e}")
 
-                    def render_batch_status():
-                        latest_state = _auto_recover_if_needed(job_state_file)
-                        total = int(latest_state.get("total_rows", len(df_input)) or len(df_input))
-                        completed = int(latest_state.get("completed_rows", latest_state.get("next_row", 0)) or 0)
-                        status_str = str(latest_state.get("status", ""))
-                        error_str = str(latest_state.get("error", ""))
-                        
-                        progress_bar.progress(min(1.0, max(0.0, completed / total)) if total else 0.0)
-
-                        if status_str in {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "supervisor_restarting"}:
-                            spinner_text = {"starting": "启动任务中…", "retrying": "调用失败自动重试中…", "waiting_retry": "等待重试…", "saving": "安全保存中…", "supervisor_restarting": "断流重连中…"}.get(status_str, "任务正常运行中…")
-                            details = f"第 {min(int(latest_state.get('current_row', 0)) + 1, total)}/{total} 行 · 当前词语「{latest_state.get('current_word', '')}」"
-                            if latest_state.get("retry_count", 0): details += f" · 重试 {latest_state.get('retry_count')} 次"
-                            status_html = f'<div class="running-status"><span class="running-spinner"></span><div style="flex:1"><div style="font-size:1rem;font-weight:700">{spinner_text}</div><div class="batch-detail">{details}</div>'
-                            if error_str: status_html += f'<div class="batch-detail">最近状态：{error_str}</div>'
-                            status_html += '</div></div>'
-                            status_info.markdown(status_html, unsafe_allow_html=True)
-                        elif status_str == "completed":
-                            progress_bar.progress(1.0)
-                            status_info.success(f"🎉 任务完毕，共 {total} 条。")
-                        elif status_str == "failed":
-                            status_info.error(f"❌ 任务停止：{error_str or '未知异常'}")
-                        else:
-                            status_info.info("等待开始任务。点击上方“开始处理 / 继续任务”即可启动。")
-
-                    if hasattr(st, "fragment"):
-                        @st.fragment(run_every="2s")
-                        def _live_batch_status(): render_batch_status()
-                        _live_batch_status()
-                    else: render_batch_status()
                 else: st.error("未识别到包含'词'或'word'的目标列")
             except Exception as e: st.error(f"读取Excel文件失败: {e}")
 
