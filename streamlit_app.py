@@ -1049,21 +1049,59 @@ def main():
                                 if started: st.success("守护任务已启动，将在后台持续处理并自动恢复。"); st.rerun()
                             except Exception as e: st.error(f"启动失败：{e}")
 
+                    def _read_results_for_display(file_path: Path) -> pd.DataFrame:
+                        """只读当前结果文件；写入采用原子替换，因此这里不会写文件。"""
+                        if not file_path.exists():
+                            return pd.DataFrame()
+                        last_error = None
+                        for _ in range(3):
+                            try:
+                                with _file_lock(file_path):
+                                    if not file_path.exists():
+                                        return pd.DataFrame()
+                                    return pd.read_csv(file_path, encoding="utf-8-sig")
+                            except Exception as e:
+                                last_error = e
+                                time.sleep(0.15)
+                        logger.warning(f"实时读取结果表失败：{type(last_error).__name__}: {last_error}")
+                        return pd.DataFrame()
+
                     def render_batch_status():
                         latest_state = _auto_recover_if_needed(job_state_file)
                         total = int(latest_state.get("total_rows", len(df_input)) or len(df_input))
                         completed = int(latest_state.get("completed_rows", latest_state.get("next_row", 0)) or 0)
                         status_str = str(latest_state.get("status", ""))
                         error_str = str(latest_state.get("error", ""))
-                        
+
+                        # 1. 实时状态
                         progress_bar.progress(min(1.0, max(0.0, completed / total)) if total else 0.0)
 
-                        if status_str in {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "supervisor_restarting"}:
-                            spinner_text = {"starting": "启动任务中…", "retrying": "调用失败自动重试中…", "waiting_retry": "等待重试…", "saving": "安全保存中…", "supervisor_restarting": "断流重连中…"}.get(status_str, "任务正常运行中…")
-                            details = f"第 {min(int(latest_state.get('current_row', 0)) + 1, total)}/{total} 行 · 当前词语「{latest_state.get('current_word', '')}」"
-                            if latest_state.get("retry_count", 0): details += f" · 重试 {latest_state.get('retry_count')} 次"
-                            status_html = f'<div class="running-status"><span class="running-spinner"></span><div style="flex:1"><div style="font-size:1rem;font-weight:700">{spinner_text}</div><div class="batch-detail">{details}</div>'
-                            if error_str: status_html += f'<div class="batch-detail">最近状态：{error_str}</div>'
+                        if status_str in {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "supervisor_restarting", "worker_crashed"}:
+                            spinner_text = {
+                                "starting": "启动任务中…",
+                                "retrying": "调用失败，正在重试当前词语…",
+                                "waiting_retry": "等待重试当前词语…",
+                                "saving": "正在安全保存结果…",
+                                "waiting_save_retry": "保存失败，正在重试…",
+                                "supervisor_restarting": "Worker 已停止，Supervisor 正在自动恢复…",
+                                "worker_crashed": "Worker 异常退出，正在自动恢复…",
+                            }.get(status_str, "任务正在运行…")
+                            current_row = int(latest_state.get("current_row", 0))
+                            display_row = min(max(current_row + 1, 1), total) if total else 0
+                            details = f"当前第 {display_row}/{total} 行 · 当前词语「{latest_state.get('current_word', '')}」"
+                            if latest_state.get("retry_count", 0):
+                                details += f" · 重试 {latest_state.get('retry_count')} 次"
+                            status_html = (
+                                '<div class="running-status">'
+                                '<span class="running-spinner"></span>'
+                                '<div style="flex:1">'
+                                f'<div style="font-size:1rem;font-weight:700">{spinner_text}</div>'
+                                f'<div class="batch-detail">{details}</div>'
+                            )
+                            if error_str:
+                                # 防止异常信息里的 HTML 字符影响页面
+                                safe_error = re.sub(r"[<>]", "", error_str)[:1000]
+                                status_html += f'<div class="batch-detail">最近状态：{safe_error}</div>'
                             status_html += '</div></div>'
                             status_info.markdown(status_html, unsafe_allow_html=True)
                         elif status_str == "completed":
@@ -1073,6 +1111,14 @@ def main():
                             status_info.error(f"❌ 任务停止：{error_str or '未知异常'}")
                         else:
                             status_info.info("等待开始任务。点击上方“开始处理 / 继续任务”即可启动。")
+
+                        # 2. 实时同步结果表：和状态同一个 fragment，每 2 秒重新读取
+                        results_df = _read_results_for_display(BACKUP_FILE)
+                        metric_placeholder.metric("已存数据量", f"{len(results_df)} 条")
+                        if not results_df.empty:
+                            table_placeholder.dataframe(results_df, use_container_width=True, height=300)
+                        else:
+                            table_placeholder.info("暂无已保存结果。任务开始后，这里会实时显示已完成的数据。")
 
                     if hasattr(st, "fragment"):
                         @st.fragment(run_every="2s")
