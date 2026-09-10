@@ -230,96 +230,180 @@ def _make_task_id(file_name: str, row_index: int) -> str:
     return f"{file_name}::row::{row_index + 1}"
 
 
+def _normalize_word(word: Any) -> str:
+    """统一词语键：处理空白、换行，避免视觉相同但字符串不同造成重复。"""
+    if word is None:
+        return ""
+    return re.sub(r"\s+", "", str(word)).strip()
+
+
+def _csv_lock_path(file_path: Path) -> Path:
+    """所有 CSV 维护、检查、写入统一使用同一把锁，避免不同锁互相失效。"""
+    return file_path.with_suffix(file_path.suffix + '.lock')
+
+
 def clean_csv_duplicates(file_path: Path):
-    """只按稳定的任务ID/Excel序数清理重复，不按词语清理，避免误删合法同词多行。"""
+    """启动/展示前统一清理历史重复：优先任务ID，其次序数，最后词语；保留最后一次结果。"""
     if not file_path.exists():
         return
-    lock_path = file_path.with_suffix(file_path.suffix + '.maintenance.lock')
+    lock_path = _csv_lock_path(file_path)
     fd = None
     try:
-        fd = _lock_file(lock_path, timeout=20)
+        fd = _lock_file(lock_path, timeout=30, poll=0.2)
         df = pd.read_csv(file_path, encoding='utf-8-sig')
-        key_col = None
+        original_len = len(df)
+        if original_len == 0:
+            return
+
+        # 规范化词语，但不覆盖原始显示值。
+        if '词语' in df.columns:
+            word_keys = df['词语'].map(_normalize_word)
+        else:
+            word_keys = pd.Series([''] * len(df), index=df.index)
+
+        # 严格按一个统一主键去重：任务ID > 序数 > 词语。
+        duplicate_mask = pd.Series(False, index=df.index)
         if '任务ID' in df.columns:
-            key_col = '任务ID'
-        elif '序数' in df.columns:
-            key_col = '序数'
-        if key_col and df.duplicated(subset=[key_col]).any():
-            df = df.drop_duplicates(subset=[key_col], keep='last')
-            tmp = file_path.with_suffix(file_path.suffix + '.clean.tmp')
+            duplicate_mask |= df['任务ID'].astype(str).duplicated(keep='last')
+        if '序数' in df.columns:
+            serial = pd.to_numeric(df['序数'], errors='coerce')
+            valid = serial.notna()
+            duplicate_mask |= valid & serial.duplicated(keep='last')
+        # 当前项目是“词表逐词分析”，同一个词只保留一条最终结果，防止旧版本产生的重复继续污染。
+        nonempty_word = word_keys != ''
+        duplicate_mask |= nonempty_word & word_keys.duplicated(keep='last')
+
+        if duplicate_mask.any():
+            df = df.loc[~duplicate_mask].copy()
+            tmp = file_path.with_suffix(file_path.suffix + '.dedup.tmp')
             df.to_csv(tmp, index=False, encoding='utf-8-sig')
             os.replace(tmp, file_path)
+            logger.warning(f"已清理 CSV 重复数据：{original_len} -> {len(df)}，删除 {original_len-len(df)} 条")
     except Exception as e:
-        logger.exception(f"清理 CSV 重复项失败: {file_path}")
+        logger.exception(f"清理 CSV 重复项失败: {file_path}: {e}")
     finally:
         if fd is not None:
             _unlock_file(lock_path, fd)
 
 
-def append_unique_csv(df: pd.DataFrame, file_path: Path, task_id: str, max_retries=30):
-    """原子执行：加锁 -> 再检查任务ID -> 追加写入。返回(success, detail, already_exists)。"""
-    lock_path = file_path.with_suffix(file_path.suffix + '.write.lock')
+def append_unique_csv(df: pd.DataFrame, file_path: Path, task_id: str, max_retries=60):
+    """真正的 exactly-once 写入：同一把锁内完成读取、去重、判断、写入，禁止并发重复。"""
+    lock_path = _csv_lock_path(file_path)
     last_error = ''
     for attempt in range(1, max_retries + 1):
         fd = None
         try:
-            fd = _lock_file(lock_path, timeout=5)
-            if file_path.exists():
-                existing_all = pd.read_csv(file_path, encoding='utf-8-sig')
-                serial = int(df.iloc[0]['序数']) if '序数' in df.columns else None
+            fd = _lock_file(lock_path, timeout=10)
 
-                # 旧 CSV 没有任务ID时，先升级一次表头，避免把新列直接追加到旧表头造成错列。
-                if '任务ID' not in existing_all.columns:
-                    if '序数' in existing_all.columns:
-                        existing_all['任务ID'] = existing_all['序数'].apply(
-                            lambda x: f'legacy::row::{int(x)}' if pd.notna(x) else f'legacy::row::{x}'
+            if file_path.exists() and file_path.stat().st_size > 0:
+                existing = pd.read_csv(file_path, encoding='utf-8-sig')
+            else:
+                existing = pd.DataFrame()
+
+            serial = int(df.iloc[0]['序数']) if '序数' in df.columns and pd.notna(df.iloc[0]['序数']) else None
+            word = _normalize_word(df.iloc[0].get('词语', ''))
+
+            if not existing.empty:
+                # 兼容旧 CSV：先补任务ID列。
+                if '任务ID' not in existing.columns:
+                    if '序数' in existing.columns:
+                        existing['任务ID'] = existing['序数'].apply(
+                            lambda x: f'legacy::row::{int(x)}' if pd.notna(x) else ''
                         )
                     else:
-                        existing_all['任务ID'] = [f'legacy::index::{i+1}' for i in range(len(existing_all))]
-                    upgrade_tmp = file_path.with_suffix(file_path.suffix + '.upgrade.tmp')
-                    existing_all.to_csv(upgrade_tmp, index=False, encoding='utf-8-sig')
-                    os.replace(upgrade_tmp, file_path)
+                        existing['任务ID'] = [f'legacy::index::{i+1}' for i in range(len(existing))]
 
-                # 同时检查稳定任务ID和Excel序数，兼容从旧版本迁移过来的结果。
-                existing_ids = set(existing_all.get('任务ID', pd.Series(dtype=str)).astype(str).tolist())
+                # 先清理锁内已经存在的历史重复，避免继续累积。
+                keys = existing['任务ID'].astype(str)
+                keep = ~keys.duplicated(keep='last')
+                if '序数' in existing.columns:
+                    serials = pd.to_numeric(existing['序数'], errors='coerce')
+                    valid = serials.notna()
+                    keep &= ~(valid & serials.duplicated(keep='last'))
+                if '词语' in existing.columns:
+                    words = existing['词语'].map(_normalize_word)
+                    nonempty = words != ''
+                    keep &= ~(nonempty & words.duplicated(keep='last'))
+                if not keep.all():
+                    existing = existing.loc[keep].copy()
+
+                existing_ids = set(existing['任务ID'].astype(str).tolist())
                 if task_id in existing_ids:
-                    return True, '该任务ID已经写入，跳过重复写入。', True
-                if serial is not None and '序数' in existing_all.columns:
-                    serials = set(pd.to_numeric(existing_all['序数'], errors='coerce').dropna().astype(int).tolist())
-                    if serial in serials:
-                        return True, '该 Excel 行已有结果，跳过重复写入。', True
+                    return True, '该任务ID已存在，跳过重复写入。', True
 
-            header_needed = not file_path.exists() or file_path.stat().st_size == 0
-            with open(file_path, 'a', encoding='utf-8-sig', newline='') as f:
-                df.to_csv(f, header=header_needed, index=False)
+                if serial is not None and '序数' in existing.columns:
+                    serials = set(pd.to_numeric(existing['序数'], errors='coerce').dropna().astype(int).tolist())
+                    if serial in serials:
+                        return True, '该 Excel 行已存在结果，跳过重复写入。', True
+
+                if word and '词语' in existing.columns:
+                    words = set(existing['词语'].map(_normalize_word).tolist())
+                    if word in words:
+                        return True, '该词语已有结果，跳过重复写入。', True
+
+            # 若上面的锁内清理改变了 existing，则先整体原子回写一次。
+            needs_rewrite = file_path.exists() and not existing.empty
+            if needs_rewrite:
+                # 确保新旧列一致，追加时保持完整结构。
+                existing_cols = list(existing.columns)
+                for c in df.columns:
+                    if c not in existing_cols:
+                        existing[c] = ''
+                for c in existing_cols:
+                    if c not in df.columns:
+                        df[c] = ''
+                df = df[existing.columns]
+                combined = pd.concat([existing, df], ignore_index=True)
+                tmp = file_path.with_suffix(file_path.suffix + '.append.tmp')
+                combined.to_csv(tmp, index=False, encoding='utf-8-sig')
+                os.replace(tmp, file_path)
+            else:
+                header_needed = not file_path.exists() or file_path.stat().st_size == 0
+                with open(file_path, 'a', encoding='utf-8-sig', newline='') as f:
+                    df.to_csv(f, header=header_needed, index=False)
             return True, '写入成功。', False
+
         except Exception as e:
-            last_error = f"{type(e).__name__}: {e}"
-            logger.warning(f"CSV原子写入失败（第{attempt}/{max_retries}次）: {last_error}")
-            time.sleep(min(2, 0.2 * attempt))
+            last_error = f'{type(e).__name__}: {e}'
+            logger.exception(f'CSV exactly-once 写入失败（第{attempt}/{max_retries}次）: {last_error}')
+            time.sleep(min(3, 0.25 * attempt))
         finally:
             if fd is not None:
                 _unlock_file(lock_path, fd)
-    return False, f"CSV写入最终失败：{last_error}", False
+    return False, f'CSV写入最终失败：{last_error}', False
 
 
-def is_task_processed(file_path: Path, task_id: str, row_number: int) -> bool:
-    """判断具体 Excel 行是否已经处理，优先任务ID，兼容旧CSV的序数。"""
+def is_task_processed(file_path: Path, task_id: str, row_number: int, word: str = '') -> bool:
+    """快速预检；最终是否写入仍必须以 append_unique_csv 的锁内检查为准。"""
     if not file_path.exists():
         return False
+    lock_path = _csv_lock_path(file_path)
+    fd = None
     try:
+        fd = _lock_file(lock_path, timeout=10, poll=0.1)
+        if file_path.stat().st_size == 0:
+            return False
         cols = pd.read_csv(file_path, encoding='utf-8-sig', nrows=0).columns.tolist()
         if '任务ID' in cols:
             existing = pd.read_csv(file_path, encoding='utf-8-sig', usecols=['任务ID'])
-            return task_id in set(existing['任务ID'].astype(str).tolist())
+            if task_id in set(existing['任务ID'].astype(str).tolist()):
+                return True
         if '序数' in cols:
             existing = pd.read_csv(file_path, encoding='utf-8-sig', usecols=['序数'])
             vals = pd.to_numeric(existing['序数'], errors='coerce').dropna().astype(int)
-            return row_number in set(vals.tolist())
+            if row_number in set(vals.tolist()):
+                return True
+        if word and '词语' in cols:
+            existing = pd.read_csv(file_path, encoding='utf-8-sig', usecols=['词语'])
+            key = _normalize_word(word)
+            return key in set(existing['词语'].map(_normalize_word).tolist())
     except Exception as e:
-        logger.warning(f"检查任务是否已处理失败（将继续处理并在写入时再次原子检查）：{type(e).__name__}: {e}")
+        logger.warning(f'检查任务是否已处理失败，将交由原子写入最终判定：{type(e).__name__}: {e}')
+        return False
+    finally:
+        if fd is not None:
+            _unlock_file(lock_path, fd)
     return False
-
 
 def spawn_detached(cmd, cwd):
     """跨平台脱离式进程启动，防止 Streamlit 页面刷新误杀子进程。"""
@@ -643,7 +727,7 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
                              retry_count=0, error='')
             continue
 
-        if is_task_processed(backup_file, task_id, row_number):
+        if is_task_processed(backup_file, task_id, row_number, word):
             start_row = index + 1
             _write_job_state(job_state_file, status='running', next_row=start_row,
                              current_row=index, current_word=word, completed_rows=start_row,
