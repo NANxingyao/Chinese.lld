@@ -950,14 +950,15 @@ def render_live_monitor(job_state_file: Path, backup_file: Path, total_rows_defa
     else:
         st.info("尚未运行。点击上方“开始处理 / 继续任务”即可启动队列。")
 
-    # 4. 实时数据表 (倒序展示最新的100条以防浏览器卡顿)
-    st.markdown("#### 实时结果预览 (最近 100 条)")
+    # 4. 实时数据表 (展示全部数据)
+    st.markdown("#### 实时结果预览 (全部数据，最新结果在最上方)")
     if live_df is not None and count > 0:
         if '序数' in live_df.columns:
             live_df['序数_num'] = pd.to_numeric(live_df['序数'], errors='coerce')
             live_df = live_df.sort_values('序数_num').drop(columns=['序数_num'])
-        display_df = live_df.tail(100).iloc[::-1] # 展示最后100条并将最新产生的放在最上方
-        st.dataframe(display_df, use_container_width=True, height=350)
+        # 取消 tail(100) 限制，仅倒序排列展示全部数据
+        display_df = live_df.iloc[::-1] 
+        st.dataframe(display_df, use_container_width=True, height=400)
     else:
         st.info("暂无数据。任务开启后实时数据将在此严格依序显示。")
 
