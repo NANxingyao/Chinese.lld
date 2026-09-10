@@ -1415,6 +1415,51 @@ def read_canonical_results(backup_file: Path) -> pd.DataFrame:
             pass
     return pd.DataFrame(columns=_RESULT_COLUMNS)
 
+
+
+# ===============================
+# v19：任务级隔离
+# ===============================
+V19_TASK_PREFIX = "batch_v19"
+
+def _safe_task_component(text: str) -> str:
+    cleaned = re.sub(r'[^a-zA-Z0-9_\-一-龥]', '_', str(text))
+    return cleaned or "default"
+
+def get_v19_task_files(project_code: str, uploaded_bytes: bytes, target_col: str, provider: str, model: str):
+    digest_src = uploaded_bytes + b"\0" + str(target_col).encode("utf-8") + b"\0" + str(provider).encode("utf-8") + b"\0" + str(model).encode("utf-8")
+    digest = hashlib.sha256(digest_src).hexdigest()[:16]
+    project = _safe_task_component(project_code)
+    task_id = f"{project}_{digest}"
+    return (
+        task_id,
+        BASE_DIR / f"{V19_TASK_PREFIX}_history_{task_id}.csv",
+        BASE_DIR / f"{V19_TASK_PREFIX}_progress_{task_id}.json",
+        BASE_DIR / f"{V19_TASK_PREFIX}_job_{task_id}.json",
+    )
+
+def reset_v19_task(job_state_file: Path, backup_file: Path, progress_file: Path):
+    _terminate_stale_job_processes(job_state_file, keep_pids=[])
+    paths = [
+        job_state_file, backup_file, progress_file, _db_path_from_csv(backup_file),
+        _service_file(job_state_file, ".spec.json"),
+        _service_file(job_state_file, ".supervisor.pid"),
+        _service_file(job_state_file, ".worker.pid"),
+        _service_file(job_state_file, ".supervisor.lock"), _state_lock_path(job_state_file),
+    ]
+    for path in paths:
+        try:
+            if path.exists(): path.unlink()
+        except OSError as e:
+            logger.warning(f"清理任务文件失败 {path}: {type(e).__name__}: {e}")
+
+def _read_v19_results_for_display(file_path: Path) -> pd.DataFrame:
+    try:
+        return read_canonical_results(file_path)
+    except Exception as e:
+        logger.warning(f"读取结果失败：{type(e).__name__}: {e}")
+        return pd.DataFrame(columns=_RESULT_COLUMNS)
+
 def main():
     st.markdown("""
     <div class="title-header-card">
@@ -1425,9 +1470,8 @@ def main():
             <span class="badge">隶属度分析</span>
             <span class="badge">可视化展示</span>
             <span class="badge">批量处理</span>
-            <span class="badge" style="background: rgba(251, 191, 36, 0.4); border-color: rgba(251, 191, 36, 0.8);">兼类判定支持</span>
-            <span class="badge" style="background: rgba(16, 185, 129, 0.4); border-color: rgba(16, 185, 129, 0.8);">抗断流自动恢复</span>
-            <span class="badge" style="background: rgba(168, 85, 247, 0.35); border-color: rgba(168, 85, 247, 0.7);">严格顺序零重复</span>
+            <span class="badge">严格顺序零重复</span>
+            <span class="badge">任务指纹隔离</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -1443,19 +1487,29 @@ def main():
             else:
                 selected_model_display_name = st.selectbox("选择大模型", list(AVAILABLE_MODEL_OPTIONS.keys()), key="model_select")
                 selected_model_info = AVAILABLE_MODEL_OPTIONS[selected_model_display_name]
-                st.markdown(f'<div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem;"><span class="status-badge success">● 已配置</span><span style="color: #64748b; font-size: 0.85rem;">提供商: {selected_model_info["provider"].upper()}</span></div>', unsafe_allow_html=True)
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;gap:.5rem;margin-top:.5rem;">'
+                    f'<span class="status-badge success">● 已配置</span>'
+                    f'<span style="color:#64748b;font-size:.85rem;">提供商: {selected_model_info["provider"].upper()}</span></div>',
+                    unsafe_allow_html=True,
+                )
         with col2:
             st.markdown('<div class="section-title"><span class="icon-dot"></span> 实验配置</div>', unsafe_allow_html=True)
-            st.session_state.project_code = st.text_input("实验批次码 (Project Code)", value=st.session_state.get("project_code", "default_task"), help="隔离不同量化分析任务")
-            BACKUP_FILE, PROGRESS_FILE = get_project_files(st.session_state.project_code)
+            st.session_state.project_code = st.text_input(
+                "实验批次码 (Project Code)",
+                value=st.session_state.get("project_code", "default_task"),
+                help="任务ID还会绑定Excel文件内容与模型，避免误用旧结果。",
+            )
         with col3:
-            st.markdown('<div class="section-title" style="justify-content: center;"><span class="icon-dot"></span> 连接测试</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-title" style="justify-content:center;"><span class="icon-dot"></span> 连接测试</div>', unsafe_allow_html=True)
             st.write("")
             if st.button("测试模型链接", type="secondary", use_container_width=True, disabled=not selected_model_info["api_key"]):
                 with st.spinner("正在测试连接..."):
-                    ok, _, err_msg = call_llm_api_cached(selected_model_info["provider"], selected_model_info["model"], selected_model_info["api_key"], [{"role": "user", "content": "请回复'pong'"}], max_tokens=10)
-                if ok: st.success("成功！")
-                else: st.error(f"失败: {err_msg}")
+                    ok, _, err_msg = call_llm_api_cached(
+                        selected_model_info["provider"], selected_model_info["model"], selected_model_info["api_key"],
+                        [{"role": "user", "content": "请回复'pong'"}], max_tokens=32
+                    )
+                st.success("成功！") if ok else st.error(f"失败: {err_msg}")
 
     st.markdown("---")
     tab1, tab2 = st.tabs(["单个词语详细分析", "Excel 批量处理"])
@@ -1466,24 +1520,36 @@ def main():
         if st.button("开始分析", type="primary", disabled=not (selected_model_info["api_key"] and word)):
             status_placeholder = st.empty()
             status_placeholder.info(f"正在为词语「{word}」启动分析...")
-            scores_all, raw_text, predicted_pos, explanation, is_dual_category = ask_model_for_pos_and_scores(word, selected_model_info["provider"], selected_model_info["model"], selected_model_info["api_key"])
+            scores_all, raw_text, predicted_pos, explanation, is_dual_category = ask_model_for_pos_and_scores(
+                word, selected_model_info["provider"], selected_model_info["model"], selected_model_info["api_key"]
+            )
             status_placeholder.empty()
             if scores_all:
                 membership = calculate_membership(scores_all)
                 final_membership = membership.get(predicted_pos, 0)
                 jianlei_badge_color = "#f59e0b" if is_dual_category else "#3b82f6"
                 jianlei_text = "属于兼类词" if is_dual_category else "非兼类词"
-                
-                st.markdown(f'<div class="result-success-card"><div style="font-size: 1.1rem; font-weight: 600; color: #065f46;">分析完成</div><div style="margin-top: 0.5rem; font-size: 1rem; color: #065f46; line-height: 1.8;">词语「<strong>{word}</strong>」最可能的词类是 <span style="background: #10b981; color: white; padding: 0.2rem 0.6rem; border-radius: 6px; font-weight: 600;">{predicted_pos}</span>，隶属度为 <strong>{final_membership:.4f}</strong><br/>多类属性判定： <span style="background: {jianlei_badge_color}; color: white; padding: 0.2rem 0.6rem; border-radius: 6px; font-weight: 600;">{jianlei_text}</span></div></div>', unsafe_allow_html=True)
-                
+                st.markdown(
+                    f'<div class="result-success-card"><div style="font-size:1.1rem;font-weight:600;color:#065f46;">分析完成</div>'
+                    f'<div style="margin-top:.5rem;font-size:1rem;color:#065f46;line-height:1.8;">'
+                    f'词语「<strong>{word}</strong>」最可能的词类是 '
+                    f'<span style="background:#10b981;color:white;padding:.2rem .6rem;border-radius:6px;font-weight:600;">{predicted_pos}</span>'
+                    f'，隶属度为 <strong>{final_membership:.4f}</strong><br/>'
+                    f'多类属性判定： <span style="background:{jianlei_badge_color};color:white;padding:.2rem .6rem;border-radius:6px;font-weight:600;">{jianlei_text}</span>'
+                    f'</div></div>', unsafe_allow_html=True
+                )
                 col_results_1, col_results_2 = st.columns(2)
                 with col_results_1:
                     st.markdown('<div class="section-title"><span class="icon-dot"></span> 词类隶属度排名</div>', unsafe_allow_html=True)
                     top10 = get_top_10_positions(membership)
                     for i, (pos, score) in enumerate(top10):
                         rank_class = f"top-{i+1}" if i < 3 else ""
-                        st.markdown(f'<div class="rank-card {rank_class}"><div style="display: flex; align-items: center; gap: 0.75rem;"><div class="rank-num">{i+1}</div><span style="font-weight: 600; color: #1e3a5f;">{pos}</span></div><span style="font-weight: 700; color: #2d5a87; font-size: 1.1rem;">{score:.4f}</span></div>', unsafe_allow_html=True)
-                    st.markdown('<div class="section-title"><span class="icon-dot"></span> 词类隶属度雷达图</div>', unsafe_allow_html=True)
+                        st.markdown(
+                            f'<div class="rank-card {rank_class}"><div style="display:flex;align-items:center;gap:.75rem;">'
+                            f'<div class="rank-num">{i+1}</div><span style="font-weight:600;color:#1e3a5f;">{pos}</span></div>'
+                            f'<span style="font-weight:700;color:#2d5a87;font-size:1.1rem;">{score:.4f}</span></div>',
+                            unsafe_allow_html=True,
+                        )
                     plot_radar_chart_streamlit(dict(top10), f"「{word}」隶属度分布")
                 with col_results_2:
                     st.markdown('<div class="section-title"><span class="icon-dot"></span> 各词类详细得分</div>', unsafe_allow_html=True)
@@ -1492,154 +1558,147 @@ def main():
                         total_score = pos_total_scores[pos]
                         max_rule = max(scores_all[pos].items(), key=lambda x: x[1], default=("无", 0))
                         with st.expander(f"**{pos}** (总分: {total_score}, 最高分规则: {max_rule[0]} - {max_rule[1]}分)"):
-                            rule_data = [{"规则代码": k, "规则描述": next((r["desc"] for r in RULE_SETS.get(pos, []) if r["name"] == k), ""), "得分": v} for k, v in scores_all[pos].items()]
-                            rule_df = pd.DataFrame(sorted(rule_data, key=lambda x: x["得分"], reverse=True))
-                            st.dataframe(rule_df.style.map(lambda x: "color: #ff4b4b; font-weight: bold" if isinstance(x, (int, float)) and x < 0 else "", subset=["得分"]), use_container_width=True, height=min(len(rule_df) * 30 + 50, 400))
-                    st.markdown('<div class="section-title"><span class="icon-dot"></span> 模型原始响应</div>', unsafe_allow_html=True)
+                            rule_data = [
+                                {"规则代码": k, "规则描述": next((r["desc"] for r in RULE_SETS.get(pos, []) if r["name"] == k), ""), "得分": v}
+                                for k, v in scores_all[pos].items()
+                            ]
+                            st.dataframe(pd.DataFrame(sorted(rule_data, key=lambda x: x["得分"], reverse=True)), use_container_width=True, height=min(len(rule_data)*30+50, 400))
                     with st.expander("展开查看原始响应", expanded=False):
                         st.code(raw_text, language="text")
 
     with tab2:
-        st.markdown(f'<div class="section-title"><span class="icon-dot"></span> 批量任务实时监控 (当前批次: <code>{st.session_state.project_code}</code>)</div>', unsafe_allow_html=True)
-        ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2, 1, 1])
-        with ctrl_col1:
-            metric_placeholder = st.empty()
-            metric_placeholder.metric("已存数据量", f"{get_history_count(BACKUP_FILE)} 条")
-            if os.path.exists(BACKUP_FILE): st.caption(f"存储表: `{BACKUP_FILE.name}`")
-        with ctrl_col2:
-            if os.path.exists(BACKUP_FILE):
-                with open(BACKUP_FILE, "rb") as f:
-                    st.download_button("下载结果 (CSV)", data=f, file_name=f"{st.session_state.project_code}_results_{time.strftime('%Y%m%d')}.csv", mime="text/csv", use_container_width=True)
-            else: st.button("下载结果", disabled=True, use_container_width=True)
-        with ctrl_col3:
-            if st.button("清空本批次记录", use_container_width=True, type="secondary"):
-                if os.path.exists(BACKUP_FILE):
-                        try:
-                            os.remove(BACKUP_FILE)
-                            db_file = _db_path_from_csv(BACKUP_FILE)
-                            if db_file.exists():
-                                os.remove(db_file)
-                            st.success(f"已清空批次 {st.session_state.project_code} 记录")
-                            st.rerun()
-                        except Exception as e: st.error(f"清空失败: {e}")
-
-        st.divider()
-        progress_bar, status_info = st.progress(0), st.empty()
-        
-        st.markdown("#### 实时结果预览")
-        table_placeholder = st.empty()
-        if os.path.exists(BACKUP_FILE):
-            try: table_placeholder.dataframe(read_canonical_results(BACKUP_FILE), use_container_width=True, height=300)
-            except Exception as e: table_placeholder.error(f"显示历史记录失败: {e}")
-        else: table_placeholder.info("暂无数据。开始后结果将在此逐行实时显示。")
-        
-        st.divider()
-        st.markdown("#### 上传新任务")
-        uploaded_file = st.file_uploader("选择 Excel 文件", type=["xlsx", "xls"])
-        
-        if uploaded_file:
+        st.markdown('<div class="section-title"><span class="icon-dot"></span> Excel 批量处理</div>', unsafe_allow_html=True)
+        uploaded_file = st.file_uploader("选择 Excel 文件", type=["xlsx", "xls"], key="batch_excel_upload")
+        if not uploaded_file:
+            st.info("先上传 Excel 文件。")
+        else:
             try:
+                upload_bytes = uploaded_file.getvalue()
                 df_input = pd.read_excel(uploaded_file)
                 target_col = next((col for col in df_input.columns if "词" in str(col) or "word" in str(col).lower()), None)
-                if target_col:
-                    st.markdown(f'<div class="info-highlight"><div style="font-weight: 600; color: #1e40af;">识别到目标列: <code>{target_col}</code> | 待分析总数: <strong>{len(df_input)}</strong> 条</div></div>', unsafe_allow_html=True)
-                    
-                    job_state_file = BASE_DIR / f"batch_job_{re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', st.session_state.project_code)}.json"
+                if not target_col:
+                    st.error("未识别到包含“词”或“word”的目标列")
+                else:
+                    # 关键修复：同一个项目码下，不同Excel文件/不同模型不会共用旧CSV/DB。
+                    task_id, BACKUP_FILE, PROGRESS_FILE, job_state_file = get_v19_task_files(
+                        st.session_state.project_code,
+                        upload_bytes,
+                        target_col,
+                        selected_model_info["provider"],
+                        selected_model_info["model"],
+                    )
+                    st.markdown(
+                        f'<div class="info-highlight"><div style="font-weight:600;color:#1e40af;">文件信息</div>'
+                        f'<div style="margin-top:.5rem;">识别到目标列: <code>{target_col}</code> | 总数: <strong>{len(df_input)}</strong> 条<br/>'
+                        f'当前任务ID: <code>{task_id}</code></div></div>', unsafe_allow_html=True
+                    )
+
                     current_state = _auto_recover_if_needed(job_state_file)
-                    
-                    can_start = not _pid_alive(current_state.get("supervisor_pid")) and current_state.get("status") not in {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry"}
+                    active_statuses = {
+                        "starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry",
+                        "supervisor_restarting", "worker_crashed"
+                    }
+                    is_active = current_state.get("status") in active_statuses and (
+                        _pid_alive(current_state.get("supervisor_pid")) or current_state.get("status") == "starting"
+                    )
 
-                    if st.button("开始处理 / 继续任务", type="primary", use_container_width=True, disabled=not can_start):
-                        if not selected_model_info["api_key"]: st.error("请配置有效的 API Key")
+                    c1, c2, c3 = st.columns([3, 1, 1])
+                    with c1:
+                        if is_active:
+                            st.button("任务运行中…", disabled=True, use_container_width=True)
                         else:
+                            if st.button("开始处理 / 继续任务", type="primary", use_container_width=True):
+                                if not selected_model_info["api_key"]:
+                                    st.error("请配置有效的 API Key")
+                                else:
+                                    try:
+                                        started, _ = start_or_resume_batch_job(
+                                            df_input, target_col, uploaded_file,
+                                            f"{st.session_state.project_code}_{uploaded_file.name}_{task_id}",
+                                            BACKUP_FILE, selected_model_info["provider"], selected_model_info["model"],
+                                            selected_model_info["env_var"], job_state_file
+                                        )
+                                        if started:
+                                            st.success("任务已启动/继续。")
+                                            st.rerun()
+                                    except Exception as e:
+                                        st.error(f"启动失败：{type(e).__name__}: {e}")
+                    with c2:
+                        st.metric("已完成", f"{len(_read_v19_results_for_display(BACKUP_FILE))} / {len(df_input)}")
+                    with c3:
+                        if st.button("重新开始", use_container_width=True, help="只清除当前这个Excel任务，从第1条重新计算"):
                             try:
-                                started, state = start_or_resume_batch_job(df_input, target_col, uploaded_file, f"{st.session_state.project_code}_{uploaded_file.name}", BACKUP_FILE, selected_model_info["provider"], selected_model_info["model"], selected_model_info["env_var"], job_state_file)
-                                if started: st.success("守护任务已启动，将在后台持续处理并自动恢复。"); st.rerun()
-                            except Exception as e: st.error(f"启动失败：{e}")
-
-                    def _read_results_for_display(file_path: Path) -> pd.DataFrame:
-                        """只读当前结果文件；写入采用原子替换，因此这里不会写文件。"""
-                        if not file_path.exists():
-                            return pd.DataFrame()
-                        last_error = None
-                        for _ in range(3):
-                            try:
-                                with _file_lock(file_path):
-                                    if not file_path.exists():
-                                        return pd.DataFrame()
-                                    return pd.read_csv(file_path, encoding="utf-8-sig")
+                                reset_v19_task(job_state_file, BACKUP_FILE, PROGRESS_FILE)
+                                st.success("当前任务已清空，将从第 1 条重新开始。")
+                                st.rerun()
                             except Exception as e:
-                                last_error = e
-                                time.sleep(0.15)
-                        logger.warning(f"实时读取结果表失败：{type(last_error).__name__}: {last_error}")
-                        return pd.DataFrame()
+                                st.error(f"重新开始失败：{type(e).__name__}: {e}")
 
-                    def render_batch_status():
-                        latest_state = _auto_recover_if_needed(job_state_file)
-                        total = int(latest_state.get("total_rows", len(df_input)) or len(df_input))
-                        completed = int(latest_state.get("completed_rows", latest_state.get("next_row", 0)) or 0)
-                        status_str = str(latest_state.get("status", ""))
-                        error_str = str(latest_state.get("error", ""))
+                    st.divider()
+                    progress_bar, status_info, table_placeholder = st.progress(0), st.empty(), st.empty()
 
-                        # 1. 实时状态
-                        progress_bar.progress(min(1.0, max(0.0, completed / total)) if total else 0.0)
-
-                        if status_str in {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "supervisor_restarting", "worker_crashed"}:
-                            spinner_text = {
-                                "starting": "启动任务中…",
-                                "retrying": "调用失败，正在重试当前词语…",
-                                "waiting_retry": "等待重试当前词语…",
-                                "saving": "正在安全保存结果…",
-                                "waiting_save_retry": "保存失败，正在重试…",
-                                "supervisor_restarting": "Worker 已停止，Supervisor 正在自动恢复…",
+                    def render_batch_status_v19():
+                        state = _auto_recover_if_needed(job_state_file)
+                        total = int(state.get("total_rows", len(df_input)) or len(df_input))
+                        results_df = _read_v19_results_for_display(BACKUP_FILE)
+                        completed = min(len(results_df), total)
+                        progress_bar.progress(completed / total if total else 0)
+                        status = str(state.get("status", ""))
+                        if status in active_statuses:
+                            current = int(state.get("current_row", completed) or completed)
+                            display_row = min(max(current + 1, 1), total) if total else 0
+                            text = {
+                                "starting": "启动任务中…", "retrying": "当前词语失败，正在原地重试…",
+                                "waiting_retry": "等待重试当前词语…", "saving": "正在安全保存…",
+                                "waiting_save_retry": "保存失败，正在重试…", "supervisor_restarting": "正在自动恢复 Worker…",
                                 "worker_crashed": "Worker 异常退出，正在自动恢复…",
-                            }.get(status_str, "任务正在运行…")
-                            current_row = int(latest_state.get("current_row", 0))
-                            display_row = min(max(current_row + 1, 1), total) if total else 0
-                            details = f"当前第 {display_row}/{total} 行 · 当前词语「{latest_state.get('current_word', '')}」"
-                            if latest_state.get("retry_count", 0):
-                                details += f" · 重试 {latest_state.get('retry_count')} 次"
-                            status_html = (
-                                '<div class="running-status">'
-                                '<span class="running-spinner"></span>'
-                                '<div style="flex:1">'
-                                f'<div style="font-size:1rem;font-weight:700">{spinner_text}</div>'
-                                f'<div class="batch-detail">{details}</div>'
-                            )
-                            if error_str:
-                                # 防止异常信息里的 HTML 字符影响页面
-                                safe_error = re.sub(r"[<>]", "", error_str)[:1000]
-                                status_html += f'<div class="batch-detail">最近状态：{safe_error}</div>'
-                            status_html += '</div></div>'
-                            status_info.markdown(status_html, unsafe_allow_html=True)
-                        elif status_str == "completed":
+                            }.get(status, "任务正在运行…")
+                            detail = f"当前第 {display_row}/{total} 行 · 当前词语「{state.get('current_word','')}」"
+                            if state.get("retry_count", 0):
+                                detail += f" · 重试 {state.get('retry_count')} 次"
+                            err = str(state.get("error", ""))[:1000]
+                            html = f'<div class="running-status"><span class="running-spinner"></span><div style="flex:1"><div style="font-size:1rem;font-weight:700">{text}</div><div class="batch-detail">{detail}</div>'
+                            if err:
+                                html += f'<div class="batch-detail">最近状态：{re.sub(r"[<>]", "", err)}</div>'
+                            html += '</div></div>'
+                            status_info.markdown(html, unsafe_allow_html=True)
+                        elif status == "completed":
                             progress_bar.progress(1.0)
                             status_info.success(f"🎉 任务完毕，共 {total} 条。")
-                        elif status_str == "failed":
-                            status_info.error(f"❌ 任务停止：{error_str or '未知异常'}")
+                        elif status == "failed":
+                            status_info.error(f"❌ 任务停止：{state.get('error') or '未记录具体异常'}")
                         else:
-                            status_info.info("等待开始任务。点击上方“开始处理 / 继续任务”即可启动。")
+                            status_info.info("等待开始任务。")
 
-                        # 2. 实时同步结果表：和状态同一个 fragment，每 2 秒重新读取
-                        results_df = _read_results_for_display(BACKUP_FILE)
-                        metric_placeholder.metric("已存数据量", f"{len(results_df)} 条")
-                        if not results_df.empty:
-                            table_placeholder.dataframe(results_df, use_container_width=True, height=300)
+                        metric_count = len(results_df)
+                        # 任何时候都按序展示，绝不让旧CSV的物理行顺序影响界面。
+                        if not results_df.empty and "序数" in results_df.columns:
+                            results_df["序数"] = pd.to_numeric(results_df["序数"], errors="coerce")
+                            results_df = results_df.dropna(subset=["序数"]).sort_values("序数", kind="stable")
+                        st_count = results_df.shape[0]
+                        # 重新计算占位符的内容而不修改底层文件。
+                        if st_count:
+                            table_placeholder.dataframe(results_df, use_container_width=True, height=360)
                         else:
-                            table_placeholder.info("暂无已保存结果。任务开始后，这里会实时显示已完成的数据。")
+                            table_placeholder.info("暂无已保存结果。")
 
                     if hasattr(st, "fragment"):
                         @st.fragment(run_every="2s")
-                        def _live_batch_status(): render_batch_status()
-                        _live_batch_status()
-                    else: render_batch_status()
-                else: st.error("未识别到包含'词'或'word'的目标列")
-            except Exception as e: st.error(f"读取Excel文件失败: {e}")
+                        def _live_batch_status_v19():
+                            render_batch_status_v19()
+                        _live_batch_status_v19()
+                    else:
+                        render_batch_status_v19()
+            except Exception as e:
+                st.error(f"读取 Excel 文件失败：{type(e).__name__}: {e}")
 
 if __name__ == "__main__":
-    if "--worker" in sys.argv: _worker_entry(Path(sys.argv[sys.argv.index("--worker") + 1]))
-    elif "--supervisor" in sys.argv: _supervisor_entry(Path(sys.argv[sys.argv.index("--supervisor") + 1]))
-    else: main()
+    if "--worker" in sys.argv:
+        _worker_entry(Path(sys.argv[sys.argv.index("--worker") + 1]))
+    elif "--supervisor" in sys.argv:
+        _supervisor_entry(Path(sys.argv[sys.argv.index("--supervisor") + 1]))
+    else:
+        main()
 
 if not SERVICE_MODE:
     st.markdown('<div style="text-align: center; color: #999; font-size: 13px; line-height: 1.8; padding: 10px 0 5px 0;">汉语词类隶属度检测划类平台 · © 2025 Ryan<br><a href="mailto:shenrui26@gmail.com" style="color: #999; text-decoration: none;">✉ shenrui26@gmail.com</a></div>', unsafe_allow_html=True)
