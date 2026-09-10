@@ -308,7 +308,7 @@ footer {visibility: hidden;}
 
 /* ===== 后台任务运行转动圈 ===== */
 .running-status{display:flex;align-items:center;gap:.75rem;padding:.9rem 1.1rem;margin:.5rem 0 1rem 0;border-radius:12px;background:linear-gradient(135deg,#eff6ff 0%,#dbeafe 100%);border:1px solid #bfdbfe;color:#1e40af;font-weight:600;}
-.running-spinner{width:18px;height:18px;border:3px solid rgba(45,108,184,.2);border-top-color:#2d6cb8;border-radius:50%;animation:batch-spin .9s linear infinite;flex:0 0 auto;}
+.running-spinner{display:inline-block;width:18px;height:18px;min-width:18px;border:3px solid rgba(45,108,184,.22);border-top-color:#2d6cb8;border-radius:50%;animation:batch-spin .75s linear infinite;flex:0 0 auto;}
 @keyframes batch-spin{to{transform:rotate(360deg);}}
 .batch-detail{margin-top:.35rem;font-size:.9rem;font-weight:500;color:#475569;}
 </style>
@@ -906,6 +906,18 @@ def _pid_alive(pid):
         return False
 
 
+def _state_age_seconds(state):
+    """返回任务状态距离当前时间的秒数；无法解析时返回一个保守的较小值。"""
+    try:
+        updated_at = state.get("updated_at")
+        if not updated_at:
+            return 0
+        ts = time.mktime(time.strptime(updated_at, "%Y-%m-%d %H:%M:%S"))
+        return max(0, time.time() - ts)
+    except Exception:
+        return 0
+
+
 def _service_file(job_state_file: Path, suffix: str) -> Path:
     return job_state_file.with_name(job_state_file.stem + suffix)
 
@@ -1189,33 +1201,95 @@ def start_or_resume_batch_job(df_input, target_col, uploaded_file, file_name,
     )
 
     cmd = [sys.executable, str(Path(__file__).resolve()), "--supervisor", str(job_state_file)]
-    subprocess.Popen(
+    supervisor_proc = subprocess.Popen(
         cmd,
         cwd=str(Path(__file__).resolve().parent),
         start_new_session=True
     )
+    # 关键：立即写入 Supervisor PID，避免页面自动刷新时误以为 Supervisor 尚未启动，
+    # 从而重复拉起多个 Supervisor。
+    _write_job_state(
+        job_state_file,
+        status="starting",
+        supervisor_pid=supervisor_proc.pid,
+        worker_pid=None,
+        supervisor_restart_count=0,
+        error="守护进程已启动，正在启动 Worker..."
+    )
+    try:
+        _service_file(job_state_file, ".supervisor.pid").write_text(
+            str(supervisor_proc.pid), encoding="utf-8"
+        )
+    except Exception:
+        pass
     return True, _load_job_state(job_state_file) or {}
 
 
 def _auto_recover_if_needed(job_state_file: Path):
-    """页面重跑时，如果任务应当还在跑但 Supervisor 已死，则自动补拉。"""
+    """
+    页面刷新时仅在 Supervisor 确认真正死亡后才恢复。
+    尤其避免“starting 状态下 PID 尚未写入”的竞态导致重复启动。
+    """
     state = _load_job_state(job_state_file) or {}
-    if state.get("status") in {"running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "starting", "supervisor_restarting"}:
-        supervisor_file = _service_file(job_state_file, ".supervisor.pid")
-        file_pid_alive = False
-        if supervisor_file.exists():
-            try:
-                file_pid_alive = _pid_alive(int(supervisor_file.read_text(encoding="utf-8").strip()))
-            except Exception:
-                file_pid_alive = False
-        if not _pid_alive(state.get("supervisor_pid")) and not file_pid_alive:
-            spec_file = _service_file(job_state_file, ".spec.json")
-            if spec_file.exists():
-                cmd = [sys.executable, str(Path(__file__).resolve()), "--supervisor", str(job_state_file)]
-                subprocess.Popen(cmd, cwd=str(Path(__file__).resolve().parent), start_new_session=True)
-                _write_job_state(job_state_file, status="starting", error="检测到守护进程退出，页面已自动重新拉起 Supervisor")
-                state = _load_job_state(job_state_file) or state
-    return state
+    active_states = {
+        "running", "retrying", "waiting_retry", "saving",
+        "waiting_save_retry", "starting", "supervisor_restarting"
+    }
+    if state.get("status") not in active_states:
+        return state
+
+    state_pid_alive = _pid_alive(state.get("supervisor_pid"))
+    supervisor_file = _service_file(job_state_file, ".supervisor.pid")
+    file_pid_alive = False
+    file_pid = None
+    if supervisor_file.exists():
+        try:
+            file_pid = int(supervisor_file.read_text(encoding="utf-8").strip())
+            file_pid_alive = _pid_alive(file_pid)
+        except Exception:
+            file_pid_alive = False
+
+    if state_pid_alive or file_pid_alive:
+        return state
+
+    # 刚刚创建 Supervisor 时给它一个启动窗口；不要在这个窗口内重复拉起。
+    # 若状态已经明确是 supervisor_restarting，则允许立即恢复。
+    age = _state_age_seconds(state)
+    if state.get("status") == "starting" and age < 15:
+        return state
+
+    spec_file = _service_file(job_state_file, ".spec.json")
+    if not spec_file.exists():
+        return state
+
+    try:
+        cmd = [sys.executable, str(Path(__file__).resolve()), "--supervisor", str(job_state_file)]
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(Path(__file__).resolve().parent),
+            start_new_session=True
+        )
+        _write_job_state(
+            job_state_file,
+            status="starting",
+            supervisor_pid=proc.pid,
+            worker_pid=None,
+            error="检测到 Supervisor 已退出，页面已自动重新拉起守护进程。",
+        )
+        try:
+            supervisor_file.write_text(str(proc.pid), encoding="utf-8")
+        except Exception:
+            pass
+        return _load_job_state(job_state_file) or state
+    except Exception as e:
+        _write_job_state(
+            job_state_file,
+            status="supervisor_restarting",
+            supervisor_pid=None,
+            worker_pid=None,
+            error=f"自动恢复 Supervisor 失败：{type(e).__name__}: {e}"
+        )
+        return _load_job_state(job_state_file) or state
 
 
 def main():
@@ -1461,34 +1535,28 @@ def main():
                     """, unsafe_allow_html=True)
                     
                     job_state_file = BASE_DIR / f"batch_job_{re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', st.session_state.project_code)}.json"
+
+                    # 页面只负责显示状态和发起任务；批处理本身由独立 Supervisor/Worker 完成。
                     current_state = _auto_recover_if_needed(job_state_file)
+
+                    # ===== 启动/继续任务按钮 =====
                     supervisor_alive = _pid_alive(current_state.get("supervisor_pid"))
-
                     state_status = current_state.get("status", "")
-                    if state_status in {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "supervisor_restarting"}:
-                        current_row = int(current_state.get("current_row", current_state.get("next_row", 0)) or 0)
-                        total_now = int(current_state.get("total_rows", len(df_input)))
-                        retry_now = int(current_state.get("retry_count", 0) or 0)
-                        word_now = current_state.get("current_word", "")
-                        label = "守护任务运行中" if supervisor_alive else "正在恢复守护任务"
-                        st.info(
-                            f"{label}：第 {current_row + 1}/{total_now} 行"
-                            + (f"，当前词语「{word_now}」" if word_now else "")
-                            + (f"，当前重试 {retry_now} 次" if retry_now else "")
-                        )
-                        if current_state.get("error"):
-                            st.warning(f"最近状态：{current_state['error']}")
-                    elif state_status == "completed":
-                        st.success(f"🎉 批量任务已完成，共 {current_state.get('completed_rows', len(df_input))} 条")
-                    elif state_status == "failed":
-                        st.error(f"任务失败：{current_state.get('error', '未知错误')}")
+                    can_start = not supervisor_alive and state_status not in {
+                        "starting", "running", "retrying", "waiting_retry",
+                        "saving", "waiting_save_retry"
+                    }
 
-                    can_start = not supervisor_alive
-                    if st.button("开始处理 / 继续任务", type="primary", use_container_width=True, disabled=not can_start):
+                    if st.button(
+                        "开始处理 / 继续任务",
+                        type="primary",
+                        use_container_width=True,
+                        disabled=not can_start,
+                        key=f"start_batch_{st.session_state.project_code}"
+                    ):
                         if not selected_model_info["api_key"]:
                             st.error("请先在上方配置有效的 API Key")
                         else:
-                            total_rows = len(df_input)
                             file_name = f"{st.session_state.project_code}_{uploaded_file.name}"
                             try:
                                 started, state = start_or_resume_batch_job(
@@ -1501,52 +1569,89 @@ def main():
                                     job_state_file=job_state_file
                                 )
                                 if started:
-                                    st.success("守护任务已启动。Worker 即使异常退出，Supervisor 也会自动重新启动并从断点继续。")
+                                    st.success("守护任务已启动，将在后台持续处理并自动恢复。")
+                                    st.rerun()
                                 else:
                                     st.info("任务已经在后台运行，无需重复启动。")
                             except Exception as e:
                                 st.error(f"启动后台任务失败：{e}")
 
-                    latest_state = _auto_recover_if_needed(job_state_file)
-                    completed = int(latest_state.get("completed_rows", latest_state.get("next_row", 0) or 0))
-                    total_display = int(latest_state.get("total_rows", len(df_input)))
-                    current_row_display = int(latest_state.get("current_row", latest_state.get("next_row", 0)) or 0)
-                    current_word_display = str(latest_state.get("current_word", "") or "")
-                    retry_display = int(latest_state.get("retry_count", 0) or 0)
-                    state_display = str(latest_state.get("status", "") or "")
+                    # ===== 实时运行状态：使用 st.fragment 每 2 秒刷新 =====
+                    def render_batch_status():
+                        latest_state = _auto_recover_if_needed(job_state_file)
+                        total_display = int(latest_state.get("total_rows", len(df_input)) or len(df_input))
+                        completed = int(latest_state.get("completed_rows", latest_state.get("next_row", 0) or 0) or 0)
+                        current_row_display = int(latest_state.get("current_row", latest_state.get("next_row", 0) or 0) or 0)
+                        current_word_display = str(latest_state.get("current_word", "") or "")
+                        retry_display = int(latest_state.get("retry_count", 0) or 0)
+                        state_display = str(latest_state.get("status", "") or "")
+                        error_display = str(latest_state.get("error", "") or "")
+                        supervisor_now_alive = _pid_alive(latest_state.get("supervisor_pid"))
+                        worker_now_alive = _pid_alive(latest_state.get("worker_pid"))
 
-                    if total_display:
-                        progress_bar.progress(min(1.0, completed / total_display))
+                        progress = min(1.0, max(0.0, completed / total_display)) if total_display else 0.0
+                        progress_bar.progress(progress)
 
-                    active_states = {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "supervisor_restarting"}
-                    if state_display in active_states:
-                        spinner_text = {
-                            "starting": "正在启动守护任务…",
-                            "running": "正在处理…",
-                            "retrying": "当前词语请求失败，正在重试…",
-                            "waiting_retry": "正在等待下一次重试…",
-                            "saving": "正在保存结果…",
-                            "waiting_save_retry": "保存失败，正在重试…",
-                            "supervisor_restarting": "Worker 已退出，Supervisor 正在自动恢复…"
-                        }.get(state_display, "任务运行中…")
-                        detail_parts = [f"第 {current_row_display + 1}/{total_display} 行"]
-                        if current_word_display:
-                            detail_parts.append(f"当前词语「{current_word_display}」")
-                        if retry_display:
-                            detail_parts.append(f"当前重试 {retry_display} 次")
-                        detail = " · ".join(detail_parts)
-                        status_info.markdown(
-                            '<div class="running-status">'
-                            '<span class="running-spinner"></span>'
-                            '<div><div>' + spinner_text + '</div>'
-                            '<div class="batch-detail">' + detail + '</div></div></div>',
-                            unsafe_allow_html=True
-                        )
-                    elif state_display == "completed":
-                        progress_bar.progress(1.0)
-                        status_info.success(f"🎉 批量处理已完成，共 {total_display} 条")
-                    elif state_display == "failed":
-                        status_info.error(f"❌ 批量任务停止：{latest_state.get('error', '未知错误')}")
+                        active_states = {
+                            "starting", "running", "retrying", "waiting_retry",
+                            "saving", "waiting_save_retry", "supervisor_restarting"
+                        }
+
+                        if state_display in active_states:
+                            if state_display == "starting":
+                                spinner_text = "正在启动守护任务…"
+                            elif state_display == "retrying":
+                                spinner_text = "当前词语请求失败，正在自动重试…"
+                            elif state_display == "waiting_retry":
+                                spinner_text = "等待重试中…"
+                            elif state_display == "saving":
+                                spinner_text = "正在保存结果…"
+                            elif state_display == "waiting_save_retry":
+                                spinner_text = "保存失败，正在自动重试…"
+                            elif state_display == "supervisor_restarting":
+                                spinner_text = "Supervisor 正在自动恢复 Worker…"
+                            else:
+                                spinner_text = "任务正在运行…"
+
+                            detail_parts = [f"第 {min(current_row_display + 1, total_display)}/{total_display} 行",
+                                            f"已完成 {completed}/{total_display}"]
+                            if current_word_display:
+                                detail_parts.append(f"当前词语「{current_word_display}」")
+                            if retry_display:
+                                detail_parts.append(f"当前重试 {retry_display} 次")
+
+                            process_detail = " · ".join(detail_parts)
+                            worker_text = "Worker 正常运行" if worker_now_alive else "等待 Worker 启动/恢复"
+                            supervisor_text = "Supervisor 正常运行" if supervisor_now_alive else "Supervisor 正在恢复"
+
+                            status_html = (
+                                '<div class="running-status">'
+                                '<span class="running-spinner" aria-label="running"></span>'
+                                '<div style="flex:1">'
+                                f'<div style="font-size:1rem;font-weight:700">{spinner_text}</div>'
+                                f'<div class="batch-detail">{process_detail}</div>'
+                                f'<div class="batch-detail">{supervisor_text} · {worker_text}</div>'
+                                + (f'<div class="batch-detail">最近状态：{error_display}</div>' if error_display else '')
+                                + '</div></div>'
+                            )
+                            status_info.markdown(status_html, unsafe_allow_html=True)
+                        elif state_display == "completed":
+                            progress_bar.progress(1.0)
+                            status_info.success(f"🎉 批量处理已完成，共 {total_display} 条")
+                        elif state_display == "failed":
+                            status_info.error(f"❌ 批量任务停止：{error_display or '未知错误'}")
+                        else:
+                            # 没有任务时也保持清晰的待机状态，避免页面空白。
+                            status_info.info("等待开始任务。点击上方“开始处理 / 继续任务”即可启动。")
+
+                    if hasattr(st, "fragment"):
+                        @st.fragment(run_every="2s")
+                        def _live_batch_status():
+                            render_batch_status()
+                        _live_batch_status()
+                    else:
+                        # 兼容老版本 Streamlit：没有 fragment 时至少正常显示一次状态。
+                        render_batch_status()
 
                 else:
                     st.markdown('<div class="error-highlight">', unsafe_allow_html=True)
