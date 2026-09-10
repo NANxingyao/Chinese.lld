@@ -1024,62 +1024,6 @@ def main():
         st.markdown("#### 实时结果预览")
         table_placeholder = st.empty()
 
-        def render_live_table():
-            """实时读取 CSV，避免表格停留在首次渲染时的数据。"""
-            try:
-                if BACKUP_FILE.exists():
-                    # Worker 正在追加写入时，短暂读取失败属于正常竞争，稍后下一次 fragment 刷新会再次读取。
-                    for _ in range(3):
-                        try:
-                            live_df = pd.read_csv(BACKUP_FILE, encoding='utf-8-sig')
-                            table_placeholder.dataframe(live_df, use_container_width=True, height=300)
-                            metric_placeholder.metric("已存数据量", f"{len(live_df)} 条")
-                            return
-                        except (pd.errors.EmptyDataError, PermissionError, OSError):
-                            time.sleep(0.15)
-                    table_placeholder.info("正在写入最新结果，下一次刷新会自动更新表格……")
-                else:
-                    table_placeholder.info("暂无数据。开始后结果将在此逐行实时显示。")
-            except Exception as e:
-                table_placeholder.warning(f"实时表格刷新失败（下一轮会自动重试）: {e}")
-
-        def render_batch_status():
-            latest_state = _auto_recover_if_needed(job_state_file)
-            total = int(latest_state.get("total_rows", len(df_input)) or len(df_input))
-            completed = int(latest_state.get("completed_rows", latest_state.get("next_row", 0)) or 0)
-            status_str = str(latest_state.get("status", ""))
-            error_str = str(latest_state.get("error", ""))
-
-            progress_bar.progress(min(1.0, max(0.0, completed / total)) if total else 0.0)
-
-            # 状态和结果表必须在同一个定时刷新 fragment 中更新。
-            # 这样 Worker 在后台写入 CSV 后，前端会自动看到新增结果。
-            if status_str in {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "supervisor_restarting"}:
-                spinner_text = {"starting": "启动任务中…", "retrying": "调用失败自动重试中…", "waiting_retry": "等待重试…", "saving": "安全保存中…", "supervisor_restarting": "断流重连中…"}.get(status_str, "任务正常运行中…")
-                details = f"第 {min(int(latest_state.get('current_row', 0)) + 1, total)}/{total} 行 · 当前词语「{latest_state.get('current_word', '')}」"
-                if latest_state.get("retry_count", 0): details += f" · 重试 {latest_state.get('retry_count')} 次"
-                status_html = f'<div class="running-status"><span class="running-spinner"></span><div style="flex:1"><div style="font-size:1rem;font-weight:700">{spinner_text}</div><div class="batch-detail">{details}</div>'
-                if error_str: status_html += f'<div class="batch-detail">最近状态：{error_str}</div>'
-                status_html += '</div></div>'
-                status_info.markdown(status_html, unsafe_allow_html=True)
-            elif status_str == "completed":
-                progress_bar.progress(1.0)
-                status_info.success(f"🎉 任务完毕，共 {total} 条。")
-            elif status_str == "failed":
-                status_info.error(f"❌ 任务停止：{error_str or '未记录到具体异常。请查看 process_log.log 获取 Worker/Supervisor 的异常堆栈。'}")
-            else:
-                status_info.info("等待开始任务。点击上方“开始处理 / 继续任务”即可启动。")
-
-            render_live_table()
-
-        if hasattr(st, "fragment"):
-            @st.fragment(run_every="2s")
-            def _live_batch_status():
-                render_batch_status()
-            _live_batch_status()
-        else:
-            render_batch_status()
-        
         st.divider()
         st.markdown("#### 上传新任务")
         uploaded_file = st.file_uploader("选择 Excel 文件", type=["xlsx", "xls"])
@@ -1106,6 +1050,62 @@ def main():
 
                 else: st.error("未识别到包含'词'或'word'的目标列")
             except Exception as e: st.error(f"读取Excel文件失败: {e}")
+        if uploaded_file and target_col:
+            def render_live_table():
+                """实时读取 CSV，避免表格停留在首次渲染时的数据。"""
+                try:
+                    if BACKUP_FILE.exists():
+                        for _ in range(3):
+                            try:
+                                live_df = pd.read_csv(BACKUP_FILE, encoding='utf-8-sig')
+                                table_placeholder.dataframe(live_df, use_container_width=True, height=300)
+                                metric_placeholder.metric("已存数据量", f"{len(live_df)} 条")
+                                return
+                            except (pd.errors.EmptyDataError, PermissionError, OSError):
+                                time.sleep(0.15)
+                        table_placeholder.info("正在写入最新结果，下一次刷新会自动更新表格……")
+                    else:
+                        table_placeholder.info("暂无数据。开始后结果将在此逐行实时显示。")
+                except Exception as e:
+                    table_placeholder.warning(f"实时表格刷新失败（下一轮会自动重试）: {e}")
+
+            def render_batch_status():
+                latest_state = _auto_recover_if_needed(job_state_file)
+                total = int(latest_state.get("total_rows", len(df_input)) or len(df_input))
+                completed = int(latest_state.get("completed_rows", latest_state.get("next_row", 0)) or 0)
+                status_str = str(latest_state.get("status", ""))
+                error_str = str(latest_state.get("error", ""))
+
+                progress_bar.progress(min(1.0, max(0.0, completed / total)) if total else 0.0)
+
+                if status_str in {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "supervisor_restarting"}:
+                    spinner_text = {"starting": "启动任务中…", "retrying": "调用失败自动重试中…", "waiting_retry": "等待重试…", "saving": "安全保存中…", "supervisor_restarting": "断流重连中…"}.get(status_str, "任务正常运行中…")
+                    details = f"第 {min(int(latest_state.get('current_row', 0)) + 1, total)}/{total} 行 · 当前词语「{latest_state.get('current_word', '')}」"
+                    if latest_state.get("retry_count", 0):
+                        details += f" · 重试 {latest_state.get('retry_count')} 次"
+                    status_html = f'<div class="running-status"><span class="running-spinner"></span><div style="flex:1"><div style="font-size:1rem;font-weight:700">{spinner_text}</div><div class="batch-detail">{details}</div>'
+                    if error_str:
+                        status_html += f'<div class="batch-detail">最近状态：{error_str}</div>'
+                    status_html += '</div></div>'
+                    status_info.markdown(status_html, unsafe_allow_html=True)
+                elif status_str == "completed":
+                    progress_bar.progress(1.0)
+                    status_info.success(f"🎉 任务完毕，共 {total} 条。")
+                elif status_str == "failed":
+                    status_info.error(f"❌ 任务停止：{error_str or '未记录到具体异常。请查看 process_log.log 获取 Worker/Supervisor 的异常堆栈。'}")
+                else:
+                    status_info.info("等待开始任务。点击上方“开始处理 / 继续任务”即可启动。")
+
+                render_live_table()
+
+            if hasattr(st, "fragment"):
+                @st.fragment(run_every="2s")
+                def _live_batch_status():
+                    render_batch_status()
+                _live_batch_status()
+            else:
+                render_batch_status()
+
 
 if __name__ == "__main__":
     if "--worker" in sys.argv: _worker_entry(Path(sys.argv[sys.argv.index("--worker") + 1]))
