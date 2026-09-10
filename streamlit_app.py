@@ -1111,7 +1111,7 @@ def main():
                             # ========================================================
                             # 核心修复点2：新增无限自动重试的守护循环 (Self-Healing Loop)
                             # ========================================================
-                            max_auto_restarts = 100 # 允许连续自动恢复100次，防止遇到彻底死局时无限死循环
+                            max_auto_restarts = 300  # 外层异常自动恢复上限
                             restart_count = 0
                             is_completed = False
                             
@@ -1123,11 +1123,11 @@ def main():
                                         row = df_input.iloc[index]
                                         word = str(row[target_col]).strip()
                                         
-                                        save_process_progress(file_name, index, total_rows, PROGRESS_FILE)
-                                        
+                                        # 断点记录的是“下一个待处理行”，只有当前行成功保存后才推进
                                         if not word:
                                             status_info.write(f"**跳过空值**: 第 {index+1}/{total_rows} 行")
                                             progress_bar.progress((index + 1) / total_rows)
+                                            save_process_progress(file_name, index + 1, total_rows, PROGRESS_FILE)
                                             continue
                                         
                                         pct = int((index + 1) / total_rows * 100)
@@ -1139,26 +1139,54 @@ def main():
                                         
                                         status_info.write(f" **正在分析**: `{word}` | 进度: {index+1}/{total_rows} ({pct}%)")
                                         
-                                        max_retries = 3
+                                        # ========================================================
+                                        # 真正的断流自动恢复：失败时原地重试，不写入失败记录
+                                        # ========================================================
+                                        max_retries = 8
                                         success = False
+                                        last_error = "未知错误"
                                         scores, raw_text, pred_pos, explanation, is_dual_category = {}, "", "处理失败", "无响应", False
+
                                         for attempt in range(max_retries):
                                             try:
+                                                status_info.info(
+                                                    f"🔄 正在分析: `{word}` | 第 {index+1}/{total_rows} 行 "
+                                                    f"| 重试 {attempt + 1}/{max_retries}"
+                                                )
                                                 scores, raw_text, pred_pos, explanation, is_dual_category = ask_model_for_pos_and_scores(
                                                     word=word,
                                                     provider=selected_model_info["provider"],
                                                     model=selected_model_info["model"],
                                                     api_key=selected_model_info["api_key"]
                                                 )
-                                                success = bool(scores)
-                                                if success: break
-                                                time.sleep(2)
+
+                                                if scores:
+                                                    success = True
+                                                    break
+
+                                                last_error = explanation or "模型未返回有效结果"
                                             except Exception as e:
-                                                explanation = f"调用异常: {str(e)}"
-                                                logger.error(f"处理词语{word}失败（尝试{attempt+1}）: {e}")
-                                                time.sleep(2)
-                                        
-                                        membership = calculate_membership(scores) if success else {}
+                                                last_error = str(e)
+                                                logger.error(
+                                                    f"处理词语 {word} 失败（尝试 {attempt + 1}/{max_retries}）: {e}"
+                                                )
+
+                                            if attempt < max_retries - 1:
+                                                retry_wait = min(30, 2 ** attempt)
+                                                status_info.warning(
+                                                    f"⚠️ 第 {attempt + 1} 次请求失败：{last_error}。"
+                                                    f" {retry_wait} 秒后自动重试当前词语，不会跳过。"
+                                                )
+                                                time.sleep(retry_wait)
+
+                                        if not success:
+                                            # 当前词连续失败：不要写入“失败数据”，也不要前进到下一行。
+                                            # 抛出异常交给外层 Self-Healing Loop，继续从当前行恢复。
+                                            raise RuntimeError(
+                                                f"词语「{word}」连续 {max_retries} 次调用失败：{last_error}"
+                                            )
+
+                                        membership = calculate_membership(scores)
                                         new_row = {
                                             "序数": index + 1,
                                             "词语": word,
@@ -1168,7 +1196,7 @@ def main():
                                             "差值/距离": round(abs(membership.get("动词", 0.0) - membership.get("名词", 0.0)), 4),
                                             "预测词类": pred_pos,
                                             "是否兼类": "是" if is_dual_category else "否",
-                                            "原始响应": raw_text if success else f"错误: {explanation}",
+                                            "原始响应": raw_text,
                                             "时间戳": time.strftime("%Y-%m-%d %H:%M:%S")
                                         }
                                         
@@ -1180,8 +1208,11 @@ def main():
                                                 existing_words.add(word)
                                                 latest_count = get_history_count(BACKUP_FILE)
                                                 metric_placeholder.metric("已存数据量", f"{latest_count} 条")
+                                                # 只有“结果成功写入”之后，断点才推进到下一行
+                                                save_process_progress(file_name, index + 1, total_rows, PROGRESS_FILE)
                                             else:
-                                                st.error(f"保存第 {index+1} 条记录失败（文件写入错误）")
+                                                # CSV 写入失败同样视为未完成，交给外层恢复
+                                                raise RuntimeError(f"保存第 {index+1} 行结果失败，无法推进断点")
                                         except Exception as csv_err:
                                             st.error(f"保存第 {index+1} 条记录失败: {csv_err}")
                                         
@@ -1198,11 +1229,18 @@ def main():
                                     
                                 except Exception as batch_err:
                                     restart_count += 1
-                                    logger.error(f"主循环意外中断 ({restart_count}/{max_auto_restarts}): {batch_err}")
-                                    status_info.warning(f"⚠️ 遇到网络或系统中断: {batch_err}。系统将在 3 秒后自动重试 (第 {restart_count} 次恢复)...")
-                                    time.sleep(3)
-                                    # 注意：此时因为有外层 while 循环，程序会重新进入 try 块，
-                                    # 并且由于 start_row 的值被保留，它会直接从刚才断掉的那一行精准重启！
+                                    # 当前 start_row 始终指向“尚未成功完成的行”
+                                    logger.error(
+                                        f"主循环意外中断 ({restart_count}/{max_auto_restarts})，"
+                                        f"当前行={start_row + 1}: {batch_err}"
+                                    )
+                                    status_info.warning(
+                                        f"⚠️ 当前行处理出现中断：{batch_err}。"
+                                        f" 10 秒后自动从第 {start_row + 1} 行恢复"
+                                        f"（第 {restart_count}/{max_auto_restarts} 次恢复）"
+                                    )
+                                    time.sleep(10)
+                                    # 注意：start_row 不会推进，因此恢复后仍会从当前未完成行开始。
                             
                             # 循环结束后的收尾工作
                             if is_completed:
