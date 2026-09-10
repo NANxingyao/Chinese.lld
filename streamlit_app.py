@@ -305,6 +305,12 @@ footer {visibility: hidden;}
     background: #d1fae5;
     color: #065f46;
 }
+
+/* ===== 后台任务运行转动圈 ===== */
+.running-status{display:flex;align-items:center;gap:.75rem;padding:.9rem 1.1rem;margin:.5rem 0 1rem 0;border-radius:12px;background:linear-gradient(135deg,#eff6ff 0%,#dbeafe 100%);border:1px solid #bfdbfe;color:#1e40af;font-weight:600;}
+.running-spinner{width:18px;height:18px;border:3px solid rgba(45,108,184,.2);border-top-color:#2d6cb8;border-radius:50%;animation:batch-spin .9s linear infinite;flex:0 0 auto;}
+@keyframes batch-spin{to{transform:rotate(360deg);}}
+.batch-detail{margin-top:.35rem;font-size:.9rem;font-weight:500;color:#475569;}
 </style>
 """
 if not SERVICE_MODE:
@@ -1504,17 +1510,44 @@ def main():
                     latest_state = _auto_recover_if_needed(job_state_file)
                     completed = int(latest_state.get("completed_rows", latest_state.get("next_row", 0) or 0))
                     total_display = int(latest_state.get("total_rows", len(df_input)))
+                    current_row_display = int(latest_state.get("current_row", latest_state.get("next_row", 0)) or 0)
+                    current_word_display = str(latest_state.get("current_word", "") or "")
+                    retry_display = int(latest_state.get("retry_count", 0) or 0)
+                    state_display = str(latest_state.get("status", "") or "")
+
                     if total_display:
                         progress_bar.progress(min(1.0, completed / total_display))
-                    if latest_state.get("status") in {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "supervisor_restarting"}:
-                        retry_label = f" · 重试 {latest_state.get('retry_count', 0)} 次" if latest_state.get("retry_count") else ""
-                        status_info.write(
-                            f"守护进程状态：{latest_state.get('status', '')} · 第 {int(latest_state.get('current_row', latest_state.get('next_row', 0))) + 1}/{total_display} 行"
-                            f" · 当前词语：{latest_state.get('current_word', '')}{retry_label}"
+
+                    active_states = {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "supervisor_restarting"}
+                    if state_display in active_states:
+                        spinner_text = {
+                            "starting": "正在启动守护任务…",
+                            "running": "正在处理…",
+                            "retrying": "当前词语请求失败，正在重试…",
+                            "waiting_retry": "正在等待下一次重试…",
+                            "saving": "正在保存结果…",
+                            "waiting_save_retry": "保存失败，正在重试…",
+                            "supervisor_restarting": "Worker 已退出，Supervisor 正在自动恢复…"
+                        }.get(state_display, "任务运行中…")
+                        detail_parts = [f"第 {current_row_display + 1}/{total_display} 行"]
+                        if current_word_display:
+                            detail_parts.append(f"当前词语「{current_word_display}」")
+                        if retry_display:
+                            detail_parts.append(f"当前重试 {retry_display} 次")
+                        detail = " · ".join(detail_parts)
+                        status_info.markdown(
+                            '<div class="running-status">'
+                            '<span class="running-spinner"></span>'
+                            '<div><div>' + spinner_text + '</div>'
+                            '<div class="batch-detail">' + detail + '</div></div></div>',
+                            unsafe_allow_html=True
                         )
-                    elif latest_state.get("status") == "completed":
+                    elif state_display == "completed":
                         progress_bar.progress(1.0)
-                        status_info.success("🎉 批量处理已完成")
+                        status_info.success(f"🎉 批量处理已完成，共 {total_display} 条")
+                    elif state_display == "failed":
+                        status_info.error(f"❌ 批量任务停止：{latest_state.get('error', '未知错误')}")
+
                 else:
                     st.markdown('<div class="error-highlight">', unsafe_allow_html=True)
                     st.error("未识别到包含'词'或'word'的列，请检查Excel文件结构")
