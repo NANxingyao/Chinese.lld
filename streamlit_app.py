@@ -9,6 +9,8 @@ import time
 import logging
 import subprocess
 import sys
+import sqlite3
+import hashlib
 import traceback
 try:
     import psutil
@@ -263,7 +265,7 @@ def _normalize_word(word: str) -> str:
 def _read_result_df_locked(file_path: Path) -> pd.DataFrame:
     if not file_path.exists():
         return pd.DataFrame()
-    return pd.read_csv(file_path, encoding="utf-8-sig")
+    return read_canonical_results(file_path)
 
 
 def repair_result_file(file_path: Path, total_rows: int) -> int:
@@ -1064,6 +1066,355 @@ def _auto_recover_if_needed(job_state_file: Path):
         return _load_job_state(job_state_file)
 
 
+
+# ===============================
+# v18：SQLite 作为唯一结果源 + 严格顺序提交
+# ===============================
+SQLITE_TIMEOUT = 30
+
+_RESULT_COLUMNS = [
+    "序数", "词语", "动词", "名词", "名动词", "差值/距离",
+    "预测词类", "是否兼类", "原始响应", "时间戳"
+]
+
+
+def _db_path_from_csv(csv_path: Path) -> Path:
+    return csv_path.with_suffix(".db")
+
+
+def _normalised_word_for_key(word: str) -> str:
+    return _normalize_word(word).lower()
+
+
+def _sqlite_connect(db_path: Path):
+    conn = sqlite3.connect(str(db_path), timeout=SQLITE_TIMEOUT)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=FULL")
+    conn.execute("PRAGMA busy_timeout=30000")
+    return conn
+
+
+def _init_result_db(db_path: Path):
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with _file_lock(db_path):
+        conn = _sqlite_connect(db_path)
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS results (
+                    seq INTEGER PRIMARY KEY,
+                    word TEXT NOT NULL,
+                    verb REAL NOT NULL,
+                    noun REAL NOT NULL,
+                    nounverb REAL NOT NULL,
+                    distance REAL NOT NULL,
+                    predicted_pos TEXT NOT NULL,
+                    is_dual_category TEXT NOT NULL,
+                    raw_text TEXT NOT NULL,
+                    timestamp TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            """)
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def _db_to_dataframe(db_path: Path) -> pd.DataFrame:
+    if not db_path.exists():
+        return pd.DataFrame(columns=_RESULT_COLUMNS)
+    conn = _sqlite_connect(db_path)
+    try:
+        _init_result_db_no_lock(conn)
+        df = pd.read_sql_query(
+            "SELECT seq AS 序数, word AS 词语, verb AS 动词, noun AS 名词, "
+            "nounverb AS 名动词, distance AS 差值_距离, predicted_pos AS 预测词类, "
+            "is_dual_category AS 是否兼类, raw_text AS 原始响应, timestamp AS 时间戳 "
+            "FROM results ORDER BY seq ASC",
+            conn,
+        )
+        if not df.empty:
+            df = df.rename(columns={"差值_距离": "差值/距离"})
+        else:
+            df = pd.DataFrame(columns=_RESULT_COLUMNS)
+        return df
+    finally:
+        conn.close()
+
+
+def _init_result_db_no_lock(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS results (
+            seq INTEGER PRIMARY KEY,
+            word TEXT NOT NULL,
+            verb REAL NOT NULL,
+            noun REAL NOT NULL,
+            nounverb REAL NOT NULL,
+            distance REAL NOT NULL,
+            predicted_pos TEXT NOT NULL,
+            is_dual_category TEXT NOT NULL,
+            raw_text TEXT NOT NULL,
+            timestamp TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+
+
+def _export_db_to_csv_locked(db_path: Path, csv_path: Path):
+    conn = _sqlite_connect(db_path)
+    try:
+        _init_result_db_no_lock(conn)
+        df = pd.read_sql_query(
+            "SELECT seq AS 序数, word AS 词语, verb AS 动词, noun AS 名词, "
+            "nounverb AS 名动词, distance AS 差值_距离, predicted_pos AS 预测词类, "
+            "is_dual_category AS 是否兼类, raw_text AS 原始响应, timestamp AS 时间戳 "
+            "FROM results ORDER BY seq ASC",
+            conn,
+        )
+        if not df.empty:
+            df = df.rename(columns={"差值_距离": "差值/距离"})
+        tmp = csv_path.with_suffix(csv_path.suffix + ".export.tmp")
+        df.to_csv(tmp, index=False, encoding="utf-8-sig")
+        os.replace(tmp, csv_path)
+    finally:
+        conn.close()
+
+
+def _get_db_contiguous_count(db_path: Path) -> int:
+    if not db_path.exists():
+        return 0
+    conn = _sqlite_connect(db_path)
+    try:
+        _init_result_db_no_lock(conn)
+        rows = conn.execute("SELECT seq FROM results ORDER BY seq ASC").fetchall()
+        expected = 1
+        for (seq,) in rows:
+            if int(seq) != expected:
+                break
+            expected += 1
+        return expected - 1
+    finally:
+        conn.close()
+
+
+def _migrate_legacy_csv_to_db(csv_path: Path, db_path: Path, total_rows: int):
+    """第一次接管旧 CSV：只保留从 1 开始连续的结果，之后全部视为无效并丢弃。"""
+    _init_result_db(db_path)
+    conn = _sqlite_connect(db_path)
+    try:
+        _init_result_db_no_lock(conn)
+        count = conn.execute("SELECT COUNT(*) FROM results").fetchone()[0]
+        if count > 0:
+            return
+        if not csv_path.exists():
+            return
+        try:
+            old = pd.read_csv(csv_path, encoding="utf-8-sig")
+        except Exception as e:
+            logger.error(f"读取旧 CSV 迁移失败：{type(e).__name__}: {e}")
+            return
+        if old.empty or "序数" not in old.columns or "词语" not in old.columns:
+            return
+        old["序数"] = pd.to_numeric(old["序数"], errors="coerce")
+        old = old.dropna(subset=["序数"]).copy()
+        old["序数"] = old["序数"].astype(int)
+        old = old[(old["序数"] >= 1) & (old["序数"] <= total_rows)]
+        old = old.drop_duplicates(subset=["序数"], keep="last").sort_values("序数", kind="stable")
+
+        present = set(old["序数"].tolist())
+        contiguous_end = 0
+        for n in range(1, total_rows + 1):
+            if n in present:
+                contiguous_end = n
+            else:
+                break
+        old = old[old["序数"] <= contiguous_end]
+
+        for _, r in old.iterrows():
+            word = _normalize_word(r.get("词语", ""))
+            if not word:
+                continue
+            conn.execute(
+                "INSERT OR IGNORE INTO results "
+                "(seq,word,verb,noun,nounverb,distance,predicted_pos,is_dual_category,raw_text,timestamp) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (
+                    int(r["序数"]), word,
+                    float(r.get("动词", 0.0)), float(r.get("名词", 0.0)),
+                    float(r.get("名动词", 0.0)), float(r.get("差值/距离", 0.0)),
+                    str(r.get("预测词类", "未知")), str(r.get("是否兼类", "否")),
+                    str(r.get("原始响应", "")), str(r.get("时间戳", "")),
+                )
+            )
+        conn.commit()
+        logger.warning(
+            f"已将旧 CSV 接管到 SQLite：保留 1-{contiguous_end}，"
+            f"删除缺口后的历史记录 {len(old) - contiguous_end if contiguous_end < len(old) else 0} 条。"
+        )
+    finally:
+        conn.close()
+
+
+def repair_result_file(file_path: Path, total_rows: int) -> int:
+    """v18：CSV 不再是主数据库；SQLite 是唯一真相。返回下一条 0-based index。"""
+    db_path = _db_path_from_csv(file_path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 第一次运行把旧 CSV 安全迁移；之后完全以 SQLite 为准。
+    with _file_lock(db_path):
+        if not db_path.exists():
+            _init_result_db_no_lock(_sqlite_connect(db_path))
+        conn = _sqlite_connect(db_path)
+        try:
+            _init_result_db_no_lock(conn)
+            count = conn.execute("SELECT COUNT(*) FROM results").fetchone()[0]
+            if count == 0 and file_path.exists():
+                try:
+                    old = pd.read_csv(file_path, encoding="utf-8-sig")
+                except Exception as e:
+                    raise RuntimeError(f"读取旧结果 CSV 失败：{type(e).__name__}: {e}") from e
+                if not old.empty and "序数" in old.columns:
+                    old["序数"] = pd.to_numeric(old["序数"], errors="coerce")
+                    old = old.dropna(subset=["序数"]).copy()
+                    old["序数"] = old["序数"].astype(int)
+                    old = old[(old["序数"] >= 1) & (old["序数"] <= total_rows)]
+                    old = old.drop_duplicates(subset=["序数"], keep="last").sort_values("序数", kind="stable")
+                    present = set(old["序数"].tolist())
+                    end = 0
+                    for n in range(1, total_rows + 1):
+                        if n in present:
+                            end = n
+                        else:
+                            break
+                    old = old[old["序数"] <= end]
+                    for _, r in old.iterrows():
+                        word = _normalize_word(r.get("词语", ""))
+                        if not word:
+                            continue
+                        conn.execute(
+                            "INSERT OR IGNORE INTO results "
+                            "(seq,word,verb,noun,nounverb,distance,predicted_pos,is_dual_category,raw_text,timestamp) "
+                            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                            (int(r["序数"]), word, float(r.get("动词", 0.0)), float(r.get("名词", 0.0)),
+                             float(r.get("名动词", 0.0)), float(r.get("差值/距离", 0.0)), str(r.get("预测词类", "未知")),
+                             str(r.get("是否兼类", "否")), str(r.get("原始响应", "")), str(r.get("时间戳", "")))
+                        )
+                    conn.commit()
+            # 不管历史文件是否乱过，都生成严格按序的 CSV。
+            rows = conn.execute("SELECT seq FROM results ORDER BY seq ASC").fetchall()
+            expected = 1
+            for (seq,) in rows:
+                if int(seq) != expected:
+                    break
+                expected += 1
+            contiguous = expected - 1
+            # 严格删除第一个缺口之后的数据库记录，保证以后绝无插队。
+            conn.execute("DELETE FROM results WHERE seq > ?", (contiguous,))
+            conn.commit()
+            _export_db_to_csv_locked(db_path, file_path)
+            return contiguous
+        finally:
+            conn.close()
+
+
+def append_result_strict(result_df: pd.DataFrame, file_path: Path, row_number: int) -> tuple[bool, str]:
+    """v18：数据库事务保证一个序号最多一条，而且只能按 1,2,3... 连续提交。"""
+    db_path = _db_path_from_csv(file_path)
+    _init_result_db(db_path)
+    with _file_lock(db_path):
+        conn = _sqlite_connect(db_path)
+        try:
+            _init_result_db_no_lock(conn)
+            conn.execute("BEGIN IMMEDIATE")
+
+            rows = conn.execute("SELECT seq FROM results ORDER BY seq ASC").fetchall()
+            expected = 1
+            for (seq,) in rows:
+                if int(seq) != expected:
+                    break
+                expected += 1
+            expected -= 1
+            next_expected = expected + 1
+
+            # 已经写过：幂等成功，绝不重复插入。
+            if row_number <= expected:
+                conn.commit()
+                _export_db_to_csv_locked(db_path, file_path)
+                return True, "already_exists"
+
+            if row_number != next_expected:
+                conn.rollback()
+                return False, f"顺序冲突：当前只能提交第 {next_expected} 条，收到第 {row_number} 条"
+
+            r = result_df.iloc[0]
+            conn.execute(
+                "INSERT INTO results "
+                "(seq,word,verb,noun,nounverb,distance,predicted_pos,is_dual_category,raw_text,timestamp) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (
+                    int(row_number), _normalize_word(r.get("词语", "")), float(r.get("动词", 0.0)),
+                    float(r.get("名词", 0.0)), float(r.get("名动词", 0.0)), float(r.get("差值/距离", 0.0)),
+                    str(r.get("预测词类", "未知")), str(r.get("是否兼类", "否")), str(r.get("原始响应", "")),
+                    str(r.get("时间戳", ""))
+                )
+            )
+            conn.commit()
+            _export_db_to_csv_locked(db_path, file_path)
+            return True, "written"
+        except sqlite3.IntegrityError as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            # 主键冲突时视为幂等成功，不再产生重复。
+            return True, f"already_exists:{e}"
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            logger.error(f"SQLite 严格提交失败（序数={row_number}）：\n{traceback.format_exc()}")
+            return False, f"{type(e).__name__}: {e}"
+        finally:
+            conn.close()
+
+
+def get_history_count(backup_file):
+    db_path = _db_path_from_csv(Path(backup_file))
+    count = _get_db_contiguous_count(db_path)
+    if count > 0:
+        return count
+    if os.path.exists(backup_file):
+        try:
+            return len(pd.read_csv(backup_file, encoding="utf-8-sig"))
+        except Exception:
+            return 0
+    return 0
+
+
+def read_canonical_results(backup_file: Path) -> pd.DataFrame:
+    db_path = _db_path_from_csv(Path(backup_file))
+    if db_path.exists():
+        return _db_to_dataframe(db_path)
+    if backup_file.exists():
+        try:
+            df = pd.read_csv(backup_file, encoding="utf-8-sig")
+            if "序数" in df.columns:
+                return df.sort_values("序数", kind="stable")
+            return df
+        except Exception:
+            pass
+    return pd.DataFrame(columns=_RESULT_COLUMNS)
+
 def main():
     st.markdown("""
     <div class="title-header-card">
@@ -1076,6 +1427,7 @@ def main():
             <span class="badge">批量处理</span>
             <span class="badge" style="background: rgba(251, 191, 36, 0.4); border-color: rgba(251, 191, 36, 0.8);">兼类判定支持</span>
             <span class="badge" style="background: rgba(16, 185, 129, 0.4); border-color: rgba(16, 185, 129, 0.8);">抗断流自动恢复</span>
+            <span class="badge" style="background: rgba(168, 85, 247, 0.35); border-color: rgba(168, 85, 247, 0.7);">严格顺序零重复</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -1162,11 +1514,14 @@ def main():
         with ctrl_col3:
             if st.button("清空本批次记录", use_container_width=True, type="secondary"):
                 if os.path.exists(BACKUP_FILE):
-                    try:
-                        os.remove(BACKUP_FILE)
-                        st.success(f"已清空批次 {st.session_state.project_code} 记录")
-                        st.rerun()
-                    except Exception as e: st.error(f"清空失败: {e}")
+                        try:
+                            os.remove(BACKUP_FILE)
+                            db_file = _db_path_from_csv(BACKUP_FILE)
+                            if db_file.exists():
+                                os.remove(db_file)
+                            st.success(f"已清空批次 {st.session_state.project_code} 记录")
+                            st.rerun()
+                        except Exception as e: st.error(f"清空失败: {e}")
 
         st.divider()
         progress_bar, status_info = st.progress(0), st.empty()
@@ -1174,7 +1529,7 @@ def main():
         st.markdown("#### 实时结果预览")
         table_placeholder = st.empty()
         if os.path.exists(BACKUP_FILE):
-            try: table_placeholder.dataframe(pd.read_csv(BACKUP_FILE, encoding='utf-8-sig'), use_container_width=True, height=300)
+            try: table_placeholder.dataframe(read_canonical_results(BACKUP_FILE), use_container_width=True, height=300)
             except Exception as e: table_placeholder.error(f"显示历史记录失败: {e}")
         else: table_placeholder.info("暂无数据。开始后结果将在此逐行实时显示。")
         
