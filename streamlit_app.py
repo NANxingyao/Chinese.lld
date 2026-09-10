@@ -528,7 +528,10 @@ def main():
         st.markdown('<div class="section-title"><span class="icon-dot"></span>连接测试</div>',unsafe_allow_html=True)
         if st.button("测试模型链接",type="secondary",use_container_width=True):
             ok,_,err=call_llm(info["provider"],info["model"],info["api_key"],[{"role":"user","content":"请回复 pong"}],max_tokens=64)
-            st.success("成功！") if ok else st.error(f"失败：{err}")
+            if ok:
+                st.success("成功！")
+            else:
+                st.error(f"失败：{err}")
     tab1,tab2=st.tabs(["单个词语详细分析","Excel 批量处理"])
     with tab1:
         word=st.text_input("请输入汉语词语",placeholder="例如：苹果、跑、美丽…");
