@@ -399,15 +399,52 @@ def spawn_detached(cmd, cwd):
 # 文本解析工具
 # ===============================
 def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
-    if not isinstance(resp_json, dict): return ""
+    """兼容 OpenAI / Gemini / xAI 等返回结构，尽可能提取最终文本。"""
+    if not isinstance(resp_json, dict):
+        return ""
     try:
-        if "output" in resp_json and "text" in resp_json["output"]: return resp_json["output"]["text"]
-        if "choices" in resp_json and len(resp_json["choices"]) > 0:
-            choice = resp_json["choices"][0]
-            if "message" in choice and "content" in choice["message"]: return choice["message"]["content"]
-        return json.dumps(resp_json, ensure_ascii=False)
+        # OpenAI Responses API
+        if isinstance(resp_json.get("output_text"), str) and resp_json["output_text"].strip():
+            return resp_json["output_text"]
+
+        # OpenAI-compatible Chat Completions
+        choices = resp_json.get("choices")
+        if isinstance(choices, list) and choices:
+            choice = choices[0] or {}
+            message = choice.get("message", {}) or {}
+            content = message.get("content", "")
+            if isinstance(content, str) and content.strip():
+                return content
+            if isinstance(content, list):
+                parts = []
+                for part in content:
+                    if isinstance(part, dict):
+                        text = part.get("text") or part.get("content")
+                        if isinstance(text, str):
+                            parts.append(text)
+                if parts:
+                    return "".join(parts)
+            # 某些兼容层可能把文本放进 delta
+            delta = choice.get("delta", {}) or {}
+            delta_content = delta.get("content", "")
+            if isinstance(delta_content, str) and delta_content.strip():
+                return delta_content
+
+        # Gemini 原生/代理偶见结构：candidates[].content.parts[].text
+        candidates = resp_json.get("candidates")
+        if isinstance(candidates, list):
+            parts = []
+            for candidate in candidates:
+                content = (candidate or {}).get("content", {}) or {}
+                for part in content.get("parts", []) or []:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        parts.append(part["text"])
+            if parts:
+                return "".join(parts)
+
+        return ""
     except Exception:
-        return json.dumps(resp_json, ensure_ascii=False)
+        return ""
 
 def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
     if not text: return None, text
@@ -502,7 +539,7 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
         "model": model,
         "messages": messages,
         "temperature": temperature,
-        "stream": provider not in {"moonshot"},
+        "stream": provider not in {"moonshot", "gemini"},
     }
 
     if provider == "moonshot":
@@ -605,12 +642,19 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
 
                     if not is_stream:
                         body = response.json()
+                        if _provider == "gemini":
+                            logger.info("Gemini 非流式原始响应摘要：%s", json.dumps(body, ensure_ascii=False)[:2000])
                         text = extract_text_from_response(body)
                         if text:
                             if streaming_placeholder is not None:
                                 streaming_placeholder.empty()
                             return True, body, ""
-                        error_msg = "非流式接口未返回有效内容"
+                        # 不要把整段响应直接扔掉；保留安全摘要，方便定位 Gemini/xAI 兼容层问题。
+                        try:
+                            safe_body = json.dumps(body, ensure_ascii=False)[:1200]
+                            error_msg = f"{_provider.upper()} 非流式接口未返回文本。响应摘要：{safe_body}"
+                        except Exception:
+                            error_msg = f"{_provider.upper()} 非流式接口未返回文本"
                     else:
                         full_content = ""
                         for line in response.iter_lines():
