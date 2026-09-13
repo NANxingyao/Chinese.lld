@@ -146,10 +146,16 @@ if not SERVICE_MODE:
 # ===============================
 BASE_DIR = Path(__file__).parent
 
-def get_project_files(project_code: str) -> Tuple[Path, Path]:
+def get_project_files(project_code: str, model_key: str = "") -> Tuple[Path, Path]:
+    """按实验批次 + 模型隔离结果，避免不同模型的国外/国内数据互相覆盖。"""
     safe_code = re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', project_code)
-    if not safe_code: safe_code = "default_task"
-    return BASE_DIR / f"batch_history_{safe_code}.csv", BASE_DIR / f"process_progress_{safe_code}.json"
+    if not safe_code:
+        safe_code = "default_task"
+    safe_model = re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', model_key or "default_model")
+    if not safe_model:
+        safe_model = "default_model"
+    namespace = f"{safe_code}__{safe_model}"
+    return BASE_DIR / f"batch_history_{namespace}.csv", BASE_DIR / f"process_progress_{namespace}.json"
 
 RULE_SETS = {
     "名词": [
@@ -188,12 +194,50 @@ RULE_SETS = {
 }
 
 MODEL_OPTIONS = {
-    "DeepSeek Chat": {"provider": "deepseek", "model": "deepseek-chat", "api_key": os.getenv("DEEPSEEK_API_KEY"), "env_var": "DEEPSEEK_API_KEY"},
-    "OpenAI GPT-4o（推荐）": {"provider": "openai", "model": "gpt-4o-mini", "api_key": os.getenv("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"},
-    "Google Gemini 1.5 Pro": {"provider": "gemini", "model": "gemini-1.5-pro", "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"},
-    "Google Gemini 1.5 Flash": {"provider": "gemini", "model": "gemini-1.5-flash", "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"},
-    "Moonshot（Kimi）": {"provider": "moonshot", "model": "kimi-k2.6", "api_key": os.getenv("MOONSHOT_API_KEY"), "env_var": "MOONSHOT_API_KEY"},
-    "Qwen（通义千问）": {"provider": "qwen", "model": "qwen-max", "api_key": os.getenv("QWEN_API_KEY"), "env_var": "QWEN_API_KEY"},
+    # ===================== 国内模型（保留原有） =====================
+    "DeepSeek Chat": {
+        "provider": "deepseek", "model": "deepseek-chat",
+        "api_key": os.getenv("DEEPSEEK_API_KEY"), "env_var": "DEEPSEEK_API_KEY"
+    },
+    "Moonshot（Kimi）": {
+        "provider": "moonshot", "model": "kimi-k2.6",
+        "api_key": os.getenv("MOONSHOT_API_KEY"), "env_var": "MOONSHOT_API_KEY"
+    },
+    "Qwen（通义千问）": {
+        "provider": "qwen", "model": "qwen-max",
+        "api_key": os.getenv("QWEN_API_KEY"), "env_var": "QWEN_API_KEY"
+    },
+
+    # ===================== 国外模型：OpenAI =====================
+    # ChatGPT 本身是产品名；API 实际调用的是 OpenAI 的 GPT 模型。
+    "ChatGPT（GPT-5.6 Luna）": {
+        "provider": "openai", "model": "gpt-5.6-luna",
+        "api_key": os.getenv("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"
+    },
+    "ChatGPT（GPT-5.6 Terra）": {
+        "provider": "openai", "model": "gpt-5.6-terra",
+        "api_key": os.getenv("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"
+    },
+    "ChatGPT（GPT-5.6 Sol）": {
+        "provider": "openai", "model": "gpt-5.6-sol",
+        "api_key": os.getenv("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"
+    },
+
+    # ===================== 国外模型：Google Gemini =====================
+    "Google Gemini 3.8 Flash": {
+        "provider": "gemini", "model": "gemini-3.8-flash",
+        "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
+    },
+    "Google Gemini 3.1 Pro Preview": {
+        "provider": "gemini", "model": "gemini-3.1-pro-preview",
+        "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
+    },
+
+    # ===================== 国外模型：xAI Grok =====================
+    "xAI Grok 4.6": {
+        "provider": "xai", "model": "grok-4.6",
+        "api_key": os.getenv("XAI_API_KEY"), "env_var": "XAI_API_KEY"
+    },
 }
 
 AVAILABLE_MODEL_OPTIONS = {name: info for name, info in MODEL_OPTIONS.items() if info["api_key"]}
@@ -430,78 +474,179 @@ def get_top_10_positions(membership: Dict[str, float]) -> List[Tuple[str, float]
 # LLM调用与词类判定主函数
 # ===============================
 def get_provider_config(provider, api_key, model, messages, max_tokens, temperature):
+    """统一构造各厂商请求配置。OpenAI 用 Responses API；Gemini/xAI 用 Chat Completions。"""
+    if provider == "openai":
+        url = os.getenv("OPENAI_RESPONSES_URL", "https://api.openai.com/v1/responses")
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        payload = {
+            "model": model,
+            "input": messages,
+            "max_output_tokens": max_tokens,
+        }
+        # GPT-5.6 系列支持 reasoning_effort；批量词类判定使用 low，避免无谓增加成本。
+        reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT", "low").strip().lower()
+        if reasoning_effort in {"none", "low", "medium", "high", "xhigh", "max"}:
+            payload["reasoning"] = {"effort": reasoning_effort}
+        return url, headers, payload, "responses"
+
     base_urls = {
         "deepseek": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-        "openai": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-        "gemini": os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"), 
+        "gemini": os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"),
         "moonshot": os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1"),
         "qwen": os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        "xai": os.getenv("XAI_BASE_URL", "https://api.x.ai/v1"),
     }
-    url = f"{base_urls.get(provider, base_urls['openai']).rstrip('/')}/chat/completions"
+    url = f"{base_urls.get(provider, base_urls['deepseek']).rstrip('/')}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    payload = {"model": model, "messages": messages, "temperature": temperature, "stream": provider != "moonshot"}
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "stream": provider not in {"moonshot"},
+    }
+
     if provider == "moonshot":
         payload.update({"max_tokens": 8192, "thinking": {"type": "disabled"}, "temperature": 0.6})
+    elif provider == "xai":
+        # Grok 4.6 默认高推理；本项目以批量稳定性和速度为主，可通过环境变量调节。
+        reasoning_effort = os.getenv("XAI_REASONING_EFFORT", "high").strip().lower()
+        if reasoning_effort in {"low", "medium", "high", "xhigh"}:
+            payload["reasoning_effort"] = reasoning_effort
+        payload["max_tokens"] = max_tokens
+    elif provider == "gemini":
+        # Gemini 3.8 Flash 官方 OpenAI-compatible 接口支持 Chat Completions。
+        # 不强行传 temperature，减少 Gemini 3.x 因采样参数变化造成的兼容问题。
+        payload.pop("temperature", None)
+        payload["max_tokens"] = max_tokens
     else:
         payload["max_tokens"] = max_tokens
-    return url, headers, payload
+    return url, headers, payload, "chat_completions"
+
+
+def _extract_openai_responses_text(body: Dict[str, Any]) -> str:
+    """解析 OpenAI Responses API 的 output_text / output.content.text。"""
+    if not isinstance(body, dict):
+        return ""
+    if isinstance(body.get("output_text"), str) and body["output_text"].strip():
+        return body["output_text"]
+    output = body.get("output")
+    if isinstance(output, list):
+        chunks = []
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content", [])
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        chunks.append(part["text"])
+        return "".join(chunks)
+    return ""
+
 
 def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, temperature=0.0, max_retries=3, show_ui=True):
-    if not _api_key: return False, {"error": "API Key 为空"}, "API Key 未提供"
-    url, headers, payload = get_provider_config(_provider, _api_key, _model, messages, max_tokens, temperature)
+    if not _api_key:
+        return False, {"error": "API Key 为空"}, "API Key 未提供"
+
+    url, headers, payload, api_style = get_provider_config(
+        _provider, _api_key, _model, messages, max_tokens, temperature
+    )
     streaming_placeholder = st.empty() if show_ui else None
     error_msg = ""
-    is_kimi = _provider == "moonshot"
 
     for attempt in range(max_retries):
         try:
-            with requests.post(url, headers=headers, json=payload, stream=not is_kimi, timeout=120) as response:
+            if api_style == "responses":
+                # OpenAI Responses：非流式读取，解析稳定；不影响后台 Worker。
+                response = requests.post(url, headers=headers, json=payload, timeout=180)
                 if response.status_code != 200:
-                    try: detail = response.json()
-                    except Exception: detail = response.text
-                    if response.status_code == 404: error_msg = f"路径错误 (404)。请确保请求地址正确：{url}"
-                    elif response.status_code == 401: error_msg = "鉴权失败 (401)。请检查 API Key 权限。"
-                    elif response.status_code in [400, 403]:
-                        error_msg = f"请求错误 ({response.status_code})：{detail}"
+                    try:
+                        detail = response.json()
+                    except Exception:
+                        detail = response.text
+                    if response.status_code == 404:
+                        error_msg = f"路径错误 (404)。请确保请求地址正确：{url}"
+                    elif response.status_code == 401:
+                        error_msg = "OpenAI 鉴权失败 (401)。请检查 OPENAI_API_KEY。"
+                    elif response.status_code in [400, 403, 429]:
+                        error_msg = f"OpenAI 请求错误 ({response.status_code})：{detail}"
+                    else:
+                        error_msg = f"OpenAI API 错误: {response.status_code} - {detail}"
+                    if response.status_code in [400, 401, 403]:
                         break
-                    else: error_msg = f"API 错误: {response.status_code} - {detail}"
                     response.raise_for_status()
 
-                if is_kimi:
-                    try: body = response.json()
-                    except Exception: body = None
-                    if isinstance(body, dict):
+                body = response.json()
+                text = _extract_openai_responses_text(body)
+                if text:
+                    if streaming_placeholder is not None:
+                        streaming_placeholder.empty()
+                    return True, {"choices": [{"message": {"content": text}}], "_raw_responses": body}, ""
+                error_msg = "OpenAI Responses API 未返回有效文本"
+            else:
+                is_stream = bool(payload.get("stream", False))
+                with requests.post(url, headers=headers, json=payload, stream=is_stream, timeout=180) as response:
+                    if response.status_code != 200:
+                        try:
+                            detail = response.json()
+                        except Exception:
+                            detail = response.text
+                        if response.status_code == 404:
+                            error_msg = f"路径错误 (404)。请确保请求地址正确：{url}"
+                        elif response.status_code == 401:
+                            error_msg = f"{_provider.upper()} 鉴权失败 (401)。请检查 {_provider.upper()} API Key。"
+                        elif response.status_code in [400, 403, 429]:
+                            error_msg = f"{_provider.upper()} 请求错误 ({response.status_code})：{detail}"
+                        else:
+                            error_msg = f"API 错误: {response.status_code} - {detail}"
+                        if response.status_code in [400, 401, 403]:
+                            break
+                        response.raise_for_status()
+
+                    if not is_stream:
+                        body = response.json()
                         text = extract_text_from_response(body)
                         if text:
-                            if streaming_placeholder is not None: streaming_placeholder.empty()
+                            if streaming_placeholder is not None:
+                                streaming_placeholder.empty()
                             return True, body, ""
-                    error_msg = "非流式接口返回异常"
-                    break
+                        error_msg = "非流式接口未返回有效内容"
+                    else:
+                        full_content = ""
+                        for line in response.iter_lines():
+                            if not line:
+                                continue
+                            line_text = line.decode("utf-8", errors="ignore").strip()
+                            if not line_text.startswith("data:"):
+                                continue
+                            json_str = line_text[5:].strip()
+                            if json_str == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(json_str)
+                                if "choices" in chunk and chunk["choices"]:
+                                    delta = chunk["choices"][0].get("delta", {}) or {}
+                                    delta_text = delta.get("content", "") or ""
+                                    if delta_text:
+                                        full_content += delta_text
+                            except json.JSONDecodeError:
+                                continue
 
-                full_content = ""
-                for line in response.iter_lines():
-                    if not line: continue
-                    line_text = line.decode('utf-8').strip()
-                    if not line_text.startswith("data:"): continue
-                    json_str = line_text[5:].strip()
-                    if json_str == "[DONE]": break
-                    try:
-                        chunk = json.loads(json_str)
-                        if "choices" in chunk and len(chunk["choices"]) > 0:
-                            delta_text = chunk["choices"][0].get("delta", {}).get("content", "") or ""
-                            if delta_text: full_content += delta_text
-                    except json.JSONDecodeError: continue
-
-                if full_content:
-                    if streaming_placeholder is not None: streaming_placeholder.empty()
-                    return True, {"choices": [{"message": {"content": full_content}}]}, ""
-                else:
-                    error_msg = "模型未返回有效内容"
+                        if full_content:
+                            if streaming_placeholder is not None:
+                                streaming_placeholder.empty()
+                            return True, {"choices": [{"message": {"content": full_content}}]}, ""
+                        error_msg = "模型未返回有效内容"
+        except requests.RequestException as e:
+            error_msg = f"网络请求异常（第{attempt + 1}次尝试）: {str(e)}"
         except Exception as e:
-            error_msg = f"请求异常（第{attempt+1}次尝试）: {str(e)}"
-            time.sleep(2 ** attempt)
+            error_msg = f"请求异常（第{attempt + 1}次尝试）: {str(e)}"
 
-    if streaming_placeholder is not None: streaming_placeholder.empty()
+        if attempt < max_retries - 1:
+            time.sleep(min(8, 2 ** attempt))
+
+    if streaming_placeholder is not None:
+        streaming_placeholder.empty()
     return False, {"error": error_msg}, error_msg
 
 def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str, show_ui=True) -> Tuple[Dict[str, Dict[str, int]], str, str, str, bool]:
@@ -700,6 +845,8 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
             '差值/距离': round(abs(membership.get('动词', 0.0) - membership.get('名词', 0.0)), 4),
             '预测词类': pred_pos,
             '是否兼类': '是' if is_dual_category else '否',
+            '模型提供商': provider,
+            '模型': model,
             '原始响应': raw_text,
             '时间戳': time.strftime('%Y-%m-%d %H:%M:%S')
         }])
@@ -925,7 +1072,14 @@ def render_live_monitor(job_state_file: Path, backup_file: Path, total_rows_defa
     with c2:
         if live_df is not None and count > 0:
             csv_data = live_df.to_csv(index=False, encoding='utf-8-sig')
-            st.download_button("下载完整结果(CSV)", data=csv_data, file_name=f"{st.session_state.project_code}_results_{time.strftime('%Y%m%d')}.csv", mime="text/csv", use_container_width=True)
+            model_slug = re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', str(live_df.iloc[0].get('模型', 'model')) if '模型' in live_df.columns else 'model')
+            st.download_button(
+                "下载完整结果(CSV)",
+                data=csv_data,
+                file_name=f"{st.session_state.project_code}_{model_slug}_results_{time.strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
         else:
             st.button("下载结果 (无数据)", disabled=True, use_container_width=True)
 
@@ -990,11 +1144,19 @@ def main():
             else:
                 selected_model_display_name = st.selectbox("选择大模型", list(AVAILABLE_MODEL_OPTIONS.keys()), key="model_select")
                 selected_model_info = AVAILABLE_MODEL_OPTIONS[selected_model_display_name]
-                st.markdown(f'<div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem;"><span class="status-badge success">● 已配置</span><span style="color: #64748b; font-size: 0.85rem;">提供商: {selected_model_info["provider"].upper()}</span></div>', unsafe_allow_html=True)
+                st.markdown(
+                    f'<div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap;">'
+                    f'<span class="status-badge success">● 已配置</span>'
+                    f'<span style="color: #64748b; font-size: 0.85rem;">提供商: {selected_model_info["provider"].upper()}</span>'
+                    f'<span style="color: #64748b; font-size: 0.85rem;">模型: {selected_model_info["model"]}</span>'
+                    f'</div>', unsafe_allow_html=True
+                )
         with col2:
             st.markdown('<div class="section-title"><span class="icon-dot"></span> 实验配置</div>', unsafe_allow_html=True)
+            if selected_model_info.get("provider") in {"openai", "gemini", "xai"}:
+                st.caption("国外模型数据将按“批次 + 模型”独立保存，可分别跑出 Gemini / ChatGPT / Grok 数据后进行横向比较。")
             st.session_state.project_code = st.text_input("实验批次码 (Project Code)", value=st.session_state.get("project_code", "default_task"), help="隔离不同量化分析任务")
-            BACKUP_FILE, PROGRESS_FILE = get_project_files(st.session_state.project_code)
+            BACKUP_FILE, PROGRESS_FILE = get_project_files(st.session_state.project_code, selected_model_info.get("model", "default_model"))
         with col3:
             st.markdown('<div class="section-title" style="justify-content: center;"><span class="icon-dot"></span> 连接测试</div>', unsafe_allow_html=True)
             st.write("")
@@ -1072,7 +1234,8 @@ def main():
                 if target_col:
                     st.markdown(f'<div class="info-highlight"><div style="font-weight: 600; color: #1e40af;">识别到目标列: <code>{target_col}</code> | 待分析总数: <strong>{len(df_input)}</strong> 条</div></div>', unsafe_allow_html=True)
                     
-                    job_state_file = BASE_DIR / f"batch_job_{re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', st.session_state.project_code)}.json"
+                    model_namespace = re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', selected_model_info.get("model", "default_model"))
+                    job_state_file = BASE_DIR / f"batch_job_{re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', st.session_state.project_code)}__{model_namespace}.json"
                     current_state = _auto_recover_if_needed(job_state_file)
                     
                     can_start = not _pid_alive(current_state.get("supervisor_pid")) and current_state.get("status") not in {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "supervisor_restarting"}
@@ -1110,4 +1273,4 @@ if __name__ == "__main__":
     else: main()
 
 if not SERVICE_MODE:
-    st.markdown('<div style="text-align: center; color: #999; font-size: 13px; line-height: 1.8; padding: 10px 0 5px 0;">汉语词类隶属度检测划类平台 · © 2025 Ryan<br><a href="mailto:shenrui26@gmail.com" style="color: #999; text-decoration: none;">✉ shenrui26@gmail.com</a></div>', unsafe_allow_html=True)
+    st.markdown('<div style="text-align: center; color: #999; font-size: 13px; line-height: 1.8; padding: 10px 0 5px 0;">汉语词类隶属度检测划类平台 · © 2026 Ryan<br><a href="mailto:shenrui26@gmail.com" style="color: #999; text-decoration: none;">✉ shenrui26@gmail.com</a></div>', unsafe_allow_html=True)
