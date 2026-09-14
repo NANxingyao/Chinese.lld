@@ -15,7 +15,43 @@ from pathlib import Path
 
 SERVICE_MODE = "--worker" in sys.argv or "--supervisor" in sys.argv
 # 版本戳：若界面/日志看不到此字符串，说明仍在跑旧进程，必须 kill 后重启
-CODE_VERSION = "2026-09-14-ultra-salvage-parse-v4"
+CODE_VERSION = "2026-09-14-gemini-fixed-schema-v5"
+
+# Gemini 原生 responseSchema：把输出格式锁死为固定 JSON（短规则码 + boolean）
+# normalize_key 可将 N1/V1/NV1 映射回完整规则名
+def _bool_props(codes):
+    return {c: {"type": "BOOLEAN"} for c in codes}
+
+GEMINI_FIXED_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "explanation": {"type": "STRING"},
+        "predicted_pos": {"type": "STRING", "enum": ["名词", "动词", "名动词"]},
+        "is_dual_category": {"type": "BOOLEAN"},
+        "scores": {
+            "type": "OBJECT",
+            "properties": {
+                "名词": {
+                    "type": "OBJECT",
+                    "properties": _bool_props([f"N{i}" for i in range(1, 9)]),
+                    "required": [f"N{i}" for i in range(1, 9)],
+                },
+                "动词": {
+                    "type": "OBJECT",
+                    "properties": _bool_props([f"V{i}" for i in range(1, 10)]),
+                    "required": [f"V{i}" for i in range(1, 10)],
+                },
+                "名动词": {
+                    "type": "OBJECT",
+                    "properties": _bool_props([f"NV{i}" for i in range(1, 11)]),
+                    "required": [f"NV{i}" for i in range(1, 11)],
+                },
+            },
+            "required": ["名词", "动词", "名动词"],
+        },
+    },
+    "required": ["explanation", "predicted_pos", "is_dual_category", "scores"],
+}
 
 # ===============================
 # 基础配置与日志
@@ -803,14 +839,27 @@ def extract_gemini_json(text: str) -> Tuple[Dict[str, Any], str]:
     return None, text
 
 def normalize_key(k: str, pos_rules: list) -> str:
-    if not isinstance(k, str): return None
+    if not isinstance(k, str):
+        return None
     k_clean = re.sub(r'[\s_]+', '', k).upper()
+    # 1) 全名完全匹配
     for r in pos_rules:
-        if re.sub(r'[\s_]+', '', r["name"]).upper() == k_clean: return r["name"]
+        if re.sub(r'[\s_]+', '', r["name"]).upper() == k_clean:
+            return r["name"]
+    # 2) 短码精确匹配（N1/V6/NV10），按码长度从长到短，避免 NV1 误匹配 NV10
+    code_hits = []
     for r in pos_rules:
         code_match = re.match(r'^(NV\d+|N\d+|V\d+)', re.sub(r'[\s_]+', '', r["name"]).upper())
-        if code_match and (k_clean == code_match.group(1) or k_clean.startswith(code_match.group(1)) or code_match.group(1) in k_clean):
-            return r["name"]
+        if not code_match:
+            continue
+        code = code_match.group(1)
+        if k_clean == code:
+            code_hits.append((len(code), r["name"]))
+        elif k_clean.startswith(code) and not k_clean[len(code):len(code) + 1].isdigit():
+            code_hits.append((len(code), r["name"]))
+    if code_hits:
+        code_hits.sort(key=lambda x: -x[0])
+        return code_hits[0][1]
     return None
 
 def map_to_allowed_score(rule: dict, raw_val) -> int:
@@ -857,8 +906,7 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
             payload["reasoning"] = {"effort": reasoning_effort}
         return url, headers, payload, "responses"
 
-    # ===== Gemini：改用官方 generateContent + responseMimeType=application/json =====
-    # OpenAI 兼容层在 Flash 上经常返回无法解析的文本；原生 JSON 模式由服务端约束输出。
+    # ===== Gemini：官方 generateContent + 固定 responseSchema（输出格式锁死）=====
     if provider == "gemini":
         native_base = os.getenv(
             "GEMINI_NATIVE_BASE_URL",
@@ -869,7 +917,6 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
             "Content-Type": "application/json",
             "x-goog-api-key": api_key,
         }
-        # 把 messages 转成 Gemini contents
         contents = []
         system_bits = []
         for m in messages or []:
@@ -881,24 +928,22 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
                 contents.append({"role": "model", "parts": [{"text": str(text)}]})
             else:
                 contents.append({"role": "user", "parts": [{"text": str(text)}]})
-        if system_bits and contents:
-            # 把 system 拼到第一条 user 前，兼容无 systemInstruction 的简单调用
-            first = contents[0]
-            if first.get("role") == "user" and first.get("parts"):
-                first["parts"][0]["text"] = "\n\n".join(system_bits) + "\n\n" + first["parts"][0].get("text", "")
-            else:
-                contents.insert(0, {"role": "user", "parts": [{"text": "\n\n".join(system_bits)}]})
-        elif system_bits and not contents:
-            contents = [{"role": "user", "parts": [{"text": "\n\n".join(system_bits)}]}]
+        if not contents:
+            contents = [{"role": "user", "parts": [{"text": "\n\n".join(system_bits) or "请输出 JSON"}]}]
 
         payload = {
             "contents": contents,
             "generationConfig": {
                 "responseMimeType": "application/json",
-                "maxOutputTokens": max(max_tokens, 8192),
+                "responseSchema": GEMINI_FIXED_SCHEMA,
+                "maxOutputTokens": max(max_tokens, 4096),
                 "temperature": 0.0,
             },
         }
+        if system_bits:
+            payload["systemInstruction"] = {
+                "parts": [{"text": "\n\n".join(system_bits)}]
+            }
         return url, headers, payload, "gemini_native"
 
     base_urls = {
@@ -1104,19 +1149,36 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     if not word: return {}, "", "未知", "", False
     full_rules = {pos: "\n".join([f"- {r['name']}: {r['desc']}（符合: {r['match_score']} 分，不符合: {r['mismatch_score']} 分）" for r in rules]) for pos, rules in RULE_SETS.items()}
     
-    is_gemini_flash = provider == "gemini" and "flash" in str(model).lower()
-    if is_gemini_flash:
-        # Flash：压缩 explanation，显著提高纯 JSON 成功率，减少解析失败与重试
-        system_msg = f"""你是中文词法专家。分析词语「{word}」在名词/动词/名动词上的规则符合情况。
-规则（符合=true，不符合=false）：
-【名词】\n{full_rules["名词"]}
-【动词】\n{full_rules["动词"]}
-【名动词】\n{full_rules["名动词"]}
-只输出一个 JSON 对象，不要 Markdown、不要代码块、不要其它文字。字段：
-explanation(一句话)、predicted_pos、is_dual_category、scores。
-格式示例：
-{{"explanation":"简要结论","predicted_pos":"名词","is_dual_category":false,"scores":{{"名词":{{"N1_可受数量词修饰":true}},"动词":{{"V1_可受否定'不/没有'修饰":false}},"名动词":{{}}}}}}"""
-        user_prompt = f"分析「{word}」。只输出合法 JSON。"
+    is_gemini = provider == "gemini"
+    is_gemini_flash = is_gemini and "flash" in str(model).lower()
+
+    if is_gemini:
+        # 与 GEMINI_FIXED_SCHEMA 完全对齐：规则只用短码 N1/V1/NV1 ... 值为 true/false
+        # 服务端 responseSchema 会强制输出该结构，本地只需 normalize_key 映射回全名
+        def _short_rules(pos):
+            lines = []
+            for r in RULE_SETS[pos]:
+                code = re.match(r'^(NV\d+|N\d+|V\d+)', r["name"])
+                code = code.group(1) if code else r["name"]
+                lines.append(f"- {code}: {r['desc']}")
+            return "\n".join(lines)
+
+        system_msg = f"""你是中文词法专家。判断词语「{word}」对下列规则是否符合（true=符合，false=不符合）。
+【名词】
+{_short_rules("名词")}
+【动词】
+{_short_rules("动词")}
+【名动词】
+{_short_rules("名动词")}
+输出必须严格符合 schema：
+- explanation: 一句话
+- predicted_pos: 只能是 名词 / 动词 / 名动词
+- is_dual_category: true 或 false
+- scores.名词: 必须包含 N1 到 N8 全部键，值为 boolean
+- scores.动词: 必须包含 V1 到 V9 全部键，值为 boolean
+- scores.名动词: 必须包含 NV1 到 NV10 全部键，值为 boolean
+不要输出 schema 以外的字段，不要 Markdown。"""
+        user_prompt = f"分析词语「{word}」，按 schema 填写全部规则的 true/false。"
     else:
         system_msg = f"""你是一名中文词法与语法方面的专家。现在要分析词语「{word}」在下列词类中的表现：
 - 需要判断的词类：名词、动词、名动词
