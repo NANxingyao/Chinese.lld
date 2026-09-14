@@ -415,6 +415,12 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
             content = message.get("content", "")
             if isinstance(content, str) and content.strip():
                 return content
+            if isinstance(content, dict):
+                # 某些 Gemini/OpenAI 兼容层可能直接把结构化结果放入 content。
+                try:
+                    return json.dumps(content, ensure_ascii=False)
+                except Exception:
+                    pass
             if isinstance(content, list):
                 parts = []
                 for part in content:
@@ -446,85 +452,152 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
     except Exception:
         return ""
 
+def _clean_possible_markdown_json(text: str) -> str:
+    """清理 Gemini 常见的 Markdown/不可见字符，但不破坏 JSON 内部文本。"""
+    if not text:
+        return ""
+    cleaned = str(text)
+    cleaned = cleaned.replace("\ufeff", "").replace("\u200b", "").replace("\u2060", "")
+    cleaned = cleaned.strip()
+
+    # 去除首尾 Markdown JSON 代码围栏
+    cleaned = re.sub(r"^\s*```(?:json|JSON|javascript|js)?\s*", "", cleaned)
+    cleaned = re.sub(r"\s*```\s*$", "", cleaned)
+    return cleaned.strip()
+
+
+def _repair_json_candidate(candidate: str) -> str:
+    """对已经定位到的 JSON 对象做最小侵入式修复。
+    重点处理：字符串中的真实换行/制表符、尾逗号、Markdown 残留。
+    """
+    if not candidate:
+        return candidate
+
+    candidate = candidate.strip()
+    candidate = re.sub(r"^\s*```(?:json|JSON)?\s*", "", candidate)
+    candidate = re.sub(r"\s*```\s*$", "", candidate).strip()
+
+    # 去除对象/数组结尾前的尾逗号：{"a": 1,} / [1,]
+    candidate = re.sub(r",\s*([}\]])", r"\1", candidate)
+
+    # JSON 字符串内若出现真实控制字符，转成合法 JSON 转义。
+    out = []
+    in_string = False
+    escaped = False
+    for ch in candidate:
+        if in_string:
+            if escaped:
+                out.append(ch)
+                escaped = False
+                continue
+            if ch == "\\":
+                out.append(ch)
+                escaped = True
+                continue
+            if ch == '"':
+                out.append(ch)
+                in_string = False
+                continue
+            if ch == "\n":
+                out.append("\\n")
+                continue
+            if ch == "\r":
+                out.append("\\r")
+                continue
+            if ch == "\t":
+                out.append("\\t")
+                continue
+            if ord(ch) < 32:
+                out.append(" ")
+                continue
+        else:
+            if ch == '"':
+                in_string = True
+        out.append(ch)
+    return "".join(out)
+
+
+def _iter_balanced_json_objects(text: str):
+    """按 JSON 字符串语义寻找完整 {...} 对象，避免简单 find/rfind 误截取。"""
+    if not text:
+        return
+    n = len(text)
+    for start in range(n):
+        if text[start] != "{":
+            continue
+        depth = 0
+        in_string = False
+        escaped = False
+        for i in range(start, n):
+            ch = text[i]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    yield text[start:i + 1]
+                    break
+
+
+def _parse_json_object_candidate(candidate: str):
+    """严格解析 -> 最小修复后解析。"""
+    try:
+        obj = json.loads(candidate, strict=False)
+        if isinstance(obj, dict):
+            return obj
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+
+    repaired = _repair_json_candidate(candidate)
+    try:
+        obj = json.loads(repaired, strict=False)
+        if isinstance(obj, dict):
+            return obj
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    return None
+
+
 def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
+    """通用 JSON 提取器。
+    保留原有模型兼容性，同时解决代码块、前后说明、嵌套对象、控制字符和尾逗号问题。
+    """
     if not text:
         return None, text
 
-    # 通用解析器：保留原逻辑的兼容性，同时增加更稳健的 raw_decode 扫描。
-    # 其他模型仍可继续使用此函数，不改变其 API 调用方式。
-    text = str(text).replace("\ufeff", "").replace("\u200b", "").strip()
+    cleaned = _clean_possible_markdown_json(text)
 
-    # 1. 优先提取 Markdown JSON 代码块
-    code_block_match = re.search(r"```\s*(?:json|JSON)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if code_block_match:
-        candidate = code_block_match.group(1).strip()
-        try:
-            return json.loads(candidate, strict=False), candidate
-        except (json.JSONDecodeError, TypeError):
-            pass
+    # 1. 整段就是 JSON
+    obj = _parse_json_object_candidate(cleaned)
+    if isinstance(obj, dict):
+        return obj, cleaned
 
-    # 2. 使用 JSONDecoder.raw_decode 从每一个 { 开始尝试。
-    #    相比 find('{') + rfind('}')，不会因为前后存在说明文字而误截取。
-    decoder = json.JSONDecoder(strict=False)
-    for i, ch in enumerate(text):
-        if ch != '{':
-            continue
-        try:
-            obj, end = decoder.raw_decode(text[i:])
-            if isinstance(obj, dict):
-                candidate = text[i:i + end]
-                return obj, candidate
-        except (json.JSONDecodeError, TypeError, ValueError):
-            continue
-
-    # 3. 最后保留旧版兜底策略
-    first_bracket = text.find('{')
-    last_bracket = text.rfind('}')
-    if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
-        candidate = text[first_bracket:last_bracket + 1]
-        try:
-            return json.loads(candidate, strict=False), candidate
-        except (json.JSONDecodeError, TypeError):
-            pass
+    # 2. 在任意位置寻找完整 JSON 对象
+    for candidate in _iter_balanced_json_objects(cleaned):
+        obj = _parse_json_object_candidate(candidate)
+        if isinstance(obj, dict):
+            return obj, candidate
 
     return None, text
 
 
 def extract_gemini_json(text: str) -> Tuple[Dict[str, Any], str]:
-    """Gemini 专用 JSON 解析器：处理代码围栏、前后说明、BOM/零宽字符等。"""
-    if not text:
-        return None, text
+    """Gemini 专用解析器。
+    Gemini 即使偶尔输出 ```json ... ```、前置说明或字符串控制字符，也尽量在本地一次修复，
+    不让 Worker 因“解析失败”重新请求模型，避免重复消耗 token。
+    """
+    return extract_json_from_text(text)
 
-    cleaned = str(text)
-    cleaned = cleaned.replace("\ufeff", "").replace("\u200b", "").strip()
-
-    # Gemini 在没有结构化输出时，偶尔会返回 ```json ... ```。
-    # 先去掉代码围栏，再做标准 JSON 解析。
-    cleaned = re.sub(r"^\s*```(?:json|JSON)?\s*", "", cleaned)
-    cleaned = re.sub(r"\s*```\s*$", "", cleaned)
-    cleaned = cleaned.strip()
-
-    try:
-        obj = json.loads(cleaned, strict=False)
-        if isinstance(obj, dict):
-            return obj, cleaned
-    except (json.JSONDecodeError, TypeError, ValueError):
-        pass
-
-    # 从任意位置寻找一个完整 JSON 对象。
-    decoder = json.JSONDecoder(strict=False)
-    for i, ch in enumerate(cleaned):
-        if ch != '{':
-            continue
-        try:
-            obj, end = decoder.raw_decode(cleaned[i:])
-            if isinstance(obj, dict):
-                candidate = cleaned[i:i + end]
-                return obj, candidate
-        except (json.JSONDecodeError, TypeError, ValueError):
-            continue
-
-    return None, text
 def normalize_key(k: str, pos_rules: list) -> str:
     if not isinstance(k, str): return None
     k_clean = re.sub(r'[\s_]+', '', k).upper()
@@ -757,15 +830,12 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     if not word: return {}, "", "未知", "", False
     full_rules = {pos: "\n".join([f"- {r['name']}: {r['desc']}（符合: {r['match_score']} 分，不符合: {r['mismatch_score']} 分）" for r in rules]) for pos, rules in RULE_SETS.items()}
     
-    # 👇 核心修改：动态插入强约束。仅针对 Gemini 生效，严禁在推理过程中使用英文双引号破坏 JSON，其他模型保持原样。
-    gemini_strict_note = "（注意：内容中如需举例或引用，务必使用单引号 ''，严禁使用英文双引号 \"，以免破坏JSON结构）" if provider == "gemini" else "（写在 JSON 的 explanation 字段中）"
-    
     system_msg = f"""你是一名中文词法与语法方面的专家。现在要分析词语「{word}」在下列词类中的表现：
 - 需要判断的词类：名词、动词、名动词
 - 你只需要判断每一条规则是"符合"还是"不符合"，在 JSON 中的 scores 里给出 true / false，程序自动赋值。
 【名词】\n{full_rules["名词"]}\n【动词】\n{full_rules["动词"]}\n【名动词】\n{full_rules["名动词"]}
 输出要求：
-1. explanation: 逐条规则说明判断依据并举例{gemini_strict_note}。
+1. explanation: 逐条规则说明判断依据并举例（写在 JSON 的 explanation 字段中）。
 2. scores: 各规则对应 true/false。
 3. predicted_pos: 选择最典型词类。
 4. is_dual_category: 是否属于兼类（true/false）。
@@ -774,7 +844,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 {{"explanation": "...", "predicted_pos": "...", "is_dual_category": true, "scores": {{"名词": {{...}}, "动词": {{...}}, "名动词": {{...}}}}}}"""
     
     # 消除与 system_msg 的逻辑冲突
-    user_prompt = f"请严格按照上述要求分析词语「{word}」，并将推理过程写入 JSON 的 explanation 字段中。直接输出合法 JSON。"
+    user_prompt = f"请分析词语「{word}」。只返回一个 JSON 对象；不要输出 Markdown、```、前言、结语或 JSON 之外的任何文字。所有解释文字必须放在 explanation 字段中。"
     
     with st.spinner(f"正在调用大模型 ({model}) 进行分析...") if show_ui else __import__("contextlib").nullcontext():
         ok, resp_json, err_msg = call_llm_api_cached(provider, model, api_key, [{"role": "system", "content": system_msg}, {"role": "user", "content": user_prompt}], show_ui=show_ui)
@@ -784,10 +854,12 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         return {}, f"调用失败: {err_msg}", "未知", f"失败: {err_msg}", False
 
     raw_text = extract_text_from_response(resp_json)
-
-    # Gemini 使用专用 JSON 提取器；其他模型完全保持原有解析逻辑。
+    # Gemini 单独使用专用解析器；其他模型保持原有解析流程。
     if provider == "gemini":
-        parsed_json, _ = _extract_gemini_json(raw_text)
+        parsed_json, _ = extract_gemini_json(raw_text)
+        if parsed_json is None:
+            # 再走一次通用解析器作为兜底
+            parsed_json, _ = extract_json_from_text(raw_text)
     else:
         parsed_json, _ = extract_json_from_text(raw_text)
     
@@ -797,11 +869,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         is_dual_category = parsed_json.get("is_dual_category", False)
         raw_scores = parsed_json.get("scores", {})
     else:
-        if show_ui:
-            if provider == "gemini":
-                st.error("Gemini 已返回内容，但未能解析为有效 JSON。请展开“模型原始响应”查看返回内容。")
-            else:
-                st.error("未能解析有效的 JSON。")
+        if show_ui: st.error("未能解析有效的 JSON。")
         return {}, raw_text, "未知", "JSON 解析失败", False
 
     scores_out = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
@@ -943,7 +1011,18 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
                 if scores:
                     success = True
                     break
-                last_error = explanation or '模型返回为空或 JSON 解析失败'
+
+                # 如果模型已经返回了非空原始文本，但本地解析仍失败，不要无休止重新调用模型。
+                # 这类情况属于本地解析问题，应保留原文并直接结束本次任务，避免重复消耗 Gemini token。
+                if raw_text and str(raw_text).strip():
+                    last_error = explanation or '模型已返回内容，但本地 JSON 解析失败；停止重复调用以避免浪费 token'
+                    _write_job_state(
+                        job_state_file, status='failed', current_row=index, current_word=word,
+                        next_row=index, retry_count=retry_count, error=last_error, completed_rows=index
+                    )
+                    raise RuntimeError(last_error)
+
+                last_error = explanation or '模型返回为空'
             except BaseException as e:
                 last_error = f'{type(e).__name__}: {e}'
                 logger.exception(f'Worker处理第{row_number}行失败：{word}')
