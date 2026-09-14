@@ -592,11 +592,167 @@ def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
 
 
 def extract_gemini_json(text: str) -> Tuple[Dict[str, Any], str]:
-    """Gemini 专用解析器。
-    Gemini 即使偶尔输出 ```json ... ```、前置说明或字符串控制字符，也尽量在本地一次修复，
-    不让 Worker 因“解析失败”重新请求模型，避免重复消耗 token。
+    """Gemini 专用 JSON 提取器。
+
+    目标：模型已返回文本时，只在本地完成解析/修复，不重复调用 Gemini。
+    只有拿到完整的 scores 数据才视为成功，避免残缺数据进入正式研究结果。
     """
-    return extract_json_from_text(text)
+    if not text or not isinstance(text, str):
+        return None, text
+
+    cleaned = str(text).replace("\ufeff", "").replace("\u200b", "").replace("\u2060", "").strip()
+    cleaned = re.sub(r"^\s*```(?:json|JSON|javascript|js)?\s*", "", cleaned)
+    cleaned = re.sub(r"\s*```\s*$", "", cleaned).strip()
+
+    def try_load(s):
+        try:
+            obj = json.loads(s, strict=False)
+            return obj if isinstance(obj, dict) else None
+        except Exception:
+            return None
+
+    def repair_controls(s):
+        # 仅把 JSON 字符串内部的真实控制字符转义，不破坏结构。
+        out_chars=[]
+        in_string=False
+        escaped=False
+        for ch in s:
+            if in_string:
+                if escaped:
+                    out_chars.append(ch); escaped=False; continue
+                if ch == '\\':
+                    out_chars.append(ch); escaped=True; continue
+                if ch == '"':
+                    out_chars.append(ch); in_string=False; continue
+                if ch == '\n': out_chars.append('\\n'); continue
+                if ch == '\r': out_chars.append('\\r'); continue
+                if ch == '\t': out_chars.append('\\t'); continue
+                if ord(ch) < 32: out_chars.append(' '); continue
+            else:
+                if ch == '"': in_string=True
+            out_chars.append(ch)
+        repaired=''.join(out_chars)
+        repaired=re.sub(r',\s*([}\]])', r'\1', repaired)
+        return repaired
+
+    def balanced_objects(s):
+        n=len(s)
+        for start_i in range(n):
+            if s[start_i] != '{':
+                continue
+            depth=0; in_string=False; escaped=False
+            for i in range(start_i,n):
+                ch=s[i]
+                if in_string:
+                    if escaped: escaped=False
+                    elif ch=='\\': escaped=True
+                    elif ch=='"': in_string=False
+                    continue
+                if ch=='"': in_string=True
+                elif ch=='{': depth+=1
+                elif ch=='}':
+                    depth-=1
+                    if depth==0:
+                        yield s[start_i:i+1]
+                        break
+
+    def parse_candidate(candidate):
+        for item in (candidate, repair_controls(candidate)):
+            obj=try_load(item)
+            if obj is not None:
+                return obj
+        return None
+
+    # 1) 整体 JSON
+    obj=parse_candidate(cleaned)
+    if isinstance(obj,dict) and isinstance(obj.get('scores'),dict):
+        return obj, cleaned
+
+    # 2) 从文本中寻找完整 JSON 对象
+    for candidate in balanced_objects(cleaned):
+        obj=parse_candidate(candidate)
+        if isinstance(obj,dict) and isinstance(obj.get('scores'),dict):
+            return obj, candidate
+
+    # 3) 只恢复实验真正需要的字段；不再依赖 explanation 的完整性。
+    recovered={
+        'explanation':'Gemini explanation 格式异常；已保留原始响应并尝试恢复核心 scores。',
+        'predicted_pos':'未知',
+        'is_dual_category':False,
+        'scores':{'名词':{},'动词':{},'名动词':{}}
+    }
+
+    m=re.search(r'"predicted_pos"\s*:\s*"([^"]+)"', cleaned, re.DOTALL)
+    if m:
+        recovered['predicted_pos']=m.group(1).strip()
+
+    m=re.search(r'"is_dual_category"\s*:\s*(true|false)', cleaned, re.IGNORECASE)
+    if m:
+        recovered['is_dual_category']=m.group(1).lower()=='true'
+
+    # explanation 仅用于展示，不参与计算
+    m=re.search(r'"explanation"\s*:\s*"(.*?)"\s*,\s*"predicted_pos"', cleaned, re.DOTALL)
+    if m:
+        recovered['explanation']=m.group(1)
+
+    # 找到 scores 后，按三个词类分别使用括号平衡提取。
+    scores_pos=cleaned.find('"scores"')
+    if scores_pos == -1:
+        return None, text
+
+    def extract_named_object(source, key, offset=0):
+        mm=re.search(rf'"{re.escape(key)}"\s*:\s*\{{', source[offset:], re.DOTALL)
+        if not mm:
+            return None
+        start=offset+mm.end()-1
+        depth=0; in_string=False; escaped=False
+        for i in range(start,len(source)):
+            ch=source[i]
+            if in_string:
+                if escaped: escaped=False
+                elif ch=='\\': escaped=True
+                elif ch=='"': in_string=False
+                continue
+            if ch=='"': in_string=True
+            elif ch=='{': depth+=1
+            elif ch=='}':
+                depth-=1
+                if depth==0:
+                    return source[start:i+1]
+        return None
+
+    for pos in ('名词','动词','名动词'):
+        block=extract_named_object(cleaned,pos,scores_pos)
+        if not block:
+            continue
+        obj=parse_candidate(block)
+        if isinstance(obj,dict):
+            recovered['scores'][pos].update(obj)
+        else:
+            # 仅抓规则名 -> true/false/数字，不抓 explanation 等其他字段。
+            for rule_name, value in re.findall(
+                r'"([^"{}]+)"\s*:\s*(true|false|-?\d+(?:\.\d+)?)',
+                block, re.IGNORECASE
+            ):
+                vl=value.lower()
+                if vl=='true': val=True
+                elif vl=='false': val=False
+                else:
+                    try: val=int(float(value))
+                    except Exception: continue
+                recovered['scores'][pos][rule_name]=val
+
+    recovered_count=sum(len(v) for v in recovered['scores'].values())
+    expected_count=sum(len(rules) for rules in RULE_SETS.values())
+
+    # 只有至少有一个核心分数才返回抢救结果；调用层随后会检查是否完整。
+    if recovered_count>0:
+        recovered['_gemini_recovered']=True
+        recovered['_gemini_recovered_count']=recovered_count
+        recovered['_gemini_expected_count']=expected_count
+        return recovered, cleaned
+
+    return None, text
 
 def normalize_key(k: str, pos_rules: list) -> str:
     if not isinstance(k, str): return None
@@ -854,23 +1010,22 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         return {}, f"调用失败: {err_msg}", "未知", f"失败: {err_msg}", False
 
     raw_text = extract_text_from_response(resp_json)
-    # Gemini 单独使用专用解析器；其他模型保持原有解析流程。
+
     if provider == "gemini":
         parsed_json, _ = extract_gemini_json(raw_text)
-        if parsed_json is None:
-            # 再走一次通用解析器作为兜底
-            parsed_json, _ = extract_json_from_text(raw_text)
     else:
         parsed_json, _ = extract_json_from_text(raw_text)
-    
-    if parsed_json and isinstance(parsed_json, dict):
-        explanation = parsed_json.get("explanation", "无推理过程。")
-        predicted_pos = parsed_json.get("predicted_pos", "未知")
-        is_dual_category = parsed_json.get("is_dual_category", False)
-        raw_scores = parsed_json.get("scores", {})
-    else:
-        if show_ui: st.error("未能解析有效的 JSON。")
-        return {}, raw_text, "未知", "JSON 解析失败", False
+
+    if not (parsed_json and isinstance(parsed_json, dict)):
+        if show_ui:
+            st.error("未能解析有效的 JSON。")
+        # raw_text 非空时表示 API 已成功返回，后续 Worker 不应再次请求模型。
+        return {}, raw_text, "未知", "JSON 解析失败（模型已返回内容）", False
+
+    explanation = parsed_json.get("explanation", "无推理过程。")
+    predicted_pos = parsed_json.get("predicted_pos", "未知")
+    is_dual_category = parsed_json.get("is_dual_category", False)
+    raw_scores = parsed_json.get("scores", {})
 
     scores_out = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
     for pos, rules in RULE_SETS.items():
@@ -880,6 +1035,29 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
                 if norm_k:
                     rule_def = next(r for r in rules if r["name"] == norm_k)
                     scores_out[pos][norm_k] = map_to_allowed_score(rule_def, v)
+
+    # 正式研究结果必须保证 3 个词类的全部规则都有值。
+    expected_by_pos = {pos: len(rules) for pos, rules in RULE_SETS.items()}
+    actual_by_pos = {}
+    for pos, rules in RULE_SETS.items():
+        seen = set()
+        if isinstance(raw_scores.get(pos), dict):
+            for key in raw_scores[pos].keys():
+                normalized = normalize_key(key, rules)
+                if normalized:
+                    seen.add(normalized)
+        actual_by_pos[pos] = len(seen)
+
+    complete = all(actual_by_pos[pos] == expected_by_pos[pos] for pos in RULE_SETS)
+
+    if provider == "gemini" and not complete:
+        recovered_count = parsed_json.get("_gemini_recovered_count", sum(actual_by_pos.values()))
+        expected_count = parsed_json.get("_gemini_expected_count", sum(expected_by_pos.values()))
+        msg = f"JSON 解析失败（Gemini 已返回文本，核心 scores 恢复 {recovered_count}/{expected_count}，为避免产生残缺研究数据，本条跳过且不重复调用 API）"
+        if show_ui:
+            st.warning(msg)
+        return {}, raw_text, predicted_pos, msg, is_dual_category
+
     return scores_out, raw_text, predicted_pos, explanation, is_dual_category
 
 def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
@@ -1012,15 +1190,35 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
                     success = True
                     break
 
-                # 如果模型已经返回了非空原始文本，但本地解析仍失败，不要无休止重新调用模型。
-                # 这类情况属于本地解析问题，应保留原文并直接结束本次任务，避免重复消耗 Gemini token。
-                if raw_text and str(raw_text).strip():
-                    last_error = explanation or '模型已返回内容，但本地 JSON 解析失败；停止重复调用以避免浪费 token'
+                # Gemini：API 已返回非空文本但本地 JSON 仍无法完整解析时，
+                # 这是“本地解析失败”而不是“API 调用失败”。
+                # 直接记录原始响应并跳过本条，绝不再次消耗 Gemini token。
+                if provider == "gemini" and raw_text and str(raw_text).strip():
+                    last_error = explanation or 'Gemini 已返回文本，但本地 JSON 无法完整恢复；本条跳过'
+                    failure_file = backup_file.with_name(backup_file.stem + '_gemini_parse_failures.jsonl')
+                    try:
+                        failure_record = {
+                            '任务ID': task_id,
+                            '序数': row_number,
+                            '词语': word,
+                            '模型': model,
+                            '解析错误': last_error,
+                            '原始响应': raw_text,
+                            '时间戳': time.strftime('%Y-%m-%d %H:%M:%S')
+                        }
+                        with failure_file.open('a', encoding='utf-8') as ff:
+                            ff.write(json.dumps(failure_record, ensure_ascii=False) + '\n')
+                    except Exception as log_e:
+                        logger.warning(f'写入 Gemini 解析失败日志失败：{log_e}')
+
                     _write_job_state(
-                        job_state_file, status='failed', current_row=index, current_word=word,
-                        next_row=index, retry_count=retry_count, error=last_error, completed_rows=index
+                        job_state_file, status='running', current_row=index, current_word=word,
+                        next_row=index + 1, retry_count=0, error=last_error, completed_rows=index + 1
                     )
-                    raise RuntimeError(last_error)
+                    start_row = index + 1
+                    success = True
+                    scores = {}
+                    break
 
                 last_error = explanation or '模型返回为空'
             except BaseException as e:
@@ -1032,6 +1230,10 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
                              current_word=word, next_row=index, retry_count=retry_count,
                              error=last_error, retry_in_seconds=wait_seconds, completed_rows=index)
             time.sleep(wait_seconds)
+
+        # 本地解析失败的 Gemini 项目已记录并跳过，不进入正式结果 CSV。
+        if provider == "gemini" and not scores:
+            continue
 
         membership = calculate_membership(scores)
         new_row = pd.DataFrame([{
