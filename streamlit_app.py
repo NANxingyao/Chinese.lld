@@ -15,7 +15,7 @@ from pathlib import Path
 
 SERVICE_MODE = "--worker" in sys.argv or "--supervisor" in sys.argv
 # 版本戳：若界面/日志看不到此字符串，说明仍在跑旧进程，必须 kill 后重启
-CODE_VERSION = "2026-09-14-mistral-v1"
+CODE_VERSION = "2026-09-14-cohere-v1"
 
 # Gemini 原生 responseSchema：把输出格式锁死为固定 JSON（短规则码 + boolean）
 # normalize_key 可将 N1/V1/NV1 映射回完整规则名
@@ -276,12 +276,12 @@ MODEL_OPTIONS = {
         "api_key": os.getenv("XAI_API_KEY"), "env_var": "XAI_API_KEY"
     },
 
-    # ===================== 国外模型：Mistral（新增） =====================
-    "Mistral Large 3": {
-        "provider": "mistral",
-        "model": "mistral-large-2512",          # 官方 Large 3 模型 ID
-        "api_key": os.getenv("MISTRAL_API_KEY"),
-        "env_var": "MISTRAL_API_KEY"
+    # ===================== 国外模型：Cohere（新增） =====================
+    "Cohere Command R+": {
+        "provider": "cohere",
+        "model": "command-r-plus",                 # 也可换成 command-a-03-2025 / command-r
+        "api_key": os.getenv("COHERE_API_KEY"),
+        "env_var": "COHERE_API_KEY"
     },
 }
 
@@ -439,7 +439,7 @@ def spawn_detached(cmd, cwd):
 # 文本解析工具
 # ===============================
 def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
-    """兼容 OpenAI / Gemini / xAI / Mistral 等返回结构，尽可能提取最终文本。"""
+    """兼容 OpenAI / Gemini / xAI / Cohere 等返回结构，尽可能提取最终文本。"""
     if not isinstance(resp_json, dict):
         return ""
     try:
@@ -894,13 +894,13 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
             }
         return url, headers, payload, "gemini_native"
 
-    # ===== OpenAI 兼容接口（DeepSeek / Moonshot / Qwen / xAI / Mistral）=====
+    # ===== OpenAI 兼容接口（DeepSeek / Moonshot / Qwen / xAI / Cohere）=====
     base_urls = {
         "deepseek": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
         "moonshot": os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1"),
         "qwen":     os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
         "xai":      os.getenv("XAI_BASE_URL", "https://api.x.ai/v1"),
-        "mistral":  os.getenv("MISTRAL_BASE_URL", "https://api.mistral.ai/v1"),  # 新增
+        "cohere":   os.getenv("COHERE_BASE_URL", "https://api.cohere.com/compatibility/v1"),  # 新增
     }
     url = f"{base_urls.get(provider, base_urls['deepseek']).rstrip('/')}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -919,7 +919,7 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
             payload["reasoning_effort"] = reasoning_effort
         payload["max_tokens"] = max_tokens
     else:
-        # deepseek / qwen / mistral
+        # deepseek / qwen / cohere
         payload["max_tokens"] = max_tokens
 
     return url, headers, payload, "chat_completions"
@@ -1804,7 +1804,7 @@ def main():
                 )
         with col2:
             st.markdown('<div class="section-title"><span class="icon-dot"></span> 实验配置</div>', unsafe_allow_html=True)
-            if selected_model_info.get("provider") in {"openai", "gemini", "xai", "mistral"}:
+            if selected_model_info.get("provider") in {"openai", "gemini", "xai", "cohere"}:
                 st.caption("国外模型数据将按“批次 + 模型”独立保存，可分别跑出不同模型数据后进行横向比较。")
             st.session_state.project_code = st.text_input("实验批次码 (Project Code)", value=st.session_state.get("project_code", "default_task"), help="隔离不同量化分析任务")
             BACKUP_FILE, PROGRESS_FILE = get_project_files(st.session_state.project_code, selected_model_info.get("model", "default_model"))
