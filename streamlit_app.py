@@ -15,7 +15,7 @@ from pathlib import Path
 
 SERVICE_MODE = "--worker" in sys.argv or "--supervisor" in sys.argv
 # 版本戳：若界面/日志看不到此字符串，说明仍在跑旧进程，必须 kill 后重启
-CODE_VERSION = "2026-09-14-gemini-fixed-schema-v5"
+CODE_VERSION = "2026-09-14-stop-button-v6"
 
 # Gemini 原生 responseSchema：把输出格式锁死为固定 JSON（短规则码 + boolean）
 # normalize_key 可将 N1/V1/NV1 映射回完整规则名
@@ -1320,6 +1320,77 @@ def _pid_alive(pid):
     except (ValueError, OSError): return False
 
 
+def _kill_pid(pid):
+    """尝试结束指定进程（先 SIGTERM，再 SIGKILL）。"""
+    if not pid:
+        return False
+    try:
+        pid = int(pid)
+        if pid <= 0 or not _pid_alive(pid):
+            return False
+        try:
+            os.kill(pid, 15)  # SIGTERM
+        except ProcessLookupError:
+            return True
+        time.sleep(0.4)
+        if _pid_alive(pid):
+            try:
+                os.kill(pid, 9)  # SIGKILL
+            except ProcessLookupError:
+                pass
+        return True
+    except Exception as e:
+        logger.warning(f"结束进程失败 pid={pid}: {e}")
+        return False
+
+
+def stop_batch_job(job_state_file: Path) -> str:
+    """停止当前批次：标记 cancelled，并结束 supervisor / worker。"""
+    state = _load_job_state(job_state_file)
+    supervisor_pid = state.get("supervisor_pid")
+    worker_pid = state.get("worker_pid")
+
+    # 从 pid 文件再读一次，防止 state 里 pid 过期
+    for suffix, key in ((".supervisor.pid", "supervisor"), (".worker.pid", "worker")):
+        try:
+            p = _service_file(job_state_file, suffix)
+            if p.exists():
+                txt = p.read_text(encoding="utf-8").strip()
+                if txt.isdigit():
+                    if key == "supervisor":
+                        supervisor_pid = int(txt)
+                    else:
+                        worker_pid = int(txt)
+        except Exception:
+            pass
+
+    _write_job_state(
+        job_state_file,
+        status="cancelled",
+        error="用户手动停止任务",
+        worker_pid=None,
+    )
+
+    killed = []
+    if _kill_pid(worker_pid):
+        killed.append(f"worker={worker_pid}")
+    if _kill_pid(supervisor_pid):
+        killed.append(f"supervisor={supervisor_pid}")
+
+    # 清理锁/pid 文件，避免下次启动被挡
+    for suffix in (".supervisor.pid", ".worker.pid", ".supervisor.lock"):
+        try:
+            f = _service_file(job_state_file, suffix)
+            if f.exists():
+                f.unlink()
+        except Exception:
+            pass
+
+    if killed:
+        return f"已停止任务，并结束进程：{', '.join(killed)}"
+    return "已标记停止（cancelled）。若界面仍在转，请刷新页面。"
+
+
 def _state_age_seconds(state):
     try:
         ts = state.get('updated_at')
@@ -1351,6 +1422,14 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
     )
 
     while start_row < total_rows:
+        # 用户点击「停止任务」后优雅退出
+        cur_state = _load_job_state(job_state_file)
+        if cur_state.get("status") == "cancelled":
+            _write_job_state(job_state_file, status="cancelled", error="用户手动停止任务",
+                             next_row=start_row, completed_rows=start_row)
+            logger.info("Worker 收到 cancelled，退出。next_row=%s", start_row)
+            return
+
         index = start_row
         row_number = index + 1
         
@@ -1550,8 +1629,21 @@ def _supervisor_entry(job_state_file: Path):
             while True:
                 rc = worker.poll()
                 state = _load_job_state(job_state_file)
-                if state.get('status') == 'completed': return
-                if rc is not None: break
+                if state.get('status') == 'completed':
+                    return
+                if state.get('status') == 'cancelled':
+                    # 用户停止：结束 worker 后退出 supervisor
+                    try:
+                        if rc is None:
+                            worker.terminate()
+                            time.sleep(0.3)
+                            if worker.poll() is None:
+                                worker.kill()
+                    except Exception:
+                        pass
+                    return
+                if rc is not None:
+                    break
                 time.sleep(1)
 
             if rc == 0: detail = 'Worker正常退出，但任务状态未标记完成。将自动检查并继续。'
@@ -1695,6 +1787,8 @@ def render_live_monitor(job_state_file: Path, backup_file: Path, total_rows_defa
         st.markdown(status_html, unsafe_allow_html=True)
     elif status_str == "completed":
         st.success(f"🎉 任务全部完毕，共 {total} 条。")
+    elif status_str == "cancelled":
+        st.warning(f"⏹ 任务已手动停止（进度约 {completed}/{total}）。可随时点「开始处理 / 继续断点任务」从断点续跑。")
     elif status_str == "failed":
         st.error(f"❌ 任务停止：{error_str or '未记录到具体异常，请查看 process_log.log。'}")
     else:
@@ -1845,18 +1939,40 @@ def main():
                     job_state_file = BASE_DIR / f"batch_job_{re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', st.session_state.project_code)}__{model_namespace}.json"
                     current_state = _auto_recover_if_needed(job_state_file)
                     
-                    can_start = not _pid_alive(current_state.get("supervisor_pid")) and current_state.get("status") not in {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "supervisor_restarting"}
+                    active_run = _pid_alive(current_state.get("supervisor_pid")) or current_state.get("status") in {
+                        "starting", "running", "retrying", "waiting_retry", "saving",
+                        "waiting_save_retry", "supervisor_restarting"
+                    }
+                    can_start = not active_run
 
-                    if st.button("▶ 开始处理 / 继续断点任务", type="primary", use_container_width=True, disabled=not can_start):
-                        if not selected_model_info["api_key"]: st.error("请配置有效的 API Key")
-                        else:
-                            try:
-                                started, state = start_or_resume_batch_job(df_input, target_col, uploaded_file, f"{st.session_state.project_code}_{uploaded_file.name}", BACKUP_FILE, selected_model_info["provider"], selected_model_info["model"], selected_model_info["env_var"], job_state_file)
-                                if started: 
-                                    st.success("守护任务已启动，将在后台持续处理并自动恢复。")
-                                    time.sleep(0.5)
-                                    st.rerun()
-                            except Exception as e: st.error(f"启动失败：{e}")
+                    btn_col1, btn_col2 = st.columns([3, 1])
+                    with btn_col1:
+                        if st.button("▶ 开始处理 / 继续断点任务", type="primary", use_container_width=True, disabled=not can_start):
+                            if not selected_model_info["api_key"]:
+                                st.error("请配置有效的 API Key")
+                            else:
+                                try:
+                                    started, state = start_or_resume_batch_job(
+                                        df_input, target_col, uploaded_file,
+                                        f"{st.session_state.project_code}_{uploaded_file.name}",
+                                        BACKUP_FILE,
+                                        selected_model_info["provider"],
+                                        selected_model_info["model"],
+                                        selected_model_info["env_var"],
+                                        job_state_file,
+                                    )
+                                    if started:
+                                        st.success("守护任务已启动，将在后台持续处理并自动恢复。")
+                                        time.sleep(0.5)
+                                        st.rerun()
+                                except Exception as e:
+                                    st.error(f"启动失败：{e}")
+                    with btn_col2:
+                        if st.button("⏹ 停止任务", type="secondary", use_container_width=True, disabled=not active_run):
+                            msg = stop_batch_job(job_state_file)
+                            st.warning(msg)
+                            time.sleep(0.5)
+                            st.rerun()
 
                     st.divider()
                     
