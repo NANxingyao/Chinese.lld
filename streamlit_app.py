@@ -14,6 +14,8 @@ from typing import Tuple, Dict, Any, List
 from pathlib import Path
 
 SERVICE_MODE = "--worker" in sys.argv or "--supervisor" in sys.argv
+# 版本戳：若界面/日志看不到此字符串，说明仍在跑旧进程，必须 kill 后重启
+CODE_VERSION = "2026-09-14-gemini-native-flash-once-v3"
 
 # ===============================
 # 基础配置与日志
@@ -799,9 +801,52 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
             payload["reasoning"] = {"effort": reasoning_effort}
         return url, headers, payload, "responses"
 
+    # ===== Gemini：改用官方 generateContent + responseMimeType=application/json =====
+    # OpenAI 兼容层在 Flash 上经常返回无法解析的文本；原生 JSON 模式由服务端约束输出。
+    if provider == "gemini":
+        native_base = os.getenv(
+            "GEMINI_NATIVE_BASE_URL",
+            "https://generativelanguage.googleapis.com/v1beta"
+        ).rstrip("/")
+        url = f"{native_base}/models/{model}:generateContent"
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
+        }
+        # 把 messages 转成 Gemini contents
+        contents = []
+        system_bits = []
+        for m in messages or []:
+            role = (m.get("role") or "user").lower()
+            text = m.get("content") or ""
+            if role == "system":
+                system_bits.append(str(text))
+            elif role == "assistant":
+                contents.append({"role": "model", "parts": [{"text": str(text)}]})
+            else:
+                contents.append({"role": "user", "parts": [{"text": str(text)}]})
+        if system_bits and contents:
+            # 把 system 拼到第一条 user 前，兼容无 systemInstruction 的简单调用
+            first = contents[0]
+            if first.get("role") == "user" and first.get("parts"):
+                first["parts"][0]["text"] = "\n\n".join(system_bits) + "\n\n" + first["parts"][0].get("text", "")
+            else:
+                contents.insert(0, {"role": "user", "parts": [{"text": "\n\n".join(system_bits)}]})
+        elif system_bits and not contents:
+            contents = [{"role": "user", "parts": [{"text": "\n\n".join(system_bits)}]}]
+
+        payload = {
+            "contents": contents,
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "maxOutputTokens": max(max_tokens, 8192),
+                "temperature": 0.0,
+            },
+        }
+        return url, headers, payload, "gemini_native"
+
     base_urls = {
         "deepseek": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-        "gemini": os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"),
         "moonshot": os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1"),
         "qwen": os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
         "xai": os.getenv("XAI_BASE_URL", "https://api.x.ai/v1"),
@@ -812,35 +857,16 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
         "model": model,
         "messages": messages,
         "temperature": temperature,
-        "stream": provider not in {"moonshot", "gemini"},
+        "stream": provider not in {"moonshot"},
     }
 
     if provider == "moonshot":
         payload.update({"max_tokens": 8192, "thinking": {"type": "disabled"}, "temperature": 0.6})
     elif provider == "xai":
-        # Grok 4.6 默认高推理；本项目以批量稳定性和速度为主，可通过环境变量调节。
         reasoning_effort = os.getenv("XAI_REASONING_EFFORT", "high").strip().lower()
         if reasoning_effort in {"low", "medium", "high", "xhigh"}:
             payload["reasoning_effort"] = reasoning_effort
         payload["max_tokens"] = max_tokens
-    elif provider == "gemini":
-        # ===== Gemini 专用配置 =====
-        # Gemini 3.x 使用 OpenAI-compatible Chat Completions。
-        # 这里仅修改 Gemini，不影响 DeepSeek / Kimi / Qwen / xAI。
-        payload.pop("temperature", None)
-        # 给 explanation 留足空间，降低截断导致本地 JSON 解析失败的概率
-        payload["max_tokens"] = max(max_tokens, 8192)
-        payload["stream"] = False
-        # 关键：让 Gemini 直接返回合法 JSON，而不是 Markdown + JSON。
-        payload["response_format"] = {"type": "json_object"}
-        model_l = str(model or "").lower()
-        # gemini-3.8-flash 对 reasoning_effort + json_object 组合更敏感：
-        # 容易把思考过程混进输出或 content 为空，导致本地“JSON 解析失败”并反复重试。
-        # Pro 系列保留 low；Flash 系列不传 reasoning_effort，优先保证稳定 JSON。
-        if "flash" in model_l:
-            payload.pop("reasoning_effort", None)
-        else:
-            payload["reasoning_effort"] = "low"
     else:
         payload["max_tokens"] = max_tokens
     return url, headers, payload, "chat_completions"
@@ -879,7 +905,46 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
 
     for attempt in range(max_retries):
         try:
-            if api_style == "responses":
+            if api_style == "gemini_native":
+                # 官方 generateContent + responseMimeType=application/json
+                response = requests.post(url, headers=headers, json=payload, timeout=180)
+                if response.status_code != 200:
+                    try:
+                        detail = response.json()
+                    except Exception:
+                        detail = response.text
+                    if response.status_code == 404:
+                        error_msg = f"路径错误 (404)。请确保请求地址正确：{url}"
+                    elif response.status_code == 401:
+                        error_msg = "Gemini 鉴权失败 (401)。请检查 GEMINI_API_KEY。"
+                    elif response.status_code == 429:
+                        error_msg = f"Gemini 限流 (429)：{detail}"
+                    elif response.status_code in [400, 403]:
+                        error_msg = f"Gemini 请求错误 ({response.status_code})：{detail}"
+                    else:
+                        error_msg = f"Gemini API 错误: {response.status_code} - {detail}"
+                    if response.status_code in [400, 401, 403]:
+                        break
+                    # 429 等可重试错误：抛出让外层退避
+                    response.raise_for_status()
+
+                body = response.json()
+                logger.info("Gemini native 响应摘要：%s", json.dumps(body, ensure_ascii=False)[:2000])
+                text = extract_text_from_response(body)
+                if not text:
+                    # native 结构兜底
+                    try:
+                        parts = (((body.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
+                        text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+                    except Exception:
+                        text = ""
+                if text:
+                    if streaming_placeholder is not None:
+                        streaming_placeholder.empty()
+                    return True, {"choices": [{"message": {"content": text}}], "_raw_gemini": body}, ""
+                error_msg = f"Gemini native 未返回文本。摘要：{json.dumps(body, ensure_ascii=False)[:800]}"
+
+            elif api_style == "responses":
                 # OpenAI Responses：非流式读取，解析稳定；不影响后台 Worker。
                 response = requests.post(url, headers=headers, json=payload, timeout=180)
                 if response.status_code != 200:
@@ -1290,6 +1355,7 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
 
 def _worker_entry(job_state_file: Path):
     try:
+        logger.info("Worker 启动 CODE_VERSION=%s pid=%s", CODE_VERSION, os.getpid())
         spec_file = _service_file(job_state_file, '.spec.json')
         if not spec_file.exists():
             raise FileNotFoundError(f'找不到任务配置文件：{spec_file}')
@@ -1629,6 +1695,7 @@ def main():
     with tab2:
         # 将静态按钮与实时刷新组件严格分离
         st.markdown(f'<div class="section-title"><span class="icon-dot"></span> 批量任务管理 (当前批次: <code>{st.session_state.project_code}</code>)</div>', unsafe_allow_html=True)
+        st.caption(f"代码版本：{CODE_VERSION}（若日志无此字符串=仍在跑旧进程，请先 kill 再重启）")
         col_c1, col_c2 = st.columns([3, 1])
         with col_c2:
             # 清空缓存被放在外侧，以防止和 fragment 内的自动重刷发生冲突
