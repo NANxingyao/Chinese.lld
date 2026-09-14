@@ -1206,7 +1206,8 @@ def main():
             st.write("")
             if st.button("测试模型链接", type="secondary", use_container_width=True, disabled=not selected_model_info["api_key"]):
                 with st.spinner("正在测试连接..."):
-                    ok, _, err_msg = call_llm_api_cached(selected_model_info["provider"], selected_model_info["model"], selected_model_info["api_key"], [{"role": "user", "content": "请回复'pong'"}], max_tokens=10)
+                    # 将 max_tokens 从 10 调大到 100，避免 Gemini 底层 token 开销导致触发 finish_reason: length
+                    ok, _, err_msg = call_llm_api_cached(selected_model_info["provider"], selected_model_info["model"], selected_model_info["api_key"], [{"role": "user", "content": "请回复'pong'"}], max_tokens=100)
                 if ok: st.success("成功！")
                 else: st.error(f"失败: {err_msg}")
 
