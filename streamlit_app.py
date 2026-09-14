@@ -15,7 +15,7 @@ from pathlib import Path
 
 SERVICE_MODE = "--worker" in sys.argv or "--supervisor" in sys.argv
 # 版本戳：若界面/日志看不到此字符串，说明仍在跑旧进程，必须 kill 后重启
-CODE_VERSION = "2026-09-14-gemini-native-flash-once-v3"
+CODE_VERSION = "2026-09-14-ultra-salvage-parse-v4"
 
 # ===============================
 # 基础配置与日志
@@ -632,80 +632,138 @@ def _gemini_try_close_truncated(candidate: str) -> str:
     return candidate + ("}" * min(opens, 8))
 
 
-def _gemini_regex_salvage_scores(text: str) -> Dict[str, Any]:
-    """当完整 JSON 解析失败时，用正则从原文中抢救 scores / predicted_pos / is_dual_category。
-    仅用于 Gemini，保证批量任务不因本地解析反复重试而浪费 token。
+def _truthy_token(s: str) -> bool:
+    """把各种『符合/不符合』写法统一成 bool。"""
+    t = (s or "").strip().lower()
+    if t in ("true", "yes", "y", "1", "是", "对", "符合", "√", "✓", "match", "positive"):
+        return True
+    if t in ("false", "no", "n", "0", "否", "不", "不符合", "×", "✗", "x", "mismatch", "negative"):
+        return False
+    # 兜底：含“符合”且不含“不”视为 true
+    if "不符合" in t or "不能" in t:
+        return False
+    if "符合" in t or "可以" in t:
+        return True
+    return False
+
+
+def _ultra_salvage_from_any_text(text: str) -> Dict[str, Any]:
+    """极宽松抢救：不管模型输出多乱，只要能抠出规则 true/false 或词类判断就返回。
+    目标：能解析出来就算成功，避免因格式问题判失败。
     """
-    if not text:
+    if not text or not str(text).strip():
         return None
+
+    raw = str(text)
     result = {
-        "explanation": "（本地从原文抢救解析，完整 JSON 未能直接 loads）",
+        "explanation": "（极宽松本地抢救解析）",
         "predicted_pos": "未知",
         "is_dual_category": False,
         "scores": {"名词": {}, "动词": {}, "名动词": {}},
     }
+    found_any = False
 
+    # ---- predicted_pos：多种中英文写法 ----
+    pos_patterns = [
+        r'["\']?predicted_pos["\']?\s*[:=]\s*["\']?\s*(名动词|名词|动词)',
+        r'预测词类\s*[：:=]\s*(名动词|名词|动词)',
+        r'最可能的?词类(?:是|为)?\s*[：:=]?\s*(名动词|名词|动词)',
+        r'(?:属于|判定为|归为)\s*(名动词|名词|动词)',
+        r'\b(名动词|名词|动词)\b\s*(?:隶属度最高|得分最高|最典型)',
+    ]
+    for pat in pos_patterns:
+        m = re.search(pat, raw, re.IGNORECASE)
+        if m:
+            result["predicted_pos"] = m.group(1)
+            found_any = True
+            break
+
+    # ---- is_dual_category ----
     m = re.search(
-        r'["\']?predicted_pos["\']?\s*[:=]\s*["\']([^"\']+)["\']',
-        text, re.IGNORECASE
+        r'["\']?is_dual_category["\']?\s*[:=]\s*(true|false|True|False|是|否)|'
+        r'(?:是否)?兼类\s*[：:=]?\s*(是|否|true|false)',
+        raw, re.IGNORECASE
     )
     if m:
-        result["predicted_pos"] = m.group(1).strip()
-
-    m = re.search(
-        r'["\']?is_dual_category["\']?\s*[:=]\s*(true|false|True|False|是|否)',
-        text, re.IGNORECASE
-    )
-    if m:
-        val = m.group(1).strip().lower()
+        val = (m.group(1) or m.group(2) or "").strip().lower()
         result["is_dual_category"] = val in ("true", "是")
+        found_any = True
 
+    # ---- 规则分：兼容 N1 / N1_xxx / "N1_可受..." : true / 符合 ----
+    # 1) 标准 key: value
     rule_pat = re.compile(
-        r'["\']?\s*((?:NV|N|V)\d+[_\u4e00-\u9fa5A-Za-z0-9]*)\s*["\']?\s*[:=]\s*'
-        r'(true|false|True|False|是|否|yes|no|符合|不符合)',
+        r'["\']?\s*((?:NV|N|V)\s*\d+[_\-\u4e00-\u9fa5A-Za-z0-9]*)\s*["\']?\s*[:=：]\s*'
+        r'(true|false|True|False|是|否|yes|no|符合|不符合|√|×|✓|✗|1|0)',
         re.IGNORECASE
     )
-    pos_blocks = {
-        "名词": re.search(r'["\']?名词["\']?\s*[:=]\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}', text, re.DOTALL),
-        "动词": re.search(r'["\']?动词["\']?\s*[:=]\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}', text, re.DOTALL),
-        "名动词": re.search(r'["\']?名动词["\']?\s*[:=]\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}', text, re.DOTALL),
-    }
-    found_any = False
-    for pos, block_m in pos_blocks.items():
-        block_text = block_m.group(1) if block_m else text
-        for rm in rule_pat.finditer(block_text):
-            key = rm.group(1).strip()
-            raw_v = rm.group(2).strip().lower()
-            is_match = raw_v in ("true", "是", "yes", "符合")
+    # 2) 叙述式：N1 ... 符合/不符合
+    narrative_pat = re.compile(
+        r'((?:NV|N|V)\s*\d+)\s*[^。；;\n]{0,40}?(符合|不符合|可以|不能|是|否)',
+        re.IGNORECASE
+    )
+
+    def _bucket(key: str) -> str:
+        k = re.sub(r'\s+', '', key).upper()
+        if k.startswith("NV"):
+            return "名动词"
+        if k.startswith("N"):
+            return "名词"
+        if k.startswith("V"):
+            return "动词"
+        return "名词"
+
+    for rm in rule_pat.finditer(raw):
+        key = re.sub(r'\s+', '', rm.group(1).strip())
+        is_match = _truthy_token(rm.group(2))
+        result["scores"][_bucket(key)][key] = is_match
+        found_any = True
+
+    if not any(result["scores"][p] for p in result["scores"]):
+        for rm in narrative_pat.finditer(raw):
+            key = re.sub(r'\s+', '', rm.group(1).strip())
+            is_match = _truthy_token(rm.group(2))
+            result["scores"][_bucket(key)][key] = is_match
+            found_any = True
+
+    # ---- 按词类块再扫一遍（嵌套更深时）----
+    for pos in ("名词", "动词", "名动词"):
+        block_m = re.search(
+            rf'["\']?{pos}["\']?\s*[:=：]\s*\{{(.*?)\}}',
+            raw, re.DOTALL
+        )
+        if not block_m:
+            continue
+        block = block_m.group(1)
+        for rm in rule_pat.finditer(block):
+            key = re.sub(r'\s+', '', rm.group(1).strip())
+            is_match = _truthy_token(rm.group(2))
             result["scores"][pos][key] = is_match
             found_any = True
 
-    if not found_any:
-        for rm in rule_pat.finditer(text):
-            key = rm.group(1).strip()
-            raw_v = rm.group(2).strip().lower()
-            is_match = raw_v in ("true", "是", "yes", "符合")
-            if key.upper().startswith("NV"):
-                result["scores"]["名动词"][key] = is_match
-            elif key.upper().startswith("N"):
-                result["scores"]["名词"][key] = is_match
-            elif key.upper().startswith("V"):
-                result["scores"]["动词"][key] = is_match
-            found_any = True
-
-    if not found_any and result["predicted_pos"] == "未知":
+    # 若完全抠不到任何信号，返回 None
+    has_scores = any(result["scores"][p] for p in result["scores"])
+    if not has_scores and result["predicted_pos"] == "未知":
         return None
+
+    # 没有 predicted_pos 时，用得分条目数粗略推断
+    if result["predicted_pos"] == "未知" and has_scores:
+        counts = {p: sum(1 for v in result["scores"][p].values() if v) for p in result["scores"]}
+        best = max(counts, key=lambda k: counts[k])
+        if counts[best] > 0:
+            result["predicted_pos"] = best
+
     return result
 
 
 def extract_gemini_json(text: str) -> Tuple[Dict[str, Any], str]:
-    """Gemini 专用解析器（仅影响 Gemini 路径）。
-    目标：本地一次尽可能解析成功，避免 Worker 因 JSON 解析失败反复重试、浪费 token。
-    策略：
+    """极宽松解析器：无论模型输出多乱，尽可能抠出可用结果。
+    策略顺序：
       1. 清理 Markdown / 不可见字符
-      2. 优先解析含 scores / predicted_pos 的完整对象
-      3. 对截断对象尝试补全右括号后再解析
-      4. 仍失败则用正则从原文抢救 scores 等字段
+      2. 标准 JSON loads
+      3. 截断补全后再 loads
+      4. 从文本任意位置找 JSON 对象
+      5. 极宽松正则抢救规则 true/false、词类、兼类
+    只要第 5 步能抠到一点信号就视为成功。
     """
     if not text:
         return None, text
@@ -714,35 +772,33 @@ def extract_gemini_json(text: str) -> Tuple[Dict[str, Any], str]:
 
     # 1) 整段尝试
     obj = _parse_json_object_candidate(cleaned)
-    if isinstance(obj, dict) and ("scores" in obj or "predicted_pos" in obj):
+    if isinstance(obj, dict) and ("scores" in obj or "predicted_pos" in obj or "is_dual_category" in obj):
         return obj, cleaned
 
-    # 2) 优先 schema 相关对象
+    # 2) 优先 schema 相关对象 + 截断补全
     for candidate in _gemini_prefer_schema_objects(cleaned):
-        obj = _parse_json_object_candidate(candidate)
-        if isinstance(obj, dict) and ("scores" in obj or "predicted_pos" in obj or "is_dual_category" in obj):
-            return obj, candidate
-        closed = _gemini_try_close_truncated(candidate)
-        if closed != candidate:
-            obj = _parse_json_object_candidate(closed)
-            if isinstance(obj, dict) and ("scores" in obj or "predicted_pos" in obj):
-                return obj, closed
+        for cand in (candidate, _gemini_try_close_truncated(candidate)):
+            obj = _parse_json_object_candidate(cand)
+            if isinstance(obj, dict) and ("scores" in obj or "predicted_pos" in obj or "is_dual_category" in obj):
+                return obj, cand
 
-    # 3) 通用 balanced 再试一遍
+    # 3) 任意 balanced 对象
     for candidate in _iter_balanced_json_objects(cleaned):
-        obj = _parse_json_object_candidate(candidate)
-        if isinstance(obj, dict):
-            return obj, candidate
-        closed = _gemini_try_close_truncated(candidate)
-        if closed != candidate:
-            obj = _parse_json_object_candidate(closed)
+        for cand in (candidate, _gemini_try_close_truncated(candidate)):
+            obj = _parse_json_object_candidate(cand)
             if isinstance(obj, dict):
-                return obj, closed
+                # 即使没有 scores 字段，只要有嵌套 dict 也先返回，后面 ask_model 会映射
+                return obj, cand
 
-    # 4) 正则抢救：只要能拿到部分 scores 就返回，保证 Worker 不重试
-    salvaged = _gemini_regex_salvage_scores(cleaned)
+    # 4) 把全文当“半结构化文本”极宽松抢救
+    salvaged = _ultra_salvage_from_any_text(cleaned)
     if salvaged is not None:
         return salvaged, cleaned
+
+    # 5) 对原始未清理文本再抢救一次（防止清理误伤）
+    salvaged = _ultra_salvage_from_any_text(text)
+    if salvaged is not None:
+        return salvaged, text
 
     return None, text
 
@@ -1108,27 +1164,31 @@ explanation(一句话)、predicted_pos、is_dual_category、scores。
         except Exception:
             pass
 
-    # Gemini 单独使用专用解析器；其他模型保持原有解析流程。
+    # 解析策略：标准 JSON → 极宽松抢救（适用于任何乱七八糟输出）
     if provider == "gemini":
         parsed_json, _ = extract_gemini_json(raw_text)
         if parsed_json is None:
-            # 再走一次通用解析器作为兜底
             parsed_json, _ = extract_json_from_text(raw_text)
     else:
         parsed_json, _ = extract_json_from_text(raw_text)
-    
+        if parsed_json is None:
+            # 其它模型也允许极宽松抢救，能抠出来就算成功
+            parsed_json, _ = extract_gemini_json(raw_text)
+
     if parsed_json and isinstance(parsed_json, dict):
         explanation = parsed_json.get("explanation", "无推理过程。")
         predicted_pos = parsed_json.get("predicted_pos", "未知")
         is_dual_category = parsed_json.get("is_dual_category", False)
         raw_scores = parsed_json.get("scores", {})
+        # scores 可能是 list 等异常结构，尽量拉平
+        if not isinstance(raw_scores, dict):
+            salv = _ultra_salvage_from_any_text(raw_text or "")
+            raw_scores = (salv or {}).get("scores", {}) if salv else {}
     else:
         if show_ui: st.error("未能解析有效的 JSON。")
-        # Gemini：返回空规则分数字典（非 {}），让 Worker 写入本行并前进，避免无限重试烧 token
-        if provider == "gemini":
-            empty_scores = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
-            return empty_scores, raw_text or "", "解析失败", "JSON 解析失败", False
-        return {}, raw_text, "未知", "JSON 解析失败", False
+        # 返回占位 scores（非空 dict），Worker 写盘前进，不重试
+        empty_scores = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
+        return empty_scores, raw_text or "", "解析失败", "JSON 解析失败", False
 
     scores_out = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
     for pos, rules in RULE_SETS.items():
