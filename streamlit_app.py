@@ -446,69 +446,83 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
     except Exception:
         return ""
 
-def _extract_gemini_json(text: str):
-    """
-    Gemini 专用 JSON 提取器。
-    仅用于 Gemini，不改变其他模型的 JSON 解析行为。
-    """
-    if not text or not isinstance(text, str):
+def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
+    if not text:
         return None, text
 
-    cleaned = text.strip()
-    cleaned = re.sub(r"^\s*```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s*```\s*$", "", cleaned).strip()
+    # 通用解析器：保留原逻辑的兼容性，同时增加更稳健的 raw_decode 扫描。
+    # 其他模型仍可继续使用此函数，不改变其 API 调用方式。
+    text = str(text).replace("\ufeff", "").replace("\u200b", "").strip()
+
+    # 1. 优先提取 Markdown JSON 代码块
+    code_block_match = re.search(r"```\s*(?:json|JSON)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if code_block_match:
+        candidate = code_block_match.group(1).strip()
+        try:
+            return json.loads(candidate, strict=False), candidate
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # 2. 使用 JSONDecoder.raw_decode 从每一个 { 开始尝试。
+    #    相比 find('{') + rfind('}')，不会因为前后存在说明文字而误截取。
+    decoder = json.JSONDecoder(strict=False)
+    for i, ch in enumerate(text):
+        if ch != '{':
+            continue
+        try:
+            obj, end = decoder.raw_decode(text[i:])
+            if isinstance(obj, dict):
+                candidate = text[i:i + end]
+                return obj, candidate
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+
+    # 3. 最后保留旧版兜底策略
+    first_bracket = text.find('{')
+    last_bracket = text.rfind('}')
+    if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
+        candidate = text[first_bracket:last_bracket + 1]
+        try:
+            return json.loads(candidate, strict=False), candidate
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    return None, text
+
+
+def extract_gemini_json(text: str) -> Tuple[Dict[str, Any], str]:
+    """Gemini 专用 JSON 解析器：处理代码围栏、前后说明、BOM/零宽字符等。"""
+    if not text:
+        return None, text
+
+    cleaned = str(text)
+    cleaned = cleaned.replace("\ufeff", "").replace("\u200b", "").strip()
+
+    # Gemini 在没有结构化输出时，偶尔会返回 ```json ... ```。
+    # 先去掉代码围栏，再做标准 JSON 解析。
+    cleaned = re.sub(r"^\s*```(?:json|JSON)?\s*", "", cleaned)
+    cleaned = re.sub(r"\s*```\s*$", "", cleaned)
+    cleaned = cleaned.strip()
 
     try:
         obj = json.loads(cleaned, strict=False)
         if isinstance(obj, dict):
             return obj, cleaned
-    except Exception:
+    except (json.JSONDecodeError, TypeError, ValueError):
         pass
 
+    # 从任意位置寻找一个完整 JSON 对象。
     decoder = json.JSONDecoder(strict=False)
-    for match in re.finditer(r"\{", cleaned):
-        start = match.start()
-        try:
-            obj, end = decoder.raw_decode(cleaned[start:])
-            if isinstance(obj, dict):
-                if "scores" in obj or "predicted_pos" in obj or "is_dual_category" in obj:
-                    return obj, cleaned[start:start + end]
-        except Exception:
+    for i, ch in enumerate(cleaned):
+        if ch != '{':
             continue
-
-    return None, text
-
-
-def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
-    if not text: 
-        return None, text
-
-    # 1. 优先提取 ```json ... ``` 代码块中的内容（改为贪婪匹配抓取最外层 JSON）
-    code_block_match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
-    if code_block_match:
         try:
-            # strict=False 关键参数：允许字符串中存在未转义的控制字符（如多行换行）
-            return json.loads(code_block_match.group(1), strict=False), code_block_match.group(1)
-        except json.JSONDecodeError:
-            pass
-
-    # 2. 抓取文本中最外层的 { 到 } 完整区间
-    first_bracket = text.find('{')
-    last_bracket = text.rfind('}')
-    if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
-        candidate = text[first_bracket:last_bracket+1]
-        try:
-            return json.loads(candidate, strict=False), candidate
-        except json.JSONDecodeError:
-            pass
-
-    # 3. 兜底正则匹配
-    match = re.search(r"(\{.*\})", text.strip(), re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(1), strict=False), match.group(1)
-        except json.JSONDecodeError:
-            pass
+            obj, end = decoder.raw_decode(cleaned[i:])
+            if isinstance(obj, dict):
+                candidate = cleaned[i:i + end]
+                return obj, candidate
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
 
     return None, text
 def normalize_key(k: str, pos_rules: list) -> str:
@@ -591,16 +605,15 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
             payload["reasoning_effort"] = reasoning_effort
         payload["max_tokens"] = max_tokens
     elif provider == "gemini":
-        # ==================== Gemini 专用配置 ====================
-        # Gemini 3.x 是推理模型。输出预算太小时可能在完成可见文本前
-        # 就以 finish_reason=length 结束，因此只对 Gemini 提高预算。
+        # ===== Gemini 专用配置 =====
+        # Gemini 3.x 使用 OpenAI-compatible Chat Completions。
+        # 这里仅修改 Gemini，不影响 DeepSeek / Kimi / Qwen / xAI。
         payload.pop("temperature", None)
         payload["max_tokens"] = max(max_tokens, 4096)
-
-        # Gemini OpenAI-compatible 接口支持 reasoning_effort。
+        # Gemini 3.8 Flash 支持 reasoning_effort=low；降低无意义的思考开销，
+        # 给最终 JSON 留出足够输出空间。
         payload["reasoning_effort"] = "low"
-
-        # 仅 Gemini 开启 JSON object 输出，降低 Markdown/前缀导致的解析失败概率。
+        # 关键：让 Gemini 直接返回合法 JSON，而不是 Markdown + JSON。
         payload["response_format"] = {"type": "json_object"}
     else:
         payload["max_tokens"] = max_tokens
@@ -768,10 +781,12 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         return {}, f"调用失败: {err_msg}", "未知", f"失败: {err_msg}", False
 
     raw_text = extract_text_from_response(resp_json)
-
-    # Gemini 使用专用 JSON 提取器；其他模型完全保持原有解析逻辑。
+    # Gemini 单独使用专用解析器；其他模型保持原有解析流程。
     if provider == "gemini":
-        parsed_json, _ = _extract_gemini_json(raw_text)
+        parsed_json, _ = extract_gemini_json(raw_text)
+        if parsed_json is None:
+            # 再走一次通用解析器作为兜底
+            parsed_json, _ = extract_json_from_text(raw_text)
     else:
         parsed_json, _ = extract_json_from_text(raw_text)
     
@@ -781,11 +796,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         is_dual_category = parsed_json.get("is_dual_category", False)
         raw_scores = parsed_json.get("scores", {})
     else:
-        if show_ui:
-            if provider == "gemini":
-                st.error("Gemini 已返回内容，但未能解析为有效 JSON。请展开“模型原始响应”查看返回内容。")
-            else:
-                st.error("未能解析有效的 JSON。")
+        if show_ui: st.error("未能解析有效的 JSON。")
         return {}, raw_text, "未知", "JSON 解析失败", False
 
     scores_out = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
@@ -1266,16 +1277,12 @@ def main():
             st.write("")
             if st.button("测试模型链接", type="secondary", use_container_width=True, disabled=not selected_model_info["api_key"]):
                 with st.spinner("正在测试连接..."):
-                    # 仅 Gemini 使用更充足的输出预算；其他模型保持原来的 10。
-                    if selected_model_info.get("provider") == "gemini":
-                        test_prompt = "请只输出字符串 pong，不要输出任何其他内容。"
-                        test_max_tokens = 4096
-                    else:
-                        test_prompt = "请回复'pong'"
-                        test_max_tokens = 10
-
+                    # 仅 Gemini 使用更大的测试预算；其他模型保持原来的测试参数。
+                    test_provider = selected_model_info["provider"]
+                    test_max_tokens = 4096 if test_provider == "gemini" else 100
+                    test_prompt = "请只输出 pong，不要输出 Markdown、代码块或其他文字。" if test_provider == "gemini" else "请回复'pong'"
                     ok, _, err_msg = call_llm_api_cached(
-                        selected_model_info["provider"],
+                        test_provider,
                         selected_model_info["model"],
                         selected_model_info["api_key"],
                         [{"role": "user", "content": test_prompt}],
