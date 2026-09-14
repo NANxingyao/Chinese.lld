@@ -447,30 +447,37 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
         return ""
 
 def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
-    if not text: return None, text
-    code_block_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if code_block_match:
-        try: return json.loads(code_block_match.group(1)), code_block_match.group(1)
-        except json.JSONDecodeError: pass
+    if not text: 
+        return None, text
 
+    # 1. 优先提取 ```json ... ``` 代码块中的内容（改为贪婪匹配抓取最外层 JSON）
+    code_block_match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
+    if code_block_match:
+        try:
+            # strict=False 关键参数：允许字符串中存在未转义的控制字符（如多行换行）
+            return json.loads(code_block_match.group(1), strict=False), code_block_match.group(1)
+        except json.JSONDecodeError:
+            pass
+
+    # 2. 抓取文本中最外层的 { 到 } 完整区间
+    first_bracket = text.find('{')
     last_bracket = text.rfind('}')
-    if last_bracket != -1:
-        first_bracket = text.rfind('{', 0, last_bracket)
-        while first_bracket != -1:
-            candidate = text[first_bracket:last_bracket+1]
-            try:
-                parsed = json.loads(candidate)
-                if isinstance(parsed, dict) and ("scores" in parsed or "predicted_pos" in parsed):
-                    return parsed, candidate
-            except json.JSONDecodeError: pass
-            first_bracket = text.rfind('{', 0, first_bracket)
-            
+    if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
+        candidate = text[first_bracket:last_bracket+1]
+        try:
+            return json.loads(candidate, strict=False), candidate
+        except json.JSONDecodeError:
+            pass
+
+    # 3. 兜底正则匹配
     match = re.search(r"(\{.*\})", text.strip(), re.DOTALL)
     if match:
-        try: return json.loads(match.group(1)), match.group(1)
-        except json.JSONDecodeError: pass
-    return None, text
+        try:
+            return json.loads(match.group(1), strict=False), match.group(1)
+        except json.JSONDecodeError:
+            pass
 
+    return None, text
 def normalize_key(k: str, pos_rules: list) -> str:
     if not isinstance(k, str): return None
     k_clean = re.sub(r'[\s_]+', '', k).upper()
@@ -696,19 +703,23 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
 def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str, show_ui=True) -> Tuple[Dict[str, Dict[str, int]], str, str, str, bool]:
     if not word: return {}, "", "未知", "", False
     full_rules = {pos: "\n".join([f"- {r['name']}: {r['desc']}（符合: {r['match_score']} 分，不符合: {r['mismatch_score']} 分）" for r in rules]) for pos, rules in RULE_SETS.items()}
+    
     system_msg = f"""你是一名中文词法与语法方面的专家。现在要分析词语「{word}」在下列词类中的表现：
 - 需要判断的词类：名词、动词、名动词
 - 你只需要判断每一条规则是"符合"还是"不符合"，在 JSON 中的 scores 里给出 true / false，程序自动赋值。
 【名词】\n{full_rules["名词"]}\n【动词】\n{full_rules["动词"]}\n【名动词】\n{full_rules["名动词"]}
 输出要求：
-1. explanation: 逐条规则说明判断依据并举例。
+1. explanation: 逐条规则说明判断依据并举例（写在 JSON 的 explanation 字段中）。
 2. scores: 各规则对应 true/false。
 3. predicted_pos: 选择最典型词类。
 4. is_dual_category: 是否属于兼类（true/false）。
-严格返回一段合法JSON，不要带多余字符。格式：
+
+严格直接返回一段合法 JSON，不要输出任何 Markdown 外层文本或开场白。格式：
 {{"explanation": "...", "predicted_pos": "...", "is_dual_category": true, "scores": {{"名词": {{...}}, "动词": {{...}}, "名动词": {{...}}}}}}"""
     
-    user_prompt = f"请严格按照上述要求分析词语「{word}」。先进行详细推理过程，最后输出 JSON。"
+    # 消除与 system_msg 的逻辑冲突
+    user_prompt = f"请严格按照上述要求分析词语「{word}」，并将推理过程写入 JSON 的 explanation 字段中。直接输出合法 JSON。"
+    
     with st.spinner(f"正在调用大模型 ({model}) 进行分析...") if show_ui else __import__("contextlib").nullcontext():
         ok, resp_json, err_msg = call_llm_api_cached(provider, model, api_key, [{"role": "system", "content": system_msg}, {"role": "user", "content": user_prompt}], show_ui=show_ui)
         
