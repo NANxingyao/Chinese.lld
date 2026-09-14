@@ -15,7 +15,7 @@ from pathlib import Path
 
 SERVICE_MODE = "--worker" in sys.argv or "--supervisor" in sys.argv
 # 版本戳：若界面/日志看不到此字符串，说明仍在跑旧进程，必须 kill 后重启
-CODE_VERSION = "2026-09-14-cohere-v2-native"
+CODE_VERSION = "2026-09-14-cohere-v3-numeric-score"
 
 # Gemini 原生 responseSchema：把输出格式锁死为固定 JSON（短规则码 + boolean）
 # normalize_key 可将 N1/V1/NV1 映射回完整规则名
@@ -232,13 +232,12 @@ RULE_SETS = {
 }
 
 def get_api_key(env_var: str):
-    """优先读取环境变量；若部署在 Streamlit Cloud，则回退到 st.secrets。"""
+    """优先读取环境变量；Streamlit Cloud 则回退到 st.secrets。"""
     value = os.getenv(env_var)
     if value:
         return value
     try:
-        value = st.secrets.get(env_var)
-        return value
+        return st.secrets.get(env_var)
     except Exception:
         return None
 
@@ -247,48 +246,48 @@ MODEL_OPTIONS = {
     # ===================== 国内模型（保留原有） =====================
     "DeepSeek Chat": {
         "provider": "deepseek", "model": "deepseek-chat",
-        "api_key": get_api_key("DEEPSEEK_API_KEY"), "env_var": "DEEPSEEK_API_KEY"
+        "api_key": get_api_key("\1"), "env_var": "DEEPSEEK_API_KEY"
     },
     "Moonshot（Kimi）": {
         "provider": "moonshot", "model": "kimi-k2.6",
-        "api_key": get_api_key("MOONSHOT_API_KEY"), "env_var": "MOONSHOT_API_KEY"
+        "api_key": get_api_key("\1"), "env_var": "MOONSHOT_API_KEY"
     },
     "Qwen（通义千问）": {
         "provider": "qwen", "model": "qwen-max",
-        "api_key": get_api_key("QWEN_API_KEY"), "env_var": "QWEN_API_KEY"
+        "api_key": get_api_key("\1"), "env_var": "QWEN_API_KEY"
     },
 
     # ===================== 国外模型：OpenAI =====================
     "ChatGPT（GPT-5.6 Luna）": {
         "provider": "openai", "model": "gpt-5.6-luna",
-        "api_key": get_api_key("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"
+        "api_key": get_api_key("\1"), "env_var": "OPENAI_API_KEY"
     },
     "ChatGPT（GPT-5.6 Terra）": {
         "provider": "openai", "model": "gpt-5.6-terra",
-        "api_key": get_api_key("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"
+        "api_key": get_api_key("\1"), "env_var": "OPENAI_API_KEY"
     },
     "ChatGPT（GPT-5.6 Sol）": {
         "provider": "openai", "model": "gpt-5.6-sol",
-        "api_key": get_api_key("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"
+        "api_key": get_api_key("\1"), "env_var": "OPENAI_API_KEY"
     },
 
     # ===================== 国外模型：Google Gemini =====================
     "Google Gemini 3.8 Flash": {
         "provider": "gemini", "model": "gemini-3.8-flash",
-        "api_key": get_api_key("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
+        "api_key": get_api_key("\1"), "env_var": "GEMINI_API_KEY"
     },
     "Google Gemini 3.1 Pro Preview": {
         "provider": "gemini", "model": "gemini-3.1-pro-preview",
-        "api_key": get_api_key("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
+        "api_key": get_api_key("\1"), "env_var": "GEMINI_API_KEY"
     },
 
     # ===================== 国外模型：xAI Grok =====================
     "xAI Grok 4.6": {
         "provider": "xai", "model": "grok-4.6",
-        "api_key": get_api_key("XAI_API_KEY"), "env_var": "XAI_API_KEY"
+        "api_key": get_api_key("\1"), "env_var": "XAI_API_KEY"
     },
 
-    # ===================== 国外模型：Cohere（原生 V2 Chat） =====================
+    # ===================== 国外模型：Cohere =====================
     "Cohere Command A": {
         "provider": "cohere",
         "model": "command-a-03-2025",
@@ -907,18 +906,20 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
         return url, headers, payload, "gemini_native"
 
     # ===== OpenAI 兼容接口（DeepSeek / Moonshot / Qwen / xAI）=====
-    # Cohere 不再走这里，而是单独使用原生 V2 Chat API。
+    # Cohere 使用原生 V2 Chat API，不走 /compatibility/v1/chat/completions。
     if provider == "cohere":
         url = os.getenv("COHERE_BASE_URL", "https://api.cohere.com").rstrip("/") + "/v2/chat"
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
+
+        # Cohere 专门要求数值分数，避免仅返回 boolean 后再由模型解释导致量化歧义。
         payload = {
             "model": model,
             "messages": messages,
             "temperature": 0.0,
-            "max_tokens": min(max_tokens, 8000),
+            "max_tokens": max(4096, max_tokens),
         }
         return url, headers, payload, "cohere_v2"
 
@@ -952,7 +953,7 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
 
 
 def _extract_cohere_v2_text(body: Dict[str, Any]) -> str:
-    """提取 Cohere /v2/chat 的 message.content 文本。"""
+    """提取 Cohere V2 /chat 返回的 message.content 文本。"""
     if not isinstance(body, dict):
         return ""
     message = body.get("message") or {}
@@ -963,9 +964,9 @@ def _extract_cohere_v2_text(body: Dict[str, Any]) -> str:
         parts = []
         for part in content:
             if isinstance(part, dict):
-                text = part.get("text")
-                if isinstance(text, str) and text.strip():
-                    parts.append(text)
+                t = part.get("text")
+                if isinstance(t, str) and t.strip():
+                    parts.append(t)
             elif isinstance(part, str) and part.strip():
                 parts.append(part)
         return "".join(parts)
@@ -1067,40 +1068,47 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
                     return True, {"choices": [{"message": {"content": text}}], "_raw_responses": body}, ""
                 error_msg = "OpenAI Responses API 未返回有效文本"
             elif api_style == "cohere_v2":
-                # Cohere 原生 V2 Chat：非 OpenAI-compatible 返回结构
-                response = requests.post(url, headers=headers, json=payload, timeout=180)
+                response = requests.post(
+                    url, headers=headers, json=payload, timeout=180
+                )
+
                 if response.status_code != 200:
                     try:
                         detail = response.json()
                     except Exception:
                         detail = response.text
+
                     if response.status_code == 404:
-                        error_msg = f"Cohere 路径错误 (404)。当前请求地址：{url}"
+                        error_msg = f"Cohere 路径错误 (404)：{url}"
                     elif response.status_code == 401:
-                        error_msg = "Cohere 鉴权失败 (401)。请检查 COHERE_API_KEY。"
-                    elif response.status_code in [400, 403, 429]:
+                        error_msg = "Cohere 鉴权失败 (401)：请检查 COHERE_API_KEY。"
+                    elif response.status_code == 429:
+                        error_msg = f"Cohere 限流 (429)：{detail}"
+                    elif response.status_code in {400, 403}:
                         error_msg = f"Cohere 请求错误 ({response.status_code})：{detail}"
                     else:
-                        error_msg = f"Cohere API 错误: {response.status_code} - {detail}"
-                    if response.status_code in [400, 401, 403]:
+                        error_msg = f"Cohere API 错误 ({response.status_code})：{detail}"
+
+                    # 这些错误重试没有意义
+                    if response.status_code in {400, 401, 403, 404}:
                         break
                     response.raise_for_status()
 
                 body = response.json()
-                logger.info("Cohere V2 响应摘要：%s", json.dumps(body, ensure_ascii=False)[:2000])
-                text = _extract_cohere_v2_text(body)
+                logger.info(
+                    "Cohere V2 响应摘要：%s",
+                    json.dumps(body, ensure_ascii=False)[:3000]
+                )
 
-                if text:
+                text_out = _extract_cohere_v2_text(body)
+                if text_out:
                     if streaming_placeholder is not None:
                         streaming_placeholder.empty()
-                    # 归一化成内部统一结构，后续解析逻辑无需改动
+
+                    # 统一成内部 OpenAI-like 结构，后面的 JSON 解析无需重新设计
                     normalized = {
                         "choices": [
-                            {
-                                "message": {
-                                    "content": text
-                                }
-                            }
+                            {"message": {"content": text_out}}
                         ],
                         "_raw_cohere": body,
                     }
@@ -1108,11 +1116,9 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
 
                 error_msg = (
                     "Cohere V2 未返回有效文本。响应摘要："
-                    + json.dumps(body, ensure_ascii=False)[:1200]
+                    + json.dumps(body, ensure_ascii=False)[:1500]
                 )
 
-            else:
-                is_stream = bool(payload.get("stream", False))
                 with requests.post(url, headers=headers, json=payload, stream=is_stream, timeout=180) as response:
                     if response.status_code != 200:
                         try:
@@ -1213,11 +1219,59 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 - scores.名动词: 必须包含 NV1 到 NV10 全部键，值为 boolean
 不要输出 schema 以外的字段，不要 Markdown。"""
         user_prompt = f"分析词语「{word}」，按 schema 填写全部规则的 true/false。"
+    elif provider == "cohere":
+        # Cohere：直接输出规则的数值分数，避免出现「true/false 能解析，但原始结果没有具体分数」的问题。
+        allowed_scores = {
+            "名词": {r["name"]: [r["match_score"], r["mismatch_score"]] for r in RULE_SETS["名词"]},
+            "动词": {r["name"]: [r["match_score"], r["mismatch_score"]] for r in RULE_SETS["动词"]},
+            "名动词": {r["name"]: [r["match_score"], r["mismatch_score"]] for r in RULE_SETS["名动词"]},
+        }
+        system_msg = f"""你是一名中文词法与语法专家。请严格按照给出的规则分析词语「{word}」。
+
+【重要：这是量化实验】
+1. 每条规则必须判断“符合”或“不符合”，并把 scores 中对应的值直接写成该规则规定的【数值分数】。
+2. 绝对不要使用 true/false 作为 scores 的值。
+3. 分数只能从该规则给出的两个数值中选择，禁止自行发明其他分数。
+4. 必须完整输出全部 27 条规则：名词 N1-N8、动词 V1-V9、名动词 NV1-NV10。
+5. predicted_pos 只能是“名词”“动词”“名动词”之一。
+6. is_dual_category 只能是 true 或 false；不要因为“能兼有某些属性”就随意判为 true，应综合三组规则表现后再判断。
+7. explanation 要逐条给出判断依据和例句，但只能放在 explanation 字段中。
+8. 只返回一个合法 JSON 对象，不要 Markdown、代码块、前言或结语。
+
+【各规则允许的分值】
+{json.dumps(allowed_scores, ensure_ascii=False, indent=2)}
+
+【输出格式】
+{{
+  "explanation": "逐条规则说明判断依据并举例",
+  "predicted_pos": "动词",
+  "is_dual_category": false,
+  "scores": {{
+    "名词": {{
+      "N1_可受数量词修饰": 10,
+      "N2_不能受副词修饰": -20
+    }},
+    "动词": {{
+      "V1_可受否定'不/没有'修饰": 10
+    }},
+    "名动词": {{
+      "NV1_可被\"不/没有\"否定且肯定形式-1": 10
+    }}
+  }}
+}}
+
+注意：上面的示例只展示格式，不代表「{word}」的真实答案。现在请对「{word}」逐条判断并输出完整结果。"""
+        user_prompt = f"请分析词语「{word}」，严格按照规则允许的数值分数返回完整 JSON。"
     else:
         system_msg = f"""你是一名中文词法与语法方面的专家。现在要分析词语「{word}」在下列词类中的表现：
 - 需要判断的词类：名词、动词、名动词
 - 你只需要判断每一条规则是"符合"还是"不符合"，在 JSON 中的 scores 里给出 true / false，程序自动赋值。
-【名词】\n{full_rules["名词"]}\n【动词】\n{full_rules["动词"]}\n【名动词】\n{full_rules["名动词"]}
+【名词】
+{full_rules["名词"]}
+【动词】
+{full_rules["动词"]}
+【名动词】
+{full_rules["名动词"]}
 输出要求：
 1. explanation: 逐条规则说明判断依据并举例（写在 JSON 的 explanation 字段中）。
 2. scores: 各规则对应 true/false。
@@ -1278,14 +1332,68 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         empty_scores = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
         return empty_scores, raw_text or "", "解析失败", "JSON 解析失败", False
 
-    scores_out = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
+    # 严格把模型输出映射成实验定义的数值分数。
+    # Cohere 要求直接给数值；如果缺失规则，不再把“未知”静默当作 0。
+    scores_out = {}
+    missing_rules = []
+    invalid_rules = []
+
     for pos, rules in RULE_SETS.items():
-        if pos in raw_scores and isinstance(raw_scores[pos], dict):
-            for k, v in raw_scores[pos].items():
-                norm_k = normalize_key(k, rules)
-                if norm_k:
-                    rule_def = next(r for r in rules if r["name"] == norm_k)
-                    scores_out[pos][norm_k] = map_to_allowed_score(rule_def, v)
+        scores_out[pos] = {}
+        raw_pos_scores = raw_scores.get(pos, {}) if isinstance(raw_scores, dict) else {}
+
+        if not isinstance(raw_pos_scores, dict):
+            raw_pos_scores = {}
+
+        for rule_def in rules:
+            rule_name = rule_def["name"]
+            norm_value = None
+
+            # 精确规则名
+            if rule_name in raw_pos_scores:
+                norm_value = raw_pos_scores[rule_name]
+            else:
+                # 再尝试通过 N1/V1/NV1 代码归一化
+                for raw_key, raw_value in raw_pos_scores.items():
+                    if normalize_key(raw_key, rules) == rule_name:
+                        norm_value = raw_value
+                        break
+
+            if norm_value is None:
+                missing_rules.append(rule_name)
+                continue
+
+            # 数值分数：必须恰好等于该规则允许的 match/mismatch 分值
+            if isinstance(norm_value, bool):
+                # 保留对旧模型/异常输出的兼容
+                score_value = map_to_allowed_score(rule_def, norm_value)
+            else:
+                try:
+                    numeric = float(norm_value)
+                    allowed = {float(rule_def["match_score"]), float(rule_def["mismatch_score"])}
+                    if numeric not in allowed:
+                        invalid_rules.append(f"{rule_name}={norm_value}")
+                        continue
+                    score_value = int(numeric) if numeric.is_integer() else numeric
+                except Exception:
+                    invalid_rules.append(f"{rule_name}={norm_value}")
+                    continue
+
+            scores_out[pos][rule_name] = score_value
+
+    if missing_rules or invalid_rules:
+        detail_parts = []
+        if missing_rules:
+            detail_parts.append("缺少规则：" + "、".join(missing_rules[:8]))
+        if invalid_rules:
+            detail_parts.append("非法分值：" + "、".join(invalid_rules[:8]))
+        error_detail = "；".join(detail_parts)
+
+        # 单词详细分析时明确提示，不再悄悄生成错误隶属度
+        if show_ui:
+            st.error(f"Cohere 结果未通过规则分数校验：{error_detail}")
+        return {}, raw_text, "解析失败", error_detail, False
+
     return scores_out, raw_text, predicted_pos, explanation, is_dual_category
 
 def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
@@ -1578,9 +1686,9 @@ def _worker_entry(job_state_file: Path):
         if not spec_file.exists():
             raise FileNotFoundError(f'找不到任务配置文件：{spec_file}')
         spec = json.loads(spec_file.read_text(encoding='utf-8'))
-        api_key = os.getenv(spec['env_var'], '')
+        api_key = get_api_key(spec['env_var'])
         if not api_key:
-            raise RuntimeError(f"环境变量 {spec['env_var']} 未配置")
+            raise RuntimeError(f"API Key 未配置：{spec['env_var']}（请设置环境变量或 Streamlit Secrets）")
         df_input = pd.read_excel(Path(spec['input_file']))
         _batch_worker(df_input, spec['target_col'], spec['file_name'], Path(spec['backup_file']),
                       spec['provider'], spec['model'], api_key, job_state_file)
