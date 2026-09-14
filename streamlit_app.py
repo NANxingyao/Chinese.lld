@@ -15,7 +15,7 @@ from pathlib import Path
 
 SERVICE_MODE = "--worker" in sys.argv or "--supervisor" in sys.argv
 # 版本戳：若界面/日志看不到此字符串，说明仍在跑旧进程，必须 kill 后重启
-CODE_VERSION = "2026-09-14-stop-button-v6"
+CODE_VERSION = "2026-09-14-unlock-start-btn-v7"
 
 # Gemini 原生 responseSchema：把输出格式锁死为固定 JSON（短规则码 + boolean）
 # normalize_key 可将 N1/V1/NV1 映射回完整规则名
@@ -1707,20 +1707,66 @@ def start_or_resume_batch_job(df_input, target_col, uploaded_file, file_name, ba
     return True, _load_job_state(job_state_file)
 
 
-def _auto_recover_if_needed(job_state_file: Path):
+def _supervisor_or_worker_alive(job_state_file: Path, state: dict = None) -> bool:
+    """只有真实进程还在，才算任务在跑（不看过期 status 文案）。"""
+    state = state or _load_job_state(job_state_file)
+    if _pid_alive(state.get("supervisor_pid")) or _pid_alive(state.get("worker_pid")):
+        return True
+    for suffix in (".supervisor.pid", ".worker.pid"):
+        try:
+            p = _service_file(job_state_file, suffix)
+            if p.exists():
+                txt = p.read_text(encoding="utf-8").strip()
+                if txt.isdigit() and _pid_alive(int(txt)):
+                    return True
+        except Exception:
+            pass
+    return False
+
+
+def _reconcile_stale_job_state(job_state_file: Path) -> dict:
+    """状态写着 running 但进程已死 → 解锁，允许再次点「开始/继续」。"""
     state = _load_job_state(job_state_file)
+    active_statuses = {
+        "running", "retrying", "waiting_retry", "saving",
+        "waiting_save_retry", "starting", "supervisor_restarting",
+    }
+    if state.get("status") not in active_statuses:
+        return state
+    if _supervisor_or_worker_alive(job_state_file, state):
+        return state
+    # 刚启动 15 秒内先不判定为僵死
+    if state.get("status") == "starting" and _state_age_seconds(state) < 15:
+        return state
+    _write_job_state(
+        job_state_file,
+        status="interrupted",
+        supervisor_pid=None,
+        worker_pid=None,
+        error="检测到后台进程已退出，任务已解锁。可点击「开始处理 / 继续断点任务」继续。",
+    )
+    return _load_job_state(job_state_file)
+
+
+def _auto_recover_if_needed(job_state_file: Path):
+    """默认不再自动拉起 supervisor（避免用户停不掉 / 按钮按不了）。
+    仅当环境变量 BATCH_AUTO_RECOVER=1 时恢复旧的自动重连行为。
+    """
+    state = _reconcile_stale_job_state(job_state_file)
+    if os.getenv("BATCH_AUTO_RECOVER", "").strip() not in {"1", "true", "TRUE", "yes"}:
+        return state
+
     active_statuses = {'running', 'retrying', 'waiting_retry', 'saving', 'waiting_save_retry', 'starting', 'supervisor_restarting'}
-    if state.get('status') not in active_statuses: return state
-    if _pid_alive(state.get('supervisor_pid')): return state
+    if state.get('status') not in active_statuses:
+        return state
+    if _supervisor_or_worker_alive(job_state_file, state):
+        return state
 
-    try:
-        pid_text = _service_file(job_state_file, '.supervisor.pid').read_text(encoding='utf-8').strip()
-        if _pid_alive(int(pid_text)): return state
-    except Exception: pass
-
-    if state.get('status') == 'starting' and _state_age_seconds(state) < 15: return state
+    if state.get('status') == 'starting' and _state_age_seconds(state) < 15:
+        return state
     spec_file = _service_file(job_state_file, '.spec.json')
-    if not spec_file.exists(): return state
+    if not spec_file.exists():
+        return state
 
     try:
         proc = spawn_detached([sys.executable, str(Path(__file__).resolve()), '--supervisor', str(job_state_file)],
@@ -1789,6 +1835,8 @@ def render_live_monitor(job_state_file: Path, backup_file: Path, total_rows_defa
         st.success(f"🎉 任务全部完毕，共 {total} 条。")
     elif status_str == "cancelled":
         st.warning(f"⏹ 任务已手动停止（进度约 {completed}/{total}）。可随时点「开始处理 / 继续断点任务」从断点续跑。")
+    elif status_str == "interrupted":
+        st.warning(f"⚠ 后台进程已退出，任务已解锁（进度约 {completed}/{total}）。点「开始处理 / 继续断点任务」即可续跑。")
     elif status_str == "failed":
         st.error(f"❌ 任务停止：{error_str or '未记录到具体异常，请查看 process_log.log。'}")
     else:
@@ -1937,15 +1985,18 @@ def main():
                     
                     model_namespace = re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', selected_model_info.get("model", "default_model"))
                     job_state_file = BASE_DIR / f"batch_job_{re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', st.session_state.project_code)}__{model_namespace}.json"
+                    # 先清理「状态写着 running 但进程已死」的僵死状态，避免开始按钮永远灰掉
                     current_state = _auto_recover_if_needed(job_state_file)
-                    
-                    active_run = _pid_alive(current_state.get("supervisor_pid")) or current_state.get("status") in {
-                        "starting", "running", "retrying", "waiting_retry", "saving",
-                        "waiting_save_retry", "supervisor_restarting"
-                    }
-                    can_start = not active_run
 
-                    btn_col1, btn_col2 = st.columns([3, 1])
+                    really_running = _supervisor_or_worker_alive(job_state_file, current_state)
+                    # 只有真实进程在跑时才禁用开始按钮；不再被过期 status 卡住
+                    can_start = not really_running
+                    can_stop = really_running or current_state.get("status") in {
+                        "starting", "running", "retrying", "waiting_retry", "saving",
+                        "waiting_save_retry", "supervisor_restarting",
+                    }
+
+                    btn_col1, btn_col2, btn_col3 = st.columns([2.5, 1, 1])
                     with btn_col1:
                         if st.button("▶ 开始处理 / 继续断点任务", type="primary", use_container_width=True, disabled=not can_start):
                             if not selected_model_info["api_key"]:
@@ -1965,13 +2016,28 @@ def main():
                                         st.success("守护任务已启动，将在后台持续处理并自动恢复。")
                                         time.sleep(0.5)
                                         st.rerun()
+                                    else:
+                                        st.warning("任务似乎仍在运行。若按钮一直灰，请先点「停止任务」或「强制解锁」。")
                                 except Exception as e:
                                     st.error(f"启动失败：{e}")
                     with btn_col2:
-                        if st.button("⏹ 停止任务", type="secondary", use_container_width=True, disabled=not active_run):
+                        if st.button("⏹ 停止任务", type="secondary", use_container_width=True, disabled=not can_stop and not really_running):
                             msg = stop_batch_job(job_state_file)
                             st.warning(msg)
                             time.sleep(0.5)
+                            st.rerun()
+                    with btn_col3:
+                        if st.button("强制解锁", type="secondary", use_container_width=True, help="进程已死但按钮仍灰时点这个"):
+                            stop_batch_job(job_state_file)
+                            _write_job_state(
+                                job_state_file,
+                                status="interrupted",
+                                supervisor_pid=None,
+                                worker_pid=None,
+                                error="用户强制解锁，可重新开始/继续",
+                            )
+                            st.info("已强制解锁，请再点「开始处理 / 继续断点任务」。")
+                            time.sleep(0.4)
                             st.rerun()
 
                     st.divider()
