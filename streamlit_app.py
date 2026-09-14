@@ -15,7 +15,7 @@ from pathlib import Path
 
 SERVICE_MODE = "--worker" in sys.argv or "--supervisor" in sys.argv
 # 版本戳：若界面/日志看不到此字符串，说明仍在跑旧进程，必须 kill 后重启
-CODE_VERSION = "2026-09-14-cohere-v1"
+CODE_VERSION = "2026-09-14-cohere-v2-native"
 
 # Gemini 原生 responseSchema：把输出格式锁死为固定 JSON（短规则码 + boolean）
 # normalize_key 可将 N1/V1/NV1 映射回完整规则名
@@ -231,56 +231,68 @@ RULE_SETS = {
     ]
 }
 
+def get_api_key(env_var: str):
+    """优先读取环境变量；若部署在 Streamlit Cloud，则回退到 st.secrets。"""
+    value = os.getenv(env_var)
+    if value:
+        return value
+    try:
+        value = st.secrets.get(env_var)
+        return value
+    except Exception:
+        return None
+
+
 MODEL_OPTIONS = {
     # ===================== 国内模型（保留原有） =====================
     "DeepSeek Chat": {
         "provider": "deepseek", "model": "deepseek-chat",
-        "api_key": os.getenv("DEEPSEEK_API_KEY"), "env_var": "DEEPSEEK_API_KEY"
+        "api_key": get_api_key("DEEPSEEK_API_KEY"), "env_var": "DEEPSEEK_API_KEY"
     },
     "Moonshot（Kimi）": {
         "provider": "moonshot", "model": "kimi-k2.6",
-        "api_key": os.getenv("MOONSHOT_API_KEY"), "env_var": "MOONSHOT_API_KEY"
+        "api_key": get_api_key("MOONSHOT_API_KEY"), "env_var": "MOONSHOT_API_KEY"
     },
     "Qwen（通义千问）": {
         "provider": "qwen", "model": "qwen-max",
-        "api_key": os.getenv("QWEN_API_KEY"), "env_var": "QWEN_API_KEY"
+        "api_key": get_api_key("QWEN_API_KEY"), "env_var": "QWEN_API_KEY"
     },
 
     # ===================== 国外模型：OpenAI =====================
     "ChatGPT（GPT-5.6 Luna）": {
         "provider": "openai", "model": "gpt-5.6-luna",
-        "api_key": os.getenv("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"
+        "api_key": get_api_key("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"
     },
     "ChatGPT（GPT-5.6 Terra）": {
         "provider": "openai", "model": "gpt-5.6-terra",
-        "api_key": os.getenv("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"
+        "api_key": get_api_key("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"
     },
     "ChatGPT（GPT-5.6 Sol）": {
         "provider": "openai", "model": "gpt-5.6-sol",
-        "api_key": os.getenv("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"
+        "api_key": get_api_key("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"
     },
 
     # ===================== 国外模型：Google Gemini =====================
     "Google Gemini 3.8 Flash": {
         "provider": "gemini", "model": "gemini-3.8-flash",
-        "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
+        "api_key": get_api_key("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
     },
     "Google Gemini 3.1 Pro Preview": {
         "provider": "gemini", "model": "gemini-3.1-pro-preview",
-        "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
+        "api_key": get_api_key("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
     },
 
     # ===================== 国外模型：xAI Grok =====================
     "xAI Grok 4.6": {
         "provider": "xai", "model": "grok-4.6",
-        "api_key": os.getenv("XAI_API_KEY"), "env_var": "XAI_API_KEY"
+        "api_key": get_api_key("XAI_API_KEY"), "env_var": "XAI_API_KEY"
     },
 
-    # ===================== 国外模型：Cohere（新增） =====================
-    "Cohere Command R+": {
+    # ===================== 国外模型：Cohere（原生 V2 Chat） =====================
+    "Cohere Command A": {
         "provider": "cohere",
-        "model": "command-r-plus",                 # 也可换成 command-a-03-2025 / command-r
-        "api_key": os.getenv("COHERE_API_KEY"),
+        "model": "command-a-03-2025",
+        "api_key": get_api_key("COHERE_API_KEY"),
         "env_var": "COHERE_API_KEY"
     },
 }
@@ -894,13 +906,27 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
             }
         return url, headers, payload, "gemini_native"
 
-    # ===== OpenAI 兼容接口（DeepSeek / Moonshot / Qwen / xAI / Cohere）=====
+    # ===== OpenAI 兼容接口（DeepSeek / Moonshot / Qwen / xAI）=====
+    # Cohere 不再走这里，而是单独使用原生 V2 Chat API。
+    if provider == "cohere":
+        url = os.getenv("COHERE_BASE_URL", "https://api.cohere.com").rstrip("/") + "/v2/chat"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.0,
+            "max_tokens": min(max_tokens, 8000),
+        }
+        return url, headers, payload, "cohere_v2"
+
     base_urls = {
         "deepseek": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
         "moonshot": os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1"),
         "qwen":     os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
         "xai":      os.getenv("XAI_BASE_URL", "https://api.x.ai/v1"),
-        "cohere":   os.getenv("COHERE_BASE_URL", "https://api.cohere.com/compatibility/v1"),  # 新增
     }
     url = f"{base_urls.get(provider, base_urls['deepseek']).rstrip('/')}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -919,10 +945,31 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
             payload["reasoning_effort"] = reasoning_effort
         payload["max_tokens"] = max_tokens
     else:
-        # deepseek / qwen / cohere
+        # deepseek / qwen
         payload["max_tokens"] = max_tokens
 
     return url, headers, payload, "chat_completions"
+
+
+def _extract_cohere_v2_text(body: Dict[str, Any]) -> str:
+    """提取 Cohere /v2/chat 的 message.content 文本。"""
+    if not isinstance(body, dict):
+        return ""
+    message = body.get("message") or {}
+    content = message.get("content", [])
+    if isinstance(content, str) and content.strip():
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict):
+                text = part.get("text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text)
+            elif isinstance(part, str) and part.strip():
+                parts.append(part)
+        return "".join(parts)
+    return ""
 
 
 def _extract_openai_responses_text(body: Dict[str, Any]) -> str:
@@ -1019,6 +1066,51 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
                         streaming_placeholder.empty()
                     return True, {"choices": [{"message": {"content": text}}], "_raw_responses": body}, ""
                 error_msg = "OpenAI Responses API 未返回有效文本"
+            elif api_style == "cohere_v2":
+                # Cohere 原生 V2 Chat：非 OpenAI-compatible 返回结构
+                response = requests.post(url, headers=headers, json=payload, timeout=180)
+                if response.status_code != 200:
+                    try:
+                        detail = response.json()
+                    except Exception:
+                        detail = response.text
+                    if response.status_code == 404:
+                        error_msg = f"Cohere 路径错误 (404)。当前请求地址：{url}"
+                    elif response.status_code == 401:
+                        error_msg = "Cohere 鉴权失败 (401)。请检查 COHERE_API_KEY。"
+                    elif response.status_code in [400, 403, 429]:
+                        error_msg = f"Cohere 请求错误 ({response.status_code})：{detail}"
+                    else:
+                        error_msg = f"Cohere API 错误: {response.status_code} - {detail}"
+                    if response.status_code in [400, 401, 403]:
+                        break
+                    response.raise_for_status()
+
+                body = response.json()
+                logger.info("Cohere V2 响应摘要：%s", json.dumps(body, ensure_ascii=False)[:2000])
+                text = _extract_cohere_v2_text(body)
+
+                if text:
+                    if streaming_placeholder is not None:
+                        streaming_placeholder.empty()
+                    # 归一化成内部统一结构，后续解析逻辑无需改动
+                    normalized = {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": text
+                                }
+                            }
+                        ],
+                        "_raw_cohere": body,
+                    }
+                    return True, normalized, ""
+
+                error_msg = (
+                    "Cohere V2 未返回有效文本。响应摘要："
+                    + json.dumps(body, ensure_ascii=False)[:1200]
+                )
+
             else:
                 is_stream = bool(payload.get("stream", False))
                 with requests.post(url, headers=headers, json=payload, stream=is_stream, timeout=180) as response:
