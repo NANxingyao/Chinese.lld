@@ -446,6 +446,39 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
     except Exception:
         return ""
 
+def _extract_gemini_json(text: str):
+    """
+    Gemini 专用 JSON 提取器。
+    仅用于 Gemini，不改变其他模型的 JSON 解析行为。
+    """
+    if not text or not isinstance(text, str):
+        return None, text
+
+    cleaned = text.strip()
+    cleaned = re.sub(r"^\s*```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```\s*$", "", cleaned).strip()
+
+    try:
+        obj = json.loads(cleaned, strict=False)
+        if isinstance(obj, dict):
+            return obj, cleaned
+    except Exception:
+        pass
+
+    decoder = json.JSONDecoder(strict=False)
+    for match in re.finditer(r"\{", cleaned):
+        start = match.start()
+        try:
+            obj, end = decoder.raw_decode(cleaned[start:])
+            if isinstance(obj, dict):
+                if "scores" in obj or "predicted_pos" in obj or "is_dual_category" in obj:
+                    return obj, cleaned[start:start + end]
+        except Exception:
+            continue
+
+    return None, text
+
+
 def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
     if not text: 
         return None, text
@@ -558,10 +591,17 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
             payload["reasoning_effort"] = reasoning_effort
         payload["max_tokens"] = max_tokens
     elif provider == "gemini":
-        # Gemini 3.8 Flash 官方 OpenAI-compatible 接口支持 Chat Completions。
-        # 不强行传 temperature，减少 Gemini 3.x 因采样参数变化造成的兼容问题。
+        # ==================== Gemini 专用配置 ====================
+        # Gemini 3.x 是推理模型。输出预算太小时可能在完成可见文本前
+        # 就以 finish_reason=length 结束，因此只对 Gemini 提高预算。
         payload.pop("temperature", None)
-        payload["max_tokens"] = max_tokens
+        payload["max_tokens"] = max(max_tokens, 4096)
+
+        # Gemini OpenAI-compatible 接口支持 reasoning_effort。
+        payload["reasoning_effort"] = "low"
+
+        # 仅 Gemini 开启 JSON object 输出，降低 Markdown/前缀导致的解析失败概率。
+        payload["response_format"] = {"type": "json_object"}
     else:
         payload["max_tokens"] = max_tokens
     return url, headers, payload, "chat_completions"
@@ -728,7 +768,12 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         return {}, f"调用失败: {err_msg}", "未知", f"失败: {err_msg}", False
 
     raw_text = extract_text_from_response(resp_json)
-    parsed_json, _ = extract_json_from_text(raw_text)
+
+    # Gemini 使用专用 JSON 提取器；其他模型完全保持原有解析逻辑。
+    if provider == "gemini":
+        parsed_json, _ = _extract_gemini_json(raw_text)
+    else:
+        parsed_json, _ = extract_json_from_text(raw_text)
     
     if parsed_json and isinstance(parsed_json, dict):
         explanation = parsed_json.get("explanation", "无推理过程。")
@@ -736,7 +781,11 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         is_dual_category = parsed_json.get("is_dual_category", False)
         raw_scores = parsed_json.get("scores", {})
     else:
-        if show_ui: st.error("未能解析有效的 JSON。")
+        if show_ui:
+            if provider == "gemini":
+                st.error("Gemini 已返回内容，但未能解析为有效 JSON。请展开“模型原始响应”查看返回内容。")
+            else:
+                st.error("未能解析有效的 JSON。")
         return {}, raw_text, "未知", "JSON 解析失败", False
 
     scores_out = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
@@ -1217,8 +1266,21 @@ def main():
             st.write("")
             if st.button("测试模型链接", type="secondary", use_container_width=True, disabled=not selected_model_info["api_key"]):
                 with st.spinner("正在测试连接..."):
-                    # 将 max_tokens 从 10 调大到 100，避免 Gemini 底层 token 开销导致触发 finish_reason: length
-                    ok, _, err_msg = call_llm_api_cached(selected_model_info["provider"], selected_model_info["model"], selected_model_info["api_key"], [{"role": "user", "content": "请回复'pong'"}], max_tokens=100)
+                    # 仅 Gemini 使用更充足的输出预算；其他模型保持原来的 10。
+                    if selected_model_info.get("provider") == "gemini":
+                        test_prompt = "请只输出字符串 pong，不要输出任何其他内容。"
+                        test_max_tokens = 4096
+                    else:
+                        test_prompt = "请回复'pong'"
+                        test_max_tokens = 10
+
+                    ok, _, err_msg = call_llm_api_cached(
+                        selected_model_info["provider"],
+                        selected_model_info["model"],
+                        selected_model_info["api_key"],
+                        [{"role": "user", "content": test_prompt}],
+                        max_tokens=test_max_tokens
+                    )
                 if ok: st.success("成功！")
                 else: st.error(f"失败: {err_msg}")
 
