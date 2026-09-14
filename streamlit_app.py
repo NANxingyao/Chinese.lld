@@ -757,12 +757,15 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     if not word: return {}, "", "未知", "", False
     full_rules = {pos: "\n".join([f"- {r['name']}: {r['desc']}（符合: {r['match_score']} 分，不符合: {r['mismatch_score']} 分）" for r in rules]) for pos, rules in RULE_SETS.items()}
     
+    # 👇 核心修改：动态插入强约束。仅针对 Gemini 生效，严禁在推理过程中使用英文双引号破坏 JSON，其他模型保持原样。
+    gemini_strict_note = "（注意：内容中如需举例或引用，务必使用单引号 ''，严禁使用英文双引号 \"，以免破坏JSON结构）" if provider == "gemini" else "（写在 JSON 的 explanation 字段中）"
+    
     system_msg = f"""你是一名中文词法与语法方面的专家。现在要分析词语「{word}」在下列词类中的表现：
 - 需要判断的词类：名词、动词、名动词
 - 你只需要判断每一条规则是"符合"还是"不符合"，在 JSON 中的 scores 里给出 true / false，程序自动赋值。
 【名词】\n{full_rules["名词"]}\n【动词】\n{full_rules["动词"]}\n【名动词】\n{full_rules["名动词"]}
 输出要求：
-1. explanation: 逐条规则说明判断依据并举例（写在 JSON 的 explanation 字段中）。
+1. explanation: 逐条规则说明判断依据并举例{gemini_strict_note}。
 2. scores: 各规则对应 true/false。
 3. predicted_pos: 选择最典型词类。
 4. is_dual_category: 是否属于兼类（true/false）。
@@ -781,12 +784,10 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         return {}, f"调用失败: {err_msg}", "未知", f"失败: {err_msg}", False
 
     raw_text = extract_text_from_response(resp_json)
-    # Gemini 单独使用专用解析器；其他模型保持原有解析流程。
+
+    # Gemini 使用专用 JSON 提取器；其他模型完全保持原有解析逻辑。
     if provider == "gemini":
-        parsed_json, _ = extract_gemini_json(raw_text)
-        if parsed_json is None:
-            # 再走一次通用解析器作为兜底
-            parsed_json, _ = extract_json_from_text(raw_text)
+        parsed_json, _ = _extract_gemini_json(raw_text)
     else:
         parsed_json, _ = extract_json_from_text(raw_text)
     
@@ -796,7 +797,11 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         is_dual_category = parsed_json.get("is_dual_category", False)
         raw_scores = parsed_json.get("scores", {})
     else:
-        if show_ui: st.error("未能解析有效的 JSON。")
+        if show_ui:
+            if provider == "gemini":
+                st.error("Gemini 已返回内容，但未能解析为有效 JSON。请展开“模型原始响应”查看返回内容。")
+            else:
+                st.error("未能解析有效的 JSON。")
         return {}, raw_text, "未知", "JSON 解析失败", False
 
     scores_out = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
