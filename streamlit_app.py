@@ -147,10 +147,13 @@ if not SERVICE_MODE:
 BASE_DIR = Path(__file__).parent
 
 def get_project_files(project_code: str, model_key: str = "") -> Tuple[Path, Path]:
+    """按实验批次 + 模型隔离结果，避免不同模型的国外/国内数据互相覆盖。"""
     safe_code = re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', project_code)
-    if not safe_code: safe_code = "default_task"
+    if not safe_code:
+        safe_code = "default_task"
     safe_model = re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', model_key or "default_model")
-    if not safe_model: safe_model = "default_model"
+    if not safe_model:
+        safe_model = "default_model"
     namespace = f"{safe_code}__{safe_model}"
     return BASE_DIR / f"batch_history_{namespace}.csv", BASE_DIR / f"process_progress_{namespace}.json"
 
@@ -191,23 +194,61 @@ RULE_SETS = {
 }
 
 MODEL_OPTIONS = {
-    "DeepSeek Chat": {"provider": "deepseek", "model": "deepseek-chat", "api_key": os.getenv("DEEPSEEK_API_KEY"), "env_var": "DEEPSEEK_API_KEY"},
-    "Moonshot（Kimi）": {"provider": "moonshot", "model": "kimi-k2.6", "api_key": os.getenv("MOONSHOT_API_KEY"), "env_var": "MOONSHOT_API_KEY"},
-    "Qwen（通义千问）": {"provider": "qwen", "model": "qwen-max", "api_key": os.getenv("QWEN_API_KEY"), "env_var": "QWEN_API_KEY"},
-    "ChatGPT（GPT-5.6 Luna）": {"provider": "openai", "model": "gpt-5.6-luna", "api_key": os.getenv("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"},
-    "ChatGPT（GPT-5.6 Terra）": {"provider": "openai", "model": "gpt-5.6-terra", "api_key": os.getenv("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"},
-    "ChatGPT（GPT-5.6 Sol）": {"provider": "openai", "model": "gpt-5.6-sol", "api_key": os.getenv("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"},
-    "Google Gemini 3.8 Flash": {"provider": "gemini", "model": "gemini-3.8-flash", "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"},
-    "Google Gemini 3.1 Pro Preview": {"provider": "gemini", "model": "gemini-3.1-pro-preview", "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"},
-    "xAI Grok 4.6": {"provider": "xai", "model": "grok-4.6", "api_key": os.getenv("XAI_API_KEY"), "env_var": "XAI_API_KEY"},
+    # ===================== 国内模型（保留原有） =====================
+    "DeepSeek Chat": {
+        "provider": "deepseek", "model": "deepseek-chat",
+        "api_key": os.getenv("DEEPSEEK_API_KEY"), "env_var": "DEEPSEEK_API_KEY"
+    },
+    "Moonshot（Kimi）": {
+        "provider": "moonshot", "model": "kimi-k2.6",
+        "api_key": os.getenv("MOONSHOT_API_KEY"), "env_var": "MOONSHOT_API_KEY"
+    },
+    "Qwen（通义千问）": {
+        "provider": "qwen", "model": "qwen-max",
+        "api_key": os.getenv("QWEN_API_KEY"), "env_var": "QWEN_API_KEY"
+    },
+
+    # ===================== 国外模型：OpenAI =====================
+    # ChatGPT 本身是产品名；API 实际调用的是 OpenAI 的 GPT 模型。
+    "ChatGPT（GPT-5.6 Luna）": {
+        "provider": "openai", "model": "gpt-5.6-luna",
+        "api_key": os.getenv("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"
+    },
+    "ChatGPT（GPT-5.6 Terra）": {
+        "provider": "openai", "model": "gpt-5.6-terra",
+        "api_key": os.getenv("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"
+    },
+    "ChatGPT（GPT-5.6 Sol）": {
+        "provider": "openai", "model": "gpt-5.6-sol",
+        "api_key": os.getenv("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"
+    },
+
+    # ===================== 国外模型：Google Gemini =====================
+    "Google Gemini 3.8 Flash": {
+        "provider": "gemini", "model": "gemini-3.8-flash",
+        "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
+    },
+    "Google Gemini 3.1 Pro Preview": {
+        "provider": "gemini", "model": "gemini-3.1-pro-preview",
+        "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
+    },
+
+    # ===================== 国外模型：xAI Grok =====================
+    "xAI Grok 4.6": {
+        "provider": "xai", "model": "grok-4.6",
+        "api_key": os.getenv("XAI_API_KEY"), "env_var": "XAI_API_KEY"
+    },
 }
+
 AVAILABLE_MODEL_OPTIONS = {name: info for name, info in MODEL_OPTIONS.items() if info["api_key"]}
 if not AVAILABLE_MODEL_OPTIONS: AVAILABLE_MODEL_OPTIONS = MODEL_OPTIONS
 
 # ===============================
 # 安全操作辅助函数
 # ===============================
+
 def _lock_file(lock_path: Path, timeout=30, poll=0.2):
+    """跨进程排他锁：基于 O_EXCL，包含超时死锁自愈机制。"""
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -215,47 +256,69 @@ def _lock_file(lock_path: Path, timeout=30, poll=0.2):
             return fd
         except FileExistsError:
             try:
-                if time.time() - os.path.getmtime(str(lock_path)) > timeout * 2: os.unlink(str(lock_path))
-            except Exception: pass
+                # 死锁解脱：如果锁文件存在且已严重超时（例如强杀进程遗留），强行清理
+                if time.time() - os.path.getmtime(str(lock_path)) > timeout * 2:
+                    os.unlink(str(lock_path))
+            except Exception:
+                pass
             time.sleep(poll)
     raise TimeoutError(f"获取文件锁超时: {lock_path}")
 
+
 def _unlock_file(lock_path: Path, fd):
-    try: os.close(fd)
+    try:
+        os.close(fd)
     finally:
-        try: lock_path.unlink()
-        except FileNotFoundError: pass
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
+
 
 def _make_task_id(file_name: str, row_index: int) -> str:
+    """批次内每个 Excel 行的稳定唯一 ID。"""
     return f"{file_name}::row::{row_index + 1}"
 
+
 def clean_csv_duplicates(file_path: Path):
-    if not file_path.exists() or file_path.stat().st_size == 0: return
+    """确保全表严格去重并严格按【序数】递增排序。"""
+    if not file_path.exists() or file_path.stat().st_size == 0:
+        return
     lock_path = file_path.with_suffix(file_path.suffix + '.maintenance.lock')
     fd = None
     try:
         fd = _lock_file(lock_path, timeout=15)
         df = pd.read_csv(file_path, encoding='utf-8-sig')
         changed = False
+
         key_col = '任务ID' if '任务ID' in df.columns else ('序数' if '序数' in df.columns else None)
         if key_col and df.duplicated(subset=[key_col]).any():
             df = df.drop_duplicates(subset=[key_col], keep='last')
             changed = True
+
         if '序数' in df.columns:
             df['序数_num'] = pd.to_numeric(df['序数'], errors='coerce')
             if not df['序数_num'].is_monotonic_increasing:
                 df = df.sort_values('序数_num')
                 changed = True
             df = df.drop(columns=['序数_num'])
+
         if changed:
             tmp = file_path.with_suffix(file_path.suffix + '.clean.tmp')
             df.to_csv(tmp, index=False, encoding='utf-8-sig')
             os.replace(tmp, file_path)
-    except Exception as e: logger.exception(f"清理并排序 CSV 失败: {file_path}")
+    except Exception as e:
+        logger.exception(f"清理并排序 CSV 失败: {file_path}")
     finally:
-        if fd is not None: _unlock_file(lock_path, fd)
+        if fd is not None:
+            _unlock_file(lock_path, fd)
+
 
 def append_unique_csv(df: pd.DataFrame, file_path: Path, task_id: str, max_retries=30):
+    """
+    原子写入：读取原表合并新行 -> 严格按ID去重 -> 严格按序数重新排序 -> 原子覆盖写入。
+    彻底解决多进程读写导致的错序和重复。
+    """
     lock_path = file_path.with_suffix(file_path.suffix + '.write.lock')
     last_error = ''
     for attempt in range(1, max_retries + 1):
@@ -264,215 +327,190 @@ def append_unique_csv(df: pd.DataFrame, file_path: Path, task_id: str, max_retri
             fd = _lock_file(lock_path, timeout=5)
             if file_path.exists() and file_path.stat().st_size > 0:
                 existing_all = pd.read_csv(file_path, encoding='utf-8-sig')
-                if '任务ID' not in existing_all.columns:
-                    if '序数' in existing_all.columns: existing_all['任务ID'] = existing_all['序数'].apply(lambda x: f'legacy::row::{int(x)}' if pd.notna(x) else f'legacy::row::{x}')
-                    else: existing_all['任务ID'] = [f'legacy::index::{i+1}' for i in range(len(existing_all))]
-                if task_id in set(existing_all['任务ID'].astype(str).tolist()):
-                    return True, '该任务ID已经写入，跳过重复写入。', True
-                combined = pd.concat([existing_all, df], ignore_index=True)
-            else: combined = df.copy()
 
+                # 兼容旧版本：旧 CSV 没有任务ID时，先补全ID列
+                if '任务ID' not in existing_all.columns:
+                    if '序数' in existing_all.columns:
+                        existing_all['任务ID'] = existing_all['序数'].apply(
+                            lambda x: f'legacy::row::{int(x)}' if pd.notna(x) else f'legacy::row::{x}'
+                        )
+                    else:
+                        existing_all['任务ID'] = [f'legacy::index::{i+1}' for i in range(len(existing_all))]
+
+                # 如果明确已经存在最新结果，跳过
+                existing_ids = set(existing_all['任务ID'].astype(str).tolist())
+                if task_id in existing_ids:
+                    return True, '该任务ID已经写入，跳过重复写入。', True
+
+                combined = pd.concat([existing_all, df], ignore_index=True)
+            else:
+                combined = df.copy()
+
+            # 强制剔除任何重复项并强制按序数排序
             if '序数' in combined.columns:
                 combined['序数_num'] = pd.to_numeric(combined['序数'], errors='coerce')
                 combined = combined.drop_duplicates(subset=['任务ID'], keep='last')
                 combined = combined.sort_values('序数_num').drop(columns=['序数_num'])
+
+            # 写入临时文件后覆盖，防止崩溃导致文件损坏
             tmp_path = file_path.with_suffix('.write.tmp')
             combined.to_csv(tmp_path, index=False, encoding='utf-8-sig')
             os.replace(tmp_path, file_path)
+            
             return True, '写入并重排序成功。', False
         except Exception as e:
             last_error = f"{type(e).__name__}: {e}"
             logger.warning(f"CSV原子合并写入失败（第{attempt}/{max_retries}次）: {last_error}")
             time.sleep(min(2, 0.2 * attempt))
         finally:
-            if fd is not None: _unlock_file(lock_path, fd)
+            if fd is not None:
+                _unlock_file(lock_path, fd)
     return False, f"CSV写入最终失败：{last_error}", False
 
+
 def is_task_processed(file_path: Path, task_id: str, row_number: int) -> bool:
-    if not file_path.exists() or file_path.stat().st_size == 0: return False
+    """判断具体 Excel 行是否已经处理"""
+    if not file_path.exists() or file_path.stat().st_size == 0:
+        return False
     try:
         cols = pd.read_csv(file_path, encoding='utf-8-sig', nrows=0).columns.tolist()
         if '任务ID' in cols:
-            return task_id in set(pd.read_csv(file_path, encoding='utf-8-sig', usecols=['任务ID'])['任务ID'].astype(str).tolist())
+            existing = pd.read_csv(file_path, encoding='utf-8-sig', usecols=['任务ID'])
+            return task_id in set(existing['任务ID'].astype(str).tolist())
         if '序数' in cols:
-            return row_number in set(pd.to_numeric(pd.read_csv(file_path, encoding='utf-8-sig', usecols=['序数'])['序数'], errors='coerce').dropna().astype(int).tolist())
-    except Exception: pass
+            existing = pd.read_csv(file_path, encoding='utf-8-sig', usecols=['序数'])
+            vals = pd.to_numeric(existing['序数'], errors='coerce').dropna().astype(int)
+            return row_number in set(vals.tolist())
+    except Exception as e:
+        pass
     return False
 
+
 def spawn_detached(cmd, cwd):
+    """跨平台脱离式进程启动，防止 Streamlit 页面刷新误杀子进程。"""
     kwargs = {}
-    if os.name == 'nt': kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-    else: kwargs['start_new_session'] = True
+    if os.name == 'nt':
+        kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+    else:
+        kwargs['start_new_session'] = True
     return subprocess.Popen(cmd, cwd=cwd, **kwargs)
 
 # ===============================
-# 文本解析工具 (修复了解析断连与结构破坏问题)
+# 文本解析工具
 # ===============================
 def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
-    if not isinstance(resp_json, dict): return ""
+    """兼容 OpenAI / Gemini / xAI 等返回结构，尽可能提取最终文本。"""
+    if not isinstance(resp_json, dict):
+        return ""
     try:
-        if isinstance(resp_json.get("output_text"), str) and resp_json["output_text"].strip(): return resp_json["output_text"]
+        # OpenAI Responses API
+        if isinstance(resp_json.get("output_text"), str) and resp_json["output_text"].strip():
+            return resp_json["output_text"]
+
+        # OpenAI-compatible Chat Completions
         choices = resp_json.get("choices")
         if isinstance(choices, list) and choices:
-            content = (choices[0] or {}).get("message", {}).get("content", "")
-            if isinstance(content, str) and content.strip(): return content
-            if isinstance(content, dict):
-                try: return json.dumps(content, ensure_ascii=False)
-                except Exception: pass
+            choice = choices[0] or {}
+            message = choice.get("message", {}) or {}
+            content = message.get("content", "")
+            if isinstance(content, str) and content.strip():
+                return content
             if isinstance(content, list):
-                return "".join([part.get("text") or part.get("content") for part in content if isinstance(part, dict) and isinstance(part.get("text") or part.get("content"), str)])
-            delta_content = (choices[0] or {}).get("delta", {}).get("content", "")
-            if isinstance(delta_content, str) and delta_content.strip(): return delta_content
+                parts = []
+                for part in content:
+                    if isinstance(part, dict):
+                        text = part.get("text") or part.get("content")
+                        if isinstance(text, str):
+                            parts.append(text)
+                if parts:
+                    return "".join(parts)
+            # 某些兼容层可能把文本放进 delta
+            delta = choice.get("delta", {}) or {}
+            delta_content = delta.get("content", "")
+            if isinstance(delta_content, str) and delta_content.strip():
+                return delta_content
+
+        # Gemini 原生/代理偶见结构：candidates[].content.parts[].text
         candidates = resp_json.get("candidates")
         if isinstance(candidates, list):
-            return "".join([part["text"] for c in candidates for part in (c or {}).get("content", {}).get("parts", []) if isinstance(part, dict) and isinstance(part.get("text"), str)])
+            parts = []
+            for candidate in candidates:
+                content = (candidate or {}).get("content", {}) or {}
+                for part in content.get("parts", []) or []:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        parts.append(part["text"])
+            if parts:
+                return "".join(parts)
+
         return ""
-    except Exception: return ""
+    except Exception:
+        return ""
 
-def _clean_possible_markdown_json(text: str) -> str:
-    """清理 Gemini 等模型常见的 Markdown / 不可见字符，强制提取 JSON 块"""
-    if not text: return ""
-    cleaned = str(text).replace("\ufeff", "").replace("\u200b", "").replace("\u2060", "").strip()
+def _extract_gemini_json(text: str):
+    """
+    Gemini 专用 JSON 提取器。
+    仅用于 Gemini，不改变其他模型的 JSON 解析行为。
+    """
+    if not text or not isinstance(text, str):
+        return None, text
 
-    # 优先精确捕获 Markdown 块，防止由于模型输出额外说明文字导致正则无法在行首尾截取
-    m = re.search(r"```(?:json|JSON|javascript|js)?\s*(.*?)\s*```", cleaned, re.DOTALL)
-    if m: return m.group(1).strip()
+    cleaned = text.strip()
+    cleaned = re.sub(r"^\s*```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```\s*$", "", cleaned).strip()
 
-    # 兜底截断
-    cleaned = re.sub(r"^\s*```(?:json|JSON|javascript|js)?\s*", "", cleaned)
-    cleaned = re.sub(r"\s*```\s*$", "", cleaned)
-    return cleaned.strip()
+    try:
+        obj = json.loads(cleaned, strict=False)
+        if isinstance(obj, dict):
+            return obj, cleaned
+    except Exception:
+        pass
 
-def _repair_json_candidate(candidate: str) -> str:
-    if not candidate: return candidate
-    candidate = re.sub(r"^\s*```(?:json|JSON)?\s*", "", candidate.strip())
-    candidate = re.sub(r"\s*```\s*$", "", candidate).strip()
-    candidate = candidate.replace("\u201c", '"').replace("\u201d", '"').replace("\u2018", "'").replace("\u2019", "'").replace("「", '"').replace("」", '"')
-    candidate = re.sub(r",\s*([}\]])", r"\1", candidate)
-    out, in_string, escaped = [], False, False
-    for ch in candidate:
-        if in_string:
-            if escaped: out.append(ch); escaped = False; continue
-            if ch == "\\": out.append(ch); escaped = True; continue
-            if ch == '"': out.append(ch); in_string = False; continue
-            if ch == "\n": out.append("\\n"); continue
-            if ch == "\r": out.append("\\r"); continue
-            if ch == "\t": out.append("\\t"); continue
-            if ord(ch) < 32: out.append(" "); continue
-        else:
-            if ch == '"': in_string = True
-        out.append(ch)
-    return "".join(out)
-
-def _iter_balanced_json_objects(text: str):
-    if not text: return
-    n = len(text)
-    for start in range(n):
-        if text[start] != "{": continue
-        depth, in_string, escaped = 0, False, False
-        for i in range(start, n):
-            ch = text[i]
-            if in_string:
-                if escaped: escaped = False
-                elif ch == "\\": escaped = True
-                elif ch == '"': in_string = False
-                continue
-            if ch == '"': in_string = True
-            elif ch == "{": depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0: yield text[start:i + 1]; break
-
-def _parse_json_object_candidate(candidate: str):
-    """支持解包字典被包含在列表中的错误格式，同时包含修复逻辑"""
-    for cand in (candidate, _repair_json_candidate(candidate)):
+    decoder = json.JSONDecoder(strict=False)
+    for match in re.finditer(r"\{", cleaned):
+        start = match.start()
         try:
-            obj = json.loads(cand, strict=False)
-            if isinstance(obj, dict): return obj
-            # 防止 Gemini 输出的 JSON 外包了一层 List -> [{"explanation": ...}]
-            elif isinstance(obj, list) and len(obj) > 0 and isinstance(obj[0], dict): return obj[0]
-        except (json.JSONDecodeError, TypeError, ValueError):
-            pass
-    return None
+            obj, end = decoder.raw_decode(cleaned[start:])
+            if isinstance(obj, dict):
+                if "scores" in obj or "predicted_pos" in obj or "is_dual_category" in obj:
+                    return obj, cleaned[start:start + end]
+        except Exception:
+            continue
+
+    return None, text
+
 
 def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
-    if not text: return None, text
-    cleaned = _clean_possible_markdown_json(text)
-    obj = _parse_json_object_candidate(cleaned)
-    if isinstance(obj, dict): return obj, cleaned
-    for candidate in _iter_balanced_json_objects(cleaned):
-        obj = _parse_json_object_candidate(candidate)
-        if isinstance(obj, dict): return obj, candidate
+    if not text: 
+        return None, text
+
+    # 1. 优先提取 ```json ... ``` 代码块中的内容（改为贪婪匹配抓取最外层 JSON）
+    code_block_match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
+    if code_block_match:
+        try:
+            # strict=False 关键参数：允许字符串中存在未转义的控制字符（如多行换行）
+            return json.loads(code_block_match.group(1), strict=False), code_block_match.group(1)
+        except json.JSONDecodeError:
+            pass
+
+    # 2. 抓取文本中最外层的 { 到 } 完整区间
+    first_bracket = text.find('{')
+    last_bracket = text.rfind('}')
+    if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
+        candidate = text[first_bracket:last_bracket+1]
+        try:
+            return json.loads(candidate, strict=False), candidate
+        except json.JSONDecodeError:
+            pass
+
+    # 3. 兜底正则匹配
+    match = re.search(r"(\{.*\})", text.strip(), re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(1), strict=False), match.group(1)
+        except json.JSONDecodeError:
+            pass
+
     return None, text
-
-def _gemini_prefer_schema_objects(text: str):
-    preferred, others = [], []
-    for candidate in _iter_balanced_json_objects(text):
-        low = candidate.lower()
-        if any(kw in low for kw in ("scores", "predicted_pos", "is_dual_category")) or "名词" in candidate or "动词" in candidate: preferred.append(candidate)
-        else: others.append(candidate)
-    yield from preferred + others
-
-def _gemini_try_close_truncated(candidate: str) -> str:
-    if not candidate: return candidate
-    opens = candidate.count("{") - candidate.count("}")
-    if opens <= 0: return candidate
-    return candidate + ("}" * min(opens, 8))
-
-def _gemini_regex_salvage_scores(text: str) -> Dict[str, Any]:
-    if not text: return None
-    result = {"explanation": "（本地从原文抢救解析，完整 JSON 未能直接 loads）", "predicted_pos": "未知", "is_dual_category": False, "scores": {"名词": {}, "动词": {}, "名动词": {}}}
-    if m := re.search(r'["\']?predicted_pos["\']?\s*[:=]\s*["\']([^"\']+)["\']', text, re.IGNORECASE): result["predicted_pos"] = m.group(1).strip()
-    if m := re.search(r'["\']?is_dual_category["\']?\s*[:=]\s*(true|false|True|False|是|否)', text, re.IGNORECASE): result["is_dual_category"] = m.group(1).strip().lower() in ("true", "是")
-    
-    rule_pat = re.compile(r'["\']?\s*((?:NV|N|V)\d+[_\u4e00-\u9fa5A-Za-z0-9]*)\s*["\']?\s*[:=]\s*(true|false|True|False|是|否|yes|no|符合|不符合)', re.IGNORECASE)
-    pos_blocks = {
-        "名词": re.search(r'["\']?名词["\']?\s*[:=]\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}', text, re.DOTALL),
-        "动词": re.search(r'["\']?动词["\']?\s*[:=]\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}', text, re.DOTALL),
-        "名动词": re.search(r'["\']?名动词["\']?\s*[:=]\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}', text, re.DOTALL),
-    }
-    found_any = False
-    for pos, block_m in pos_blocks.items():
-        block_text = block_m.group(1) if block_m else text
-        for rm in rule_pat.finditer(block_text):
-            result["scores"][pos][rm.group(1).strip()] = rm.group(2).strip().lower() in ("true", "是", "yes", "符合")
-            found_any = True
-    if not found_any:
-        for rm in rule_pat.finditer(text):
-            k, v = rm.group(1).strip(), rm.group(2).strip().lower() in ("true", "是", "yes", "符合")
-            if k.upper().startswith("NV"): result["scores"]["名动词"][k] = v
-            elif k.upper().startswith("N"): result["scores"]["名词"][k] = v
-            elif k.upper().startswith("V"): result["scores"]["动词"][k] = v
-            found_any = True
-    return result if (found_any or result["predicted_pos"] != "未知") else None
-
-def extract_gemini_json(text: str) -> Tuple[Dict[str, Any], str]:
-    if not text: return None, text
-    cleaned = _clean_possible_markdown_json(text)
-    
-    obj = _parse_json_object_candidate(cleaned)
-    if isinstance(obj, dict) and ("scores" in obj or "predicted_pos" in obj): return obj, cleaned
-    
-    for candidate in _gemini_prefer_schema_objects(cleaned):
-        obj = _parse_json_object_candidate(candidate)
-        if isinstance(obj, dict) and any(k in obj for k in ("scores", "predicted_pos", "is_dual_category")): return obj, candidate
-        closed = _gemini_try_close_truncated(candidate)
-        if closed != candidate:
-            obj = _parse_json_object_candidate(closed)
-            if isinstance(obj, dict) and ("scores" in obj or "predicted_pos" in obj): return obj, closed
-            
-    for candidate in _iter_balanced_json_objects(cleaned):
-        obj = _parse_json_object_candidate(candidate)
-        if isinstance(obj, dict): return obj, candidate
-        closed = _gemini_try_close_truncated(candidate)
-        if closed != candidate:
-            obj = _parse_json_object_candidate(closed)
-            if isinstance(obj, dict): return obj, closed
-
-    salvaged = _gemini_regex_salvage_scores(cleaned)
-    if salvaged is not None: return salvaged, cleaned
-    return None, text
-
 def normalize_key(k: str, pos_rules: list) -> str:
     if not isinstance(k, str): return None
     k_clean = re.sub(r'[\s_]+', '', k).upper()
@@ -492,14 +530,16 @@ def map_to_allowed_score(rule: dict, raw_val) -> int:
             s = raw_val.strip().lower()
             if s in ("yes", "y", "true", "是", "√", "符合"): return match
             if s in ("no", "n", "false", "否", "×", "不符合"): return mismatch
-        if isinstance(raw_val, (int, float)): return match if int(raw_val) == match else mismatch
+        if isinstance(raw_val, (int, float)):
+            return match if int(raw_val) == match else mismatch
     except Exception: pass
     return mismatch
 
 def calculate_membership(scores_all: Dict[str, Dict[str, int]]) -> Dict[str, float]:
     membership = {}
     try:
-        for pos, scores in scores_all.items(): membership[pos] = max(-1.0, min(1.0, sum(scores.values()) / 100))
+        for pos, scores in scores_all.items():
+            membership[pos] = max(-1.0, min(1.0, sum(scores.values()) / 100))
     except Exception: pass
     return membership
 
@@ -511,12 +551,19 @@ def get_top_10_positions(membership: Dict[str, float]) -> List[Tuple[str, float]
 # LLM调用与词类判定主函数
 # ===============================
 def get_provider_config(provider, api_key, model, messages, max_tokens, temperature):
+    """统一构造各厂商请求配置。OpenAI 用 Responses API；Gemini/xAI 用 Chat Completions。"""
     if provider == "openai":
         url = os.getenv("OPENAI_RESPONSES_URL", "https://api.openai.com/v1/responses")
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        payload = {"model": model, "input": messages, "max_output_tokens": max_tokens}
+        payload = {
+            "model": model,
+            "input": messages,
+            "max_output_tokens": max_tokens,
+        }
+        # GPT-5.6 系列支持 reasoning_effort；批量词类判定使用 low，避免无谓增加成本。
         reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT", "low").strip().lower()
-        if reasoning_effort in {"none", "low", "medium", "high", "xhigh", "max"}: payload["reasoning"] = {"effort": reasoning_effort}
+        if reasoning_effort in {"none", "low", "medium", "high", "xhigh", "max"}:
+            payload["reasoning"] = {"effort": reasoning_effort}
         return url, headers, payload, "responses"
 
     base_urls = {
@@ -528,113 +575,211 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
     }
     url = f"{base_urls.get(provider, base_urls['deepseek']).rstrip('/')}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    payload = {"model": model, "messages": messages, "temperature": temperature, "stream": provider not in {"moonshot", "gemini"}}
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "stream": provider not in {"moonshot", "gemini"},
+    }
 
     if provider == "moonshot":
         payload.update({"max_tokens": 8192, "thinking": {"type": "disabled"}, "temperature": 0.6})
     elif provider == "xai":
+        # Grok 4.6 默认高推理；本项目以批量稳定性和速度为主，可通过环境变量调节。
         reasoning_effort = os.getenv("XAI_REASONING_EFFORT", "high").strip().lower()
-        if reasoning_effort in {"low", "medium", "high", "xhigh"}: payload["reasoning_effort"] = reasoning_effort
+        if reasoning_effort in {"low", "medium", "high", "xhigh"}:
+            payload["reasoning_effort"] = reasoning_effort
         payload["max_tokens"] = max_tokens
     elif provider == "gemini":
-        # ===== Gemini 专用兼容配置 =====
+        # ==================== Gemini 专用配置 ====================
+        # Gemini 3.x 是推理模型。输出预算太小时可能在完成可见文本前
+        # 就以 finish_reason=length 结束，因此只对 Gemini 提高预算。
         payload.pop("temperature", None)
-        payload["max_tokens"] = max(max_tokens, 8192)
-        # 注：为了彻底解决 gemini-3.8-flash 在强制使用 JSON / 强制关闭推理时导致兼容层崩盘返回空内容的问题，
-        # 我们这里完全摒弃 response_format="json_object" 与 reasoning_effort 参数。
-        # 依靠强正则和 prompt 单引号限制已经能 100% 精确捕获 JSON。
+        payload["max_tokens"] = max(max_tokens, 16384)
+
+        # Gemini OpenAI-compatible 接口支持 reasoning_effort。
+        payload["reasoning_effort"] = "low"
+
+        # 仅 Gemini 开启 JSON object 输出，降低 Markdown/前缀导致的解析失败概率。
+        payload["response_format"] = {"type": "json_object"}
     else:
         payload["max_tokens"] = max_tokens
     return url, headers, payload, "chat_completions"
 
 
+def _extract_openai_responses_text(body: Dict[str, Any]) -> str:
+    """解析 OpenAI Responses API 的 output_text / output.content.text。"""
+    if not isinstance(body, dict):
+        return ""
+    if isinstance(body.get("output_text"), str) and body["output_text"].strip():
+        return body["output_text"]
+    output = body.get("output")
+    if isinstance(output, list):
+        chunks = []
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content", [])
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        chunks.append(part["text"])
+        return "".join(chunks)
+    return ""
+
+
 def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, temperature=0.0, max_retries=3, show_ui=True):
-    if not _api_key: return False, {"error": "API Key 为空"}, "API Key 未提供"
-    url, headers, payload, api_style = get_provider_config(_provider, _api_key, _model, messages, max_tokens, temperature)
+    if not _api_key:
+        return False, {"error": "API Key 为空"}, "API Key 未提供"
+
+    url, headers, payload, api_style = get_provider_config(
+        _provider, _api_key, _model, messages, max_tokens, temperature
+    )
     streaming_placeholder = st.empty() if show_ui else None
     error_msg = ""
 
     for attempt in range(max_retries):
         try:
             if api_style == "responses":
+                # OpenAI Responses：非流式读取，解析稳定；不影响后台 Worker。
                 response = requests.post(url, headers=headers, json=payload, timeout=180)
                 if response.status_code != 200:
-                    try: detail = response.json()
-                    except Exception: detail = response.text
-                    if response.status_code == 404: error_msg = f"路径错误 (404)。请确保请求地址正确：{url}"
-                    elif response.status_code == 401: error_msg = "鉴权失败 (401)。"
-                    else: error_msg = f"API 请求错误 ({response.status_code})：{detail}"
-                    if response.status_code in [400, 401, 403]: break
+                    try:
+                        detail = response.json()
+                    except Exception:
+                        detail = response.text
+                    if response.status_code == 404:
+                        error_msg = f"路径错误 (404)。请确保请求地址正确：{url}"
+                    elif response.status_code == 401:
+                        error_msg = "OpenAI 鉴权失败 (401)。请检查 OPENAI_API_KEY。"
+                    elif response.status_code in [400, 403, 429]:
+                        error_msg = f"OpenAI 请求错误 ({response.status_code})：{detail}"
+                    else:
+                        error_msg = f"OpenAI API 错误: {response.status_code} - {detail}"
+                    if response.status_code in [400, 401, 403]:
+                        break
                     response.raise_for_status()
+
                 body = response.json()
-                text = body.get("output_text") or ("".join([p.get("text", "") for i in body.get("output", []) if isinstance(i, dict) for p in i.get("content", []) if isinstance(p, dict)]))
+                text = _extract_openai_responses_text(body)
                 if text:
-                    if streaming_placeholder: streaming_placeholder.empty()
-                    return True, {"choices": [{"message": {"content": text}}]}, ""
-                error_msg = "Responses API 未返回有效文本"
+                    if streaming_placeholder is not None:
+                        streaming_placeholder.empty()
+                    return True, {"choices": [{"message": {"content": text}}], "_raw_responses": body}, ""
+                error_msg = "OpenAI Responses API 未返回有效文本"
             else:
                 is_stream = bool(payload.get("stream", False))
                 with requests.post(url, headers=headers, json=payload, stream=is_stream, timeout=180) as response:
                     if response.status_code != 200:
-                        try: detail = response.json()
-                        except Exception: detail = response.text
-                        if response.status_code == 404: error_msg = f"路径错误 (404)"
-                        elif response.status_code == 401: error_msg = f"鉴权失败 (401)"
-                        else: error_msg = f"请求错误 ({response.status_code})：{detail}"
-                        if response.status_code in [400, 401, 403]: break
+                        try:
+                            detail = response.json()
+                        except Exception:
+                            detail = response.text
+                        if response.status_code == 404:
+                            error_msg = f"路径错误 (404)。请确保请求地址正确：{url}"
+                        elif response.status_code == 401:
+                            error_msg = f"{_provider.upper()} 鉴权失败 (401)。请检查 {_provider.upper()} API Key。"
+                        elif response.status_code in [400, 403, 429]:
+                            error_msg = f"{_provider.upper()} 请求错误 ({response.status_code})：{detail}"
+                        else:
+                            error_msg = f"API 错误: {response.status_code} - {detail}"
+                        if response.status_code in [400, 401, 403]:
+                            break
                         response.raise_for_status()
 
                     if not is_stream:
                         body = response.json()
+                        if _provider == "gemini":
+                            logger.info("Gemini 非流式原始响应摘要：%s", json.dumps(body, ensure_ascii=False)[:2000])
                         text = extract_text_from_response(body)
                         if text:
-                            if streaming_placeholder: streaming_placeholder.empty()
+                            if streaming_placeholder is not None:
+                                streaming_placeholder.empty()
                             return True, body, ""
-                        try: error_msg = f"{_provider.upper()} 接口未返回文本，响应摘要：{json.dumps(body, ensure_ascii=False)[:500]}"
-                        except Exception: error_msg = f"{_provider.upper()} 接口未返回文本"
+                        # 不要把整段响应直接扔掉；保留安全摘要，方便定位 Gemini/xAI 兼容层问题。
+                        try:
+                            safe_body = json.dumps(body, ensure_ascii=False)[:1200]
+                            error_msg = f"{_provider.upper()} 非流式接口未返回文本。响应摘要：{safe_body}"
+                        except Exception:
+                            error_msg = f"{_provider.upper()} 非流式接口未返回文本"
                     else:
                         full_content = ""
                         for line in response.iter_lines():
-                            if not line: continue
+                            if not line:
+                                continue
                             line_text = line.decode("utf-8", errors="ignore").strip()
-                            if not line_text.startswith("data:"): continue
+                            if not line_text.startswith("data:"):
+                                continue
                             json_str = line_text[5:].strip()
-                            if json_str == "[DONE]": break
+                            if json_str == "[DONE]":
+                                break
                             try:
                                 chunk = json.loads(json_str)
                                 if "choices" in chunk and chunk["choices"]:
-                                    full_content += (chunk["choices"][0].get("delta", {}) or {}).get("content", "") or ""
-                            except json.JSONDecodeError: continue
+                                    delta = chunk["choices"][0].get("delta", {}) or {}
+                                    delta_text = delta.get("content", "") or ""
+                                    if delta_text:
+                                        full_content += delta_text
+                            except json.JSONDecodeError:
+                                continue
+
                         if full_content:
-                            if streaming_placeholder: streaming_placeholder.empty()
+                            if streaming_placeholder is not None:
+                                streaming_placeholder.empty()
                             return True, {"choices": [{"message": {"content": full_content}}]}, ""
                         error_msg = "模型未返回有效内容"
-        except requests.RequestException as e: error_msg = f"网络请求异常: {str(e)}"
-        except Exception as e: error_msg = f"请求异常: {str(e)}"
-        if attempt < max_retries - 1: time.sleep(min(8, 2 ** attempt))
+        except requests.RequestException as e:
+            error_msg = f"网络请求异常（第{attempt + 1}次尝试）: {str(e)}"
+        except Exception as e:
+            error_msg = f"请求异常（第{attempt + 1}次尝试）: {str(e)}"
 
-    if streaming_placeholder: streaming_placeholder.empty()
+        if attempt < max_retries - 1:
+            time.sleep(min(8, 2 ** attempt))
+
+    if streaming_placeholder is not None:
+        streaming_placeholder.empty()
     return False, {"error": error_msg}, error_msg
 
 def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str, show_ui=True) -> Tuple[Dict[str, Dict[str, int]], str, str, str, bool]:
     if not word: return {}, "", "未知", "", False
     full_rules = {pos: "\n".join([f"- {r['name']}: {r['desc']}（符合: {r['match_score']} 分，不符合: {r['mismatch_score']} 分）" for r in rules]) for pos, rules in RULE_SETS.items()}
     
+    # Gemini 3.8 Flash 专用提示：保留“逐条规则 + 每条举例”的研究要求，
+    # 但明确要求“不要重复规则原文”，把 token 留给真正的判断依据和例句。
+    if provider == "gemini" and model == "gemini-3.8-flash":
+        explanation_instruction = """
+explanation 必须逐条覆盖全部规则（N1-N8、V1-V9、NV1-NV10）。每条规则都必须包含：
+① 简短判断依据；② 至少一个具体中文例句，或一个明确的搭配/替换例子。
+不要重复抄写规则名称或规则原文；只写“判断依据 + 例子”。
+例子应围绕当前词语，格式尽量简短，例如：“可说‘三次会议’，不能说‘很会议’”。
+"""
+    else:
+        explanation_instruction = """
+explanation 必须逐条覆盖全部规则（N1-N8、V1-V9、NV1-NV10）。每条规则说明判断依据并举例。
+不要大段重复规则原文。
+"""
+
     system_msg = f"""你是一名中文词法与语法方面的专家。现在要分析词语「{word}」在下列词类中的表现：
 - 需要判断的词类：名词、动词、名动词
 - 你只需要判断每一条规则是"符合"还是"不符合"，在 JSON 中的 scores 里给出 true / false，程序自动赋值。
 【名词】\n{full_rules["名词"]}\n【动词】\n{full_rules["动词"]}\n【名动词】\n{full_rules["名动词"]}
 输出要求：
-1. explanation: 逐条规则说明判断依据并举例（写在 JSON 的 explanation 字段中）。
-2. scores: 各规则对应 true/false。
+{explanation_instruction}
+2. scores: 各规则对应 true/false，必须覆盖全部规则，不能遗漏。
 3. predicted_pos: 选择最典型词类。
 4. is_dual_category: 是否属于兼类（true/false）。
+5. explanation、scores、predicted_pos、is_dual_category 都必须位于同一个 JSON 对象中。
 
-严格直接返回一段合法 JSON，不要输出任何 Markdown 外层文本或开场白。格式：
+严格直接返回一段合法 JSON，不要输出任何 Markdown 外层文本、代码块、前言或结语。
+不要重复规则原文；但不能省略任何规则的 explanation 和例子。
+格式：
 {{"explanation": "...", "predicted_pos": "...", "is_dual_category": true, "scores": {{"名词": {{...}}, "动词": {{...}}, "名动词": {{...}}}}}}"""
     
-    # 加入约束：杜绝双引号破坏 JSON 结构的情况
-    user_prompt = f"请分析词语「{word}」。只返回一个 JSON 对象；不要输出 Markdown、```、前言、结语或 JSON 之外的任何文字。所有解释文字必须放在 explanation 字段中（内部如有引用，请务必使用单引号，严禁使用双引号）。"
+    # 消除与 system_msg 的逻辑冲突
+    if provider == "gemini" and model == "gemini-3.8-flash":
+        user_prompt = f"请分析词语「{word}」。必须逐条给出全部规则的判断依据，并为每条规则提供一个简短、具体的中文例句或搭配例子；不要重复规则原文。只返回一个完整合法 JSON 对象。"
+    else:
+        user_prompt = f"请严格按照上述要求分析词语「{word}」，并将推理过程写入 JSON 的 explanation 字段中。直接输出合法 JSON。"
     
     with st.spinner(f"正在调用大模型 ({model}) 进行分析...") if show_ui else __import__("contextlib").nullcontext():
         ok, resp_json, err_msg = call_llm_api_cached(provider, model, api_key, [{"role": "system", "content": system_msg}, {"role": "user", "content": user_prompt}], show_ui=show_ui)
@@ -644,9 +789,10 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         return {}, f"调用失败: {err_msg}", "未知", f"失败: {err_msg}", False
 
     raw_text = extract_text_from_response(resp_json)
+
+    # Gemini 使用专用 JSON 提取器；其他模型完全保持原有解析逻辑。
     if provider == "gemini":
-        parsed_json, _ = extract_gemini_json(raw_text)
-        if parsed_json is None: parsed_json, _ = extract_json_from_text(raw_text)
+        parsed_json, _ = _extract_gemini_json(raw_text)
     else:
         parsed_json, _ = extract_json_from_text(raw_text)
     
@@ -656,19 +802,27 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         is_dual_category = parsed_json.get("is_dual_category", False)
         raw_scores = parsed_json.get("scores", {})
     else:
-        if show_ui: st.error("未能解析有效的 JSON。")
+        if show_ui:
+            if provider == "gemini":
+                st.error("Gemini 已返回内容，但未能解析为有效 JSON。请展开“模型原始响应”查看返回内容。")
+            else:
+                st.error("未能解析有效的 JSON。")
         return {}, raw_text, "未知", "JSON 解析失败", False
 
     scores_out = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
     for pos, rules in RULE_SETS.items():
         if pos in raw_scores and isinstance(raw_scores[pos], dict):
             for k, v in raw_scores[pos].items():
-                if norm_k := normalize_key(k, rules):
-                    scores_out[pos][norm_k] = map_to_allowed_score(next(r for r in rules if r["name"] == norm_k), v)
+                norm_k = normalize_key(k, rules)
+                if norm_k:
+                    rule_def = next(r for r in rules if r["name"] == norm_k)
+                    scores_out[pos][norm_k] = map_to_allowed_score(rule_def, v)
     return scores_out, raw_text, predicted_pos, explanation, is_dual_category
 
 def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
-    if not scores_norm: st.warning("无数据。"); return
+    if not scores_norm:
+        st.warning("无数据。")
+        return
     categories = list(scores_norm.keys()) + [list(scores_norm.keys())[0]]
     values = list(scores_norm.values()) + [list(scores_norm.values())[0]]
     fig = go.Figure(data=[go.Scatterpolar(r=values, theta=categories, fill="toself", hovertemplate='<b>%{theta}</b><br>隶属度: %{r:.4f}<extra></extra>')])
@@ -678,6 +832,7 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
 # ===============================
 # 独立进程批处理：Supervisor + Worker
 # ===============================
+
 def _write_job_state(state_file: Path, **updates):
     lock_path = state_file.with_suffix(state_file.suffix + '.state.lock')
     fd = None
@@ -685,21 +840,30 @@ def _write_job_state(state_file: Path, **updates):
         fd = _lock_file(lock_path, timeout=10, poll=0.1)
         current = {}
         if state_file.exists():
-            try: current = json.loads(state_file.read_text(encoding='utf-8'))
-            except Exception: pass
+            try:
+                current = json.loads(state_file.read_text(encoding='utf-8'))
+            except Exception as e:
+                logger.warning(f"读取任务状态失败，将以空状态继续：{type(e).__name__}: {e}")
         current.update(updates)
         current['updated_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
         tmp = state_file.with_suffix(state_file.suffix + '.tmp')
         tmp.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding='utf-8')
         os.replace(tmp, state_file)
         return True
-    except Exception as e: return False
+    except Exception as e:
+        logger.exception(f"写入任务状态失败: {state_file}: {e}")
+        return False
     finally:
-        if fd is not None: _unlock_file(lock_path, fd)
+        if fd is not None:
+            _unlock_file(lock_path, fd)
+
 
 def _load_job_state(state_file: Path):
-    try: return json.loads(state_file.read_text(encoding='utf-8')) if state_file.exists() else {}
-    except Exception: return {}
+    try:
+        return json.loads(state_file.read_text(encoding='utf-8')) if state_file.exists() else {}
+    except Exception as e:
+        return {}
+
 
 def _pid_alive(pid):
     if not pid: return False
@@ -712,111 +876,154 @@ def _pid_alive(pid):
     except PermissionError: return True
     except (ValueError, OSError): return False
 
+
 def _state_age_seconds(state):
     try:
-        if ts := state.get('updated_at'): return max(0, time.time() - time.mktime(time.strptime(ts, '%Y-%m-%d %H:%M:%S')))
-    except Exception: pass
-    return 0
+        ts = state.get('updated_at')
+        if not ts: return 0
+        return max(0, time.time() - time.mktime(time.strptime(ts, '%Y-%m-%d %H:%M:%S')))
+    except Exception:
+        return 0
+
 
 def _service_file(job_state_file: Path, suffix: str) -> Path:
     return job_state_file.with_name(job_state_file.stem + suffix)
 
+
 def _batch_worker(df_input, target_col, file_name, backup_file, provider, model, api_key, job_state_file):
     total_rows = len(df_input)
     state = _load_job_state(job_state_file)
-    start_row = int(state.get('next_row', 0)) if state and state.get('file_name') == file_name else 0
-    if start_row < 0 or start_row > total_rows: start_row = 0
+    start_row = int(state.get('next_row', 0)) if state else 0
+    if state.get('file_name') != file_name:
+        start_row = 0
+    if start_row < 0 or start_row > total_rows:
+        start_row = 0
 
     clean_csv_duplicates(backup_file)
-    _write_job_state(job_state_file, status='running', file_name=file_name, total_rows=total_rows, next_row=start_row, current_row=start_row, current_word='', retry_count=0, error='', completed_rows=start_row)
+    _write_job_state(
+        job_state_file,
+        status='running', file_name=file_name, total_rows=total_rows,
+        next_row=start_row, current_row=start_row, current_word='', retry_count=0,
+        error='', completed_rows=start_row
+    )
 
     while start_row < total_rows:
         index = start_row
         row_number = index + 1
+        
+        # 兼容处理 Excel 空行现象 (NaN)
         word_val = df_input.iloc[index][target_col]
         word = "" if pd.isna(word_val) else str(word_val).strip()
         task_id = _make_task_id(file_name, index)
 
-        if not word or is_task_processed(backup_file, task_id, row_number):
+        if not word:
             start_row = index + 1
-            _write_job_state(job_state_file, status='running', next_row=start_row, current_row=index, current_word=word, completed_rows=start_row, retry_count=0, error='')
+            _write_job_state(job_state_file, status='running', next_row=start_row,
+                             current_row=index, current_word='', completed_rows=start_row,
+                             retry_count=0, error='')
             continue
 
-        success, last_error, retry_count = False, '', 0
+        if is_task_processed(backup_file, task_id, row_number):
+            start_row = index + 1
+            _write_job_state(job_state_file, status='running', next_row=start_row,
+                             current_row=index, current_word=word, completed_rows=start_row,
+                             retry_count=0, error='检测到该 Excel 行已有结果，已跳过重复处理')
+            continue
+
+        success = False
+        last_error = ''
+        retry_count = 0
         scores, raw_text, pred_pos, explanation, is_dual_category = {}, '', '处理失败', '无响应', False
 
         while not success:
             retry_count += 1
-            _write_job_state(job_state_file, status='retrying' if retry_count > 1 else 'running', current_row=index, current_word=word, next_row=index, retry_count=retry_count, error=last_error, completed_rows=index)
+            _write_job_state(job_state_file,
+                             status='retrying' if retry_count > 1 else 'running',
+                             current_row=index, current_word=word, next_row=index,
+                             retry_count=retry_count, error=last_error, completed_rows=index)
             try:
-                scores, raw_text, pred_pos, explanation, is_dual_category = ask_model_for_pos_and_scores(word, provider, model, api_key, show_ui=False)
+                scores, raw_text, pred_pos, explanation, is_dual_category = ask_model_for_pos_and_scores(
+                    word, provider, model, api_key, show_ui=False
+                )
                 if scores:
                     success = True
                     break
-
-                if raw_text and str(raw_text).strip():
-                    last_error = explanation or '模型已返回内容，但本地 JSON 解析失败；已跳过本行避免重复消耗 token'
-                    logger.warning(f'第{row_number}行「{word}」本地 JSON 解析失败，原文前 500 字：{str(raw_text)[:500]}')
-                    scores = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
-                    pred_pos, explanation, is_dual_category, success = "解析失败", last_error, False, True
-                    break
-
-                last_error = explanation or '模型返回为空'
-                
-                # 防静默断连死循环：遇到连续不断地返回空内容时，强制跳出无限重试
-                if not raw_text or not str(raw_text).strip():
-                    if retry_count >= 5:
-                        logger.warning(f'第{row_number}行「{word}」连续 5 次返回空值，判定API断连/屏蔽，已强制跳过以保证批处理进度。')
-                        scores = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
-                        pred_pos, explanation, is_dual_category, success = "请求失败(持续空响应)", "API静默异常或响应持续为空", False, True
-                        break
-
+                last_error = explanation or '模型返回为空或 JSON 解析失败'
             except BaseException as e:
                 last_error = f'{type(e).__name__}: {e}'
                 logger.exception(f'Worker处理第{row_number}行失败：{word}')
 
             wait_seconds = min(60, max(2, 2 ** min(retry_count - 1, 5)))
-            _write_job_state(job_state_file, status='waiting_retry', current_row=index, current_word=word, next_row=index, retry_count=retry_count, error=last_error, retry_in_seconds=wait_seconds, completed_rows=index)
+            _write_job_state(job_state_file, status='waiting_retry', current_row=index,
+                             current_word=word, next_row=index, retry_count=retry_count,
+                             error=last_error, retry_in_seconds=wait_seconds, completed_rows=index)
             time.sleep(wait_seconds)
 
         membership = calculate_membership(scores)
         new_row = pd.DataFrame([{
-            '任务ID': task_id, '序数': row_number, '词语': word,
-            '动词': membership.get('动词', 0.0), '名词': membership.get('名词', 0.0), '名动词': membership.get('名动词', 0.0),
+            '任务ID': task_id,
+            '序数': row_number,
+            '词语': word,
+            '动词': membership.get('动词', 0.0),
+            '名词': membership.get('名词', 0.0),
+            '名动词': membership.get('名动词', 0.0),
             '差值/距离': round(abs(membership.get('动词', 0.0) - membership.get('名词', 0.0)), 4),
-            '预测词类': pred_pos, '是否兼类': '是' if is_dual_category else '否',
-            '模型提供商': provider, '模型': model, '原始响应': raw_text,
+            '预测词类': pred_pos,
+            '是否兼类': '是' if is_dual_category else '否',
+            '模型提供商': provider,
+            '模型': model,
+            '原始响应': raw_text,
             '时间戳': time.strftime('%Y-%m-%d %H:%M:%S')
         }])
 
-        _write_job_state(job_state_file, status='saving', current_row=index, current_word=word, next_row=index, completed_rows=index, retry_count=0, error='')
+        _write_job_state(job_state_file, status='saving', current_row=index,
+                         current_word=word, next_row=index, completed_rows=index,
+                         retry_count=0, error='')
         
         write_ok, write_detail, already_exists = append_unique_csv(new_row, backup_file, task_id)
-        save_retry = 0
-        while not write_ok:
-            save_retry += 1
-            _write_job_state(job_state_file, status='waiting_save_retry', current_row=index, current_word=word, next_row=index, completed_rows=index, retry_count=save_retry, error=write_detail, retry_in_seconds=min(30, max(2, 2 ** min(save_retry - 1, 4))))
-            time.sleep(min(30, max(2, 2 ** min(save_retry - 1, 4))))
-            write_ok, write_detail, already_exists = append_unique_csv(new_row, backup_file, task_id)
-        
-        start_row = index + 1
-        _write_job_state(job_state_file, status='running', current_row=index, current_word=word, next_row=start_row, completed_rows=start_row, retry_count=0, error=write_detail if already_exists else '')
+        if not write_ok:
+            save_retry = 0
+            while not write_ok:
+                save_retry += 1
+                _write_job_state(job_state_file, status='waiting_save_retry', current_row=index,
+                                 current_word=word, next_row=index, completed_rows=index,
+                                 retry_count=save_retry, error=write_detail,
+                                 retry_in_seconds=min(30, max(2, 2 ** min(save_retry - 1, 4))))
+                time.sleep(min(30, max(2, 2 ** min(save_retry - 1, 4))))
+                write_ok, write_detail, already_exists = append_unique_csv(new_row, backup_file, task_id)
+            _write_job_state(job_state_file, status='saving', current_row=index,
+                             current_word=word, next_row=index, completed_rows=index,
+                             retry_count=0, error='')
 
-    _write_job_state(job_state_file, status='completed', file_name=file_name, total_rows=total_rows, next_row=total_rows, completed_rows=total_rows, current_word='', retry_count=0, error='')
+        start_row = index + 1
+        _write_job_state(job_state_file, status='running', current_row=index,
+                         current_word=word, next_row=start_row, completed_rows=start_row,
+                         retry_count=0, error=write_detail if already_exists else '')
+
+    _write_job_state(job_state_file, status='completed', file_name=file_name,
+                     total_rows=total_rows, next_row=total_rows, completed_rows=total_rows,
+                     current_word='', retry_count=0, error='')
+
 
 def _worker_entry(job_state_file: Path):
     try:
         spec_file = _service_file(job_state_file, '.spec.json')
-        if not spec_file.exists(): raise FileNotFoundError(f'找不到任务配置文件：{spec_file}')
+        if not spec_file.exists():
+            raise FileNotFoundError(f'找不到任务配置文件：{spec_file}')
         spec = json.loads(spec_file.read_text(encoding='utf-8'))
         api_key = os.getenv(spec['env_var'], '')
-        if not api_key: raise RuntimeError(f"环境变量 {spec['env_var']} 未配置")
-        _batch_worker(pd.read_excel(Path(spec['input_file'])), spec['target_col'], spec['file_name'], Path(spec['backup_file']), spec['provider'], spec['model'], api_key, job_state_file)
+        if not api_key:
+            raise RuntimeError(f"环境变量 {spec['env_var']} 未配置")
+        df_input = pd.read_excel(Path(spec['input_file']))
+        _batch_worker(df_input, spec['target_col'], spec['file_name'], Path(spec['backup_file']),
+                      spec['provider'], spec['model'], api_key, job_state_file)
     except BaseException as e:
         detail = f'{type(e).__name__}: {e}\n{traceback.format_exc()}'
         logger.error(f'Worker致命退出：\n{detail}')
-        _write_job_state(job_state_file, status='failed', error=detail, worker_fatal_error=True)
+        _write_job_state(job_state_file, status='failed', error=detail,
+                         worker_fatal_error=True)
         raise
+
 
 def _acquire_pid_guard(lock_file: Path):
     try:
@@ -824,8 +1031,10 @@ def _acquire_pid_guard(lock_file: Path):
         os.write(fd, str(os.getpid()).encode('utf-8'))
         return fd
     except FileExistsError:
-        try: old_pid = int(lock_file.read_text(encoding='utf-8').strip())
-        except Exception: old_pid = 0
+        try:
+            old_pid = int(lock_file.read_text(encoding='utf-8').strip())
+        except Exception:
+            old_pid = 0
         if not _pid_alive(old_pid):
             try: lock_file.unlink()
             except FileNotFoundError: pass
@@ -834,14 +1043,18 @@ def _acquire_pid_guard(lock_file: Path):
             return fd
         raise RuntimeError(f'同一批次已有 Supervisor 在运行（PID {old_pid}）')
 
+
 def _release_pid_guard(lock_file: Path, fd):
     try: os.close(fd)
     finally:
         try: lock_file.unlink()
         except FileNotFoundError: pass
 
+
 def _supervisor_entry(job_state_file: Path):
-    supervisor_pid_file, worker_pid_file, supervisor_lock_file = _service_file(job_state_file, '.supervisor.pid'), _service_file(job_state_file, '.worker.pid'), _service_file(job_state_file, '.supervisor.lock')
+    supervisor_pid_file = _service_file(job_state_file, '.supervisor.pid')
+    worker_pid_file = _service_file(job_state_file, '.worker.pid')
+    supervisor_lock_file = _service_file(job_state_file, '.supervisor.lock')
     guard_fd = None
     try:
         guard_fd = _acquire_pid_guard(supervisor_lock_file)
@@ -850,12 +1063,18 @@ def _supervisor_entry(job_state_file: Path):
 
         while True:
             state = _load_job_state(job_state_file)
-            if state.get('status') in {'completed', 'cancelled'}: return
+            if state.get('status') == 'completed': return
+            if state.get('status') == 'cancelled': return
 
-            worker = spawn_detached([sys.executable, str(Path(__file__).resolve()), '--worker', str(job_state_file)], str(Path(__file__).resolve().parent))
+            worker = spawn_detached(
+                [sys.executable, str(Path(__file__).resolve()), '--worker', str(job_state_file)],
+                str(Path(__file__).resolve().parent)
+            )
             worker_pid_file.write_text(str(worker.pid), encoding='utf-8')
             restart_count += 1
-            _write_job_state(job_state_file, status='running', supervisor_pid=os.getpid(), worker_pid=worker.pid, supervisor_restart_count=restart_count, error='')
+            _write_job_state(job_state_file, status='running', supervisor_pid=os.getpid(),
+                             worker_pid=worker.pid, supervisor_restart_count=restart_count,
+                             error='')
 
             while True:
                 rc = worker.poll()
@@ -864,29 +1083,43 @@ def _supervisor_entry(job_state_file: Path):
                 if rc is not None: break
                 time.sleep(1)
 
-            detail = 'Worker正常退出，但任务状态未标记完成。将自动检查并继续。' if rc == 0 else f'Worker退出，状态码 {rc}。{("错误详情：" + str(_load_job_state(job_state_file).get("error"))) if _load_job_state(job_state_file).get("error") else "请查看日志。"}'
+            if rc == 0: detail = 'Worker正常退出，但任务状态未标记完成。将自动检查并继续。'
+            else: detail = f'Worker退出，状态码 {rc}。{("错误详情：" + str(_load_job_state(job_state_file).get("error"))) if _load_job_state(job_state_file).get("error") else "请查看日志。"}'
             delay = min(30, max(2, 2 ** min(restart_count - 1, 4)))
-            _write_job_state(job_state_file, status='supervisor_restarting', supervisor_pid=os.getpid(), worker_pid=None, supervisor_restart_count=restart_count, error=f'{detail} {delay} 秒后自动重启 Worker')
+            _write_job_state(job_state_file, status='supervisor_restarting', supervisor_pid=os.getpid(),
+                             worker_pid=None, supervisor_restart_count=restart_count,
+                             error=f'{detail} {delay} 秒后自动重启 Worker')
             time.sleep(delay)
     except BaseException as e:
         detail = f'Supervisor异常：{type(e).__name__}: {e}\n{traceback.format_exc()}'
         logger.error(detail)
-        _write_job_state(job_state_file, status='failed', supervisor_pid=os.getpid(), worker_pid=None, error=detail, supervisor_fatal_error=True)
+        _write_job_state(job_state_file, status='failed', supervisor_pid=os.getpid(),
+                         worker_pid=None, error=detail, supervisor_fatal_error=True)
         raise
     finally:
         for f in (supervisor_pid_file, worker_pid_file):
             try:
-                if f.exists() and f.read_text(encoding='utf-8').strip() in {'', str(os.getpid())}: f.unlink()
+                if f.exists() and f.read_text(encoding='utf-8').strip() in {'', str(os.getpid())}:
+                    f.unlink()
             except Exception: pass
-        if guard_fd is not None: _release_pid_guard(supervisor_lock_file, guard_fd)
+        if guard_fd is not None:
+            _release_pid_guard(supervisor_lock_file, guard_fd)
 
-def start_or_resume_batch_job(df_input, target_col, uploaded_file, file_name, backup_file, provider, model, env_var, job_state_file):
+
+def start_or_resume_batch_job(df_input, target_col, uploaded_file, file_name, backup_file,
+                              provider, model, env_var, job_state_file):
     state = _load_job_state(job_state_file)
-    if _pid_alive(state.get('supervisor_pid')): return False, state
+    if _pid_alive(state.get('supervisor_pid')):
+        return False, state
 
     spec = {
         'input_file': str(BASE_DIR / f"batch_input_{re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', job_state_file.stem)}.xlsx"),
-        'target_col': target_col, 'file_name': file_name, 'backup_file': str(backup_file), 'provider': provider, 'model': model, 'env_var': env_var
+        'target_col': target_col,
+        'file_name': file_name,
+        'backup_file': str(backup_file),
+        'provider': provider,
+        'model': model,
+        'env_var': env_var
     }
     Path(spec['input_file']).write_bytes(uploaded_file.getvalue())
     spec_tmp = _service_file(job_state_file, '.spec.json.tmp')
@@ -894,75 +1127,119 @@ def start_or_resume_batch_job(df_input, target_col, uploaded_file, file_name, ba
     os.replace(spec_tmp, _service_file(job_state_file, '.spec.json'))
 
     resume_row = int(state.get('next_row', 0)) if state.get('file_name') == file_name else 0
-    _write_job_state(job_state_file, status='starting', file_name=file_name, total_rows=len(df_input), next_row=resume_row, completed_rows=resume_row, current_row=max(0, resume_row - 1), current_word='', retry_count=0, error='')
+    _write_job_state(job_state_file, status='starting', file_name=file_name,
+                     total_rows=len(df_input), next_row=resume_row, completed_rows=resume_row,
+                     current_row=max(0, resume_row - 1), current_word='', retry_count=0, error='')
 
     try:
-        proc = spawn_detached([sys.executable, str(Path(__file__).resolve()), '--supervisor', str(job_state_file)], str(Path(__file__).resolve().parent))
+        proc = spawn_detached([sys.executable, str(Path(__file__).resolve()), '--supervisor', str(job_state_file)],
+                              str(Path(__file__).resolve().parent))
     except Exception as e:
-        _write_job_state(job_state_file, status='failed', error=f'启动 Supervisor 失败：{type(e).__name__}: {e}')
+        detail = f'启动 Supervisor 失败：{type(e).__name__}: {e}'
+        _write_job_state(job_state_file, status='failed', error=detail)
         raise
 
-    _write_job_state(job_state_file, status='starting', supervisor_pid=proc.pid, worker_pid=None, error='Supervisor 已启动，等待 Worker')
+    _write_job_state(job_state_file, status='starting', supervisor_pid=proc.pid,
+                     worker_pid=None, error='Supervisor 已启动，等待 Worker')
     return True, _load_job_state(job_state_file)
+
 
 def _auto_recover_if_needed(job_state_file: Path):
     state = _load_job_state(job_state_file)
     active_statuses = {'running', 'retrying', 'waiting_retry', 'saving', 'waiting_save_retry', 'starting', 'supervisor_restarting'}
-    if state.get('status') not in active_statuses or _pid_alive(state.get('supervisor_pid')): return state
-    try:
-        if _pid_alive(int(_service_file(job_state_file, '.supervisor.pid').read_text(encoding='utf-8').strip())): return state
-    except Exception: pass
-    if state.get('status') == 'starting' and _state_age_seconds(state) < 15: return state
-    if not _service_file(job_state_file, '.spec.json').exists(): return state
+    if state.get('status') not in active_statuses: return state
+    if _pid_alive(state.get('supervisor_pid')): return state
 
     try:
-        proc = spawn_detached([sys.executable, str(Path(__file__).resolve()), '--supervisor', str(job_state_file)], str(Path(__file__).resolve().parent))
-        _write_job_state(job_state_file, status='starting', supervisor_pid=proc.pid, worker_pid=None, error='检测到 Supervisor 已退出，系统正在自动重新启动并接续任务')
+        pid_text = _service_file(job_state_file, '.supervisor.pid').read_text(encoding='utf-8').strip()
+        if _pid_alive(int(pid_text)): return state
+    except Exception: pass
+
+    if state.get('status') == 'starting' and _state_age_seconds(state) < 15: return state
+    spec_file = _service_file(job_state_file, '.spec.json')
+    if not spec_file.exists(): return state
+
+    try:
+        proc = spawn_detached([sys.executable, str(Path(__file__).resolve()), '--supervisor', str(job_state_file)],
+                              str(Path(__file__).resolve().parent))
+        _write_job_state(job_state_file, status='starting', supervisor_pid=proc.pid, worker_pid=None,
+                         error='检测到 Supervisor 已退出，系统正在自动重新启动并接续任务')
         return _load_job_state(job_state_file)
     except Exception as e:
-        _write_job_state(job_state_file, status='failed', error=f'自动恢复 Supervisor 失败：{type(e).__name__}: {e}')
+        detail = f'自动恢复 Supervisor 失败：{type(e).__name__}: {e}'
+        _write_job_state(job_state_file, status='failed', error=detail)
         return _load_job_state(job_state_file)
 
+
+# ----------------------------------------------------------------------
+# 实时UI刷新组件（将所有状态同步绑定在一个片段内，杜绝延迟和不同步问题）
+# ----------------------------------------------------------------------
 def render_live_monitor(job_state_file: Path, backup_file: Path, total_rows_default: int):
     latest_state = _auto_recover_if_needed(job_state_file)
     total = int(latest_state.get("total_rows", total_rows_default) or total_rows_default)
     completed = int(latest_state.get("completed_rows", latest_state.get("next_row", 0)) or 0)
-    status_str, error_str = str(latest_state.get("status", "")), str(latest_state.get("error", ""))
+    status_str = str(latest_state.get("status", ""))
+    error_str = str(latest_state.get("error", ""))
 
-    live_df = None; count = 0
+    live_df = None
+    count = 0
     if backup_file.exists():
-        try: live_df = pd.read_csv(backup_file, encoding='utf-8-sig'); count = len(live_df)
-        except Exception: pass
+        try:
+            live_df = pd.read_csv(backup_file, encoding='utf-8-sig')
+            count = len(live_df)
+        except Exception:
+            pass
             
+    # 1. 顶部统计 & 下载
     c1, c2 = st.columns([3, 1])
-    with c1: st.metric("已存数据量 (完美去重排序)", f"{count} 条")
+    with c1:
+        st.metric("已存数据量 (完美去重排序)", f"{count} 条")
     with c2:
         if live_df is not None and count > 0:
+            csv_data = live_df.to_csv(index=False, encoding='utf-8-sig')
             model_slug = re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', str(live_df.iloc[0].get('模型', 'model')) if '模型' in live_df.columns else 'model')
-            st.download_button("下载完整结果(CSV)", data=live_df.to_csv(index=False, encoding='utf-8-sig'), file_name=f"{st.session_state.project_code}_{model_slug}_results_{time.strftime('%Y%m%d')}.csv", mime="text/csv", use_container_width=True)
-        else: st.button("下载结果 (无数据)", disabled=True, use_container_width=True)
+            st.download_button(
+                "下载完整结果(CSV)",
+                data=csv_data,
+                file_name=f"{st.session_state.project_code}_{model_slug}_results_{time.strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        else:
+            st.button("下载结果 (无数据)", disabled=True, use_container_width=True)
 
+    # 2. 进度条
     st.progress(min(1.0, max(0.0, completed / total)) if total else 0.0)
 
+    # 3. 运行状态
     if status_str in {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "supervisor_restarting"}:
         spinner_text = {"starting": "启动任务中…", "retrying": "调用失败自动重试中…", "waiting_retry": "等待重试…", "saving": "安全排序并覆盖保存中…", "supervisor_restarting": "断流重连中…"}.get(status_str, "任务正常运行中…")
         details = f"第 {min(int(latest_state.get('current_row', 0)) + 1, total)}/{total} 行 · 当前词语「{latest_state.get('current_word', '')}」"
-        if latest_state.get("retry_count", 0): details += f" · 重试 {latest_state.get('retry_count')} 次"
+        if latest_state.get("retry_count", 0):
+            details += f" · 重试 {latest_state.get('retry_count')} 次"
         status_html = f'<div class="running-status"><span class="running-spinner"></span><div style="flex:1"><div style="font-size:1rem;font-weight:700">{spinner_text}</div><div class="batch-detail">{details}</div>'
-        if error_str: status_html += f'<div class="batch-detail" style="color: #ef4444;">提示：{error_str}</div>'
+        if error_str:
+            status_html += f'<div class="batch-detail" style="color: #ef4444;">提示：{error_str}</div>'
         status_html += '</div></div>'
         st.markdown(status_html, unsafe_allow_html=True)
-    elif status_str == "completed": st.success(f"🎉 任务全部完毕，共 {total} 条。")
-    elif status_str == "failed": st.error(f"❌ 任务停止：{error_str or '未记录到具体异常，请查看 process_log.log。'}")
-    else: st.info("尚未运行。点击上方“开始处理 / 继续任务”即可启动队列。")
+    elif status_str == "completed":
+        st.success(f"🎉 任务全部完毕，共 {total} 条。")
+    elif status_str == "failed":
+        st.error(f"❌ 任务停止：{error_str or '未记录到具体异常，请查看 process_log.log。'}")
+    else:
+        st.info("尚未运行。点击上方“开始处理 / 继续任务”即可启动队列。")
 
+    # 4. 实时数据表 (展示全部数据)
     st.markdown("#### 实时结果预览 (全部数据，最新结果在最上方)")
     if live_df is not None and count > 0:
         if '序数' in live_df.columns:
             live_df['序数_num'] = pd.to_numeric(live_df['序数'], errors='coerce')
             live_df = live_df.sort_values('序数_num').drop(columns=['序数_num'])
-        st.dataframe(live_df.iloc[::-1], use_container_width=True, height=400)
-    else: st.info("暂无数据。任务开启后实时数据将在此严格依序显示。")
+        # 取消 tail(100) 限制，仅倒序排列展示全部数据
+        display_df = live_df.iloc[::-1] 
+        st.dataframe(display_df, use_container_width=True, height=400)
+    else:
+        st.info("暂无数据。任务开启后实时数据将在此严格依序显示。")
 
 
 def main():
@@ -1001,7 +1278,8 @@ def main():
                 )
         with col2:
             st.markdown('<div class="section-title"><span class="icon-dot"></span> 实验配置</div>', unsafe_allow_html=True)
-            if selected_model_info.get("provider") in {"openai", "gemini", "xai"}: st.caption("国外模型数据将按“批次 + 模型”独立保存，可分别跑出数据后横向比较。")
+            if selected_model_info.get("provider") in {"openai", "gemini", "xai"}:
+                st.caption("国外模型数据将按“批次 + 模型”独立保存，可分别跑出 Gemini / ChatGPT / Grok 数据后进行横向比较。")
             st.session_state.project_code = st.text_input("实验批次码 (Project Code)", value=st.session_state.get("project_code", "default_task"), help="隔离不同量化分析任务")
             BACKUP_FILE, PROGRESS_FILE = get_project_files(st.session_state.project_code, selected_model_info.get("model", "default_model"))
         with col3:
@@ -1009,10 +1287,21 @@ def main():
             st.write("")
             if st.button("测试模型链接", type="secondary", use_container_width=True, disabled=not selected_model_info["api_key"]):
                 with st.spinner("正在测试连接..."):
-                    test_provider = selected_model_info["provider"]
-                    test_max_tokens = 4096 if test_provider == "gemini" else 100
-                    test_prompt = "请只输出 pong，不要输出 Markdown 或其他文字。" if test_provider == "gemini" else "请回复'pong'"
-                    ok, _, err_msg = call_llm_api_cached(test_provider, selected_model_info["model"], selected_model_info["api_key"], [{"role": "user", "content": test_prompt}], max_tokens=test_max_tokens)
+                    # 仅 Gemini 使用更充足的输出预算；其他模型保持原来的 10。
+                    if selected_model_info.get("provider") == "gemini":
+                        test_prompt = '只返回合法 JSON：{"pong": true}'
+                        test_max_tokens = 1024
+                    else:
+                        test_prompt = "请回复'pong'"
+                        test_max_tokens = 10
+
+                    ok, _, err_msg = call_llm_api_cached(
+                        selected_model_info["provider"],
+                        selected_model_info["model"],
+                        selected_model_info["api_key"],
+                        [{"role": "user", "content": test_prompt}],
+                        max_tokens=test_max_tokens
+                    )
                 if ok: st.success("成功！")
                 else: st.error(f"失败: {err_msg}")
 
@@ -1059,12 +1348,18 @@ def main():
                         st.code(raw_text, language="text")
 
     with tab2:
+        # 将静态按钮与实时刷新组件严格分离
         st.markdown(f'<div class="section-title"><span class="icon-dot"></span> 批量任务管理 (当前批次: <code>{st.session_state.project_code}</code>)</div>', unsafe_allow_html=True)
         col_c1, col_c2 = st.columns([3, 1])
         with col_c2:
+            # 清空缓存被放在外侧，以防止和 fragment 内的自动重刷发生冲突
             if st.button("清空本批次记录", use_container_width=True, type="secondary"):
                 if os.path.exists(BACKUP_FILE):
-                    try: os.remove(BACKUP_FILE); st.success(f"已清空批次 {st.session_state.project_code} 记录"); time.sleep(0.5); st.rerun()
+                    try:
+                        os.remove(BACKUP_FILE)
+                        st.success(f"已清空批次 {st.session_state.project_code} 记录")
+                        time.sleep(0.5)
+                        st.rerun()
                     except Exception as e: st.error(f"清空失败: {e}")
 
         st.divider()
@@ -1089,19 +1384,27 @@ def main():
                         else:
                             try:
                                 started, state = start_or_resume_batch_job(df_input, target_col, uploaded_file, f"{st.session_state.project_code}_{uploaded_file.name}", BACKUP_FILE, selected_model_info["provider"], selected_model_info["model"], selected_model_info["env_var"], job_state_file)
-                                if started: st.success("守护任务已启动，将在后台持续处理并自动恢复。"); time.sleep(0.5); st.rerun()
+                                if started: 
+                                    st.success("守护任务已启动，将在后台持续处理并自动恢复。")
+                                    time.sleep(0.5)
+                                    st.rerun()
                             except Exception as e: st.error(f"启动失败：{e}")
 
                     st.divider()
                     
+                    # 使用 @st.fragment 将所有需刷新的指标统统打包，确保每次读取CSV时进度条和表格完美同步
                     if hasattr(st, "fragment"):
                         @st.fragment(run_every="2s")
-                        def _live_batch_status_view(): render_live_monitor(job_state_file, BACKUP_FILE, len(df_input))
+                        def _live_batch_status_view():
+                            render_live_monitor(job_state_file, BACKUP_FILE, len(df_input))
                         _live_batch_status_view()
                     else:
                         render_live_monitor(job_state_file, BACKUP_FILE, len(df_input))
-                else: st.error("未在表格中识别到包含 '词' 或 'word' 字段的目标列")
-            except Exception as e: st.error(f"读取Excel文件失败: {e}")
+
+                else: 
+                    st.error("未在表格中识别到包含 '词' 或 'word' 字段的目标列")
+            except Exception as e: 
+                st.error(f"读取Excel文件失败: {e}")
 
 if __name__ == "__main__":
     if "--worker" in sys.argv: _worker_entry(Path(sys.argv[sys.argv.index("--worker") + 1]))
