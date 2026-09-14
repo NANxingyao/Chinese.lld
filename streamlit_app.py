@@ -15,7 +15,7 @@ from pathlib import Path
 
 SERVICE_MODE = "--worker" in sys.argv or "--supervisor" in sys.argv
 # 版本戳：若界面/日志看不到此字符串，说明仍在跑旧进程，必须 kill 后重启
-CODE_VERSION = "2026-09-14-unlock-start-btn-v7"
+CODE_VERSION = "2026-09-14-mistral-v1"
 
 # Gemini 原生 responseSchema：把输出格式锁死为固定 JSON（短规则码 + boolean）
 # normalize_key 可将 N1/V1/NV1 映射回完整规则名
@@ -247,7 +247,6 @@ MODEL_OPTIONS = {
     },
 
     # ===================== 国外模型：OpenAI =====================
-    # ChatGPT 本身是产品名；API 实际调用的是 OpenAI 的 GPT 模型。
     "ChatGPT（GPT-5.6 Luna）": {
         "provider": "openai", "model": "gpt-5.6-luna",
         "api_key": os.getenv("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"
@@ -276,10 +275,19 @@ MODEL_OPTIONS = {
         "provider": "xai", "model": "grok-4.6",
         "api_key": os.getenv("XAI_API_KEY"), "env_var": "XAI_API_KEY"
     },
+
+    # ===================== 国外模型：Mistral（新增） =====================
+    "Mistral Large 3": {
+        "provider": "mistral",
+        "model": "mistral-large-2512",          # 官方 Large 3 模型 ID
+        "api_key": os.getenv("MISTRAL_API_KEY"),
+        "env_var": "MISTRAL_API_KEY"
+    },
 }
 
 AVAILABLE_MODEL_OPTIONS = {name: info for name, info in MODEL_OPTIONS.items() if info["api_key"]}
-if not AVAILABLE_MODEL_OPTIONS: AVAILABLE_MODEL_OPTIONS = MODEL_OPTIONS
+if not AVAILABLE_MODEL_OPTIONS:
+    AVAILABLE_MODEL_OPTIONS = MODEL_OPTIONS
 
 # ===============================
 # 安全操作辅助函数
@@ -294,7 +302,6 @@ def _lock_file(lock_path: Path, timeout=30, poll=0.2):
             return fd
         except FileExistsError:
             try:
-                # 死锁解脱：如果锁文件存在且已严重超时（例如强杀进程遗留），强行清理
                 if time.time() - os.path.getmtime(str(lock_path)) > timeout * 2:
                     os.unlink(str(lock_path))
             except Exception:
@@ -355,7 +362,6 @@ def clean_csv_duplicates(file_path: Path):
 def append_unique_csv(df: pd.DataFrame, file_path: Path, task_id: str, max_retries=30):
     """
     原子写入：读取原表合并新行 -> 严格按ID去重 -> 严格按序数重新排序 -> 原子覆盖写入。
-    彻底解决多进程读写导致的错序和重复。
     """
     lock_path = file_path.with_suffix(file_path.suffix + '.write.lock')
     last_error = ''
@@ -366,7 +372,6 @@ def append_unique_csv(df: pd.DataFrame, file_path: Path, task_id: str, max_retri
             if file_path.exists() and file_path.stat().st_size > 0:
                 existing_all = pd.read_csv(file_path, encoding='utf-8-sig')
 
-                # 兼容旧版本：旧 CSV 没有任务ID时，先补全ID列
                 if '任务ID' not in existing_all.columns:
                     if '序数' in existing_all.columns:
                         existing_all['任务ID'] = existing_all['序数'].apply(
@@ -375,7 +380,6 @@ def append_unique_csv(df: pd.DataFrame, file_path: Path, task_id: str, max_retri
                     else:
                         existing_all['任务ID'] = [f'legacy::index::{i+1}' for i in range(len(existing_all))]
 
-                # 如果明确已经存在最新结果，跳过
                 existing_ids = set(existing_all['任务ID'].astype(str).tolist())
                 if task_id in existing_ids:
                     return True, '该任务ID已经写入，跳过重复写入。', True
@@ -384,13 +388,11 @@ def append_unique_csv(df: pd.DataFrame, file_path: Path, task_id: str, max_retri
             else:
                 combined = df.copy()
 
-            # 强制剔除任何重复项并强制按序数排序
             if '序数' in combined.columns:
                 combined['序数_num'] = pd.to_numeric(combined['序数'], errors='coerce')
                 combined = combined.drop_duplicates(subset=['任务ID'], keep='last')
                 combined = combined.sort_values('序数_num').drop(columns=['序数_num'])
 
-            # 写入临时文件后覆盖，防止崩溃导致文件损坏
             tmp_path = file_path.with_suffix('.write.tmp')
             combined.to_csv(tmp_path, index=False, encoding='utf-8-sig')
             os.replace(tmp_path, file_path)
@@ -437,7 +439,7 @@ def spawn_detached(cmd, cwd):
 # 文本解析工具
 # ===============================
 def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
-    """兼容 OpenAI / Gemini / xAI 等返回结构，尽可能提取最终文本。"""
+    """兼容 OpenAI / Gemini / xAI / Mistral 等返回结构，尽可能提取最终文本。"""
     if not isinstance(resp_json, dict):
         return ""
     try:
@@ -454,7 +456,6 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
             if isinstance(content, str) and content.strip():
                 return content
             if isinstance(content, dict):
-                # 某些 Gemini/OpenAI 兼容层可能直接把结构化结果放入 content。
                 try:
                     return json.dumps(content, ensure_ascii=False)
                 except Exception:
@@ -463,7 +464,6 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
                 parts = []
                 for part in content:
                     if isinstance(part, dict):
-                        # Gemini 3.x 偶发：reasoning / thought 与 text 分 part
                         text = part.get("text") or part.get("content")
                         if isinstance(text, str) and text.strip():
                             parts.append(text)
@@ -471,18 +471,16 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
                         parts.append(part)
                 if parts:
                     return "".join(parts)
-            # 某些兼容层可能把文本放进 delta
             delta = choice.get("delta", {}) or {}
             delta_content = delta.get("content", "")
             if isinstance(delta_content, str) and delta_content.strip():
                 return delta_content
-            # Gemini Flash 偶发：最终 JSON 在 refusal / reasoning 之外的扩展字段
             for alt_key in ("reasoning_content", "reasoning", "output_text", "text"):
                 alt = message.get(alt_key)
                 if isinstance(alt, str) and alt.strip() and ("{" in alt or "scores" in alt.lower()):
                     return alt
 
-        # Gemini 原生/代理偶见结构：candidates[].content.parts[].text
+        # Gemini 原生结构
         candidates = resp_json.get("candidates")
         if isinstance(candidates, list):
             parts = []
@@ -499,23 +497,17 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
         return ""
 
 def _clean_possible_markdown_json(text: str) -> str:
-    """清理 Gemini 常见的 Markdown/不可见字符，但不破坏 JSON 内部文本。"""
     if not text:
         return ""
     cleaned = str(text)
     cleaned = cleaned.replace("\ufeff", "").replace("\u200b", "").replace("\u2060", "")
     cleaned = cleaned.strip()
-
-    # 去除首尾 Markdown JSON 代码围栏
     cleaned = re.sub(r"^\s*```(?:json|JSON|javascript|js)?\s*", "", cleaned)
     cleaned = re.sub(r"\s*```\s*$", "", cleaned)
     return cleaned.strip()
 
 
 def _repair_json_candidate(candidate: str) -> str:
-    """对已经定位到的 JSON 对象做最小侵入式修复。
-    重点处理：字符串中的真实换行/制表符、尾逗号、Markdown 残留、中文弯引号。
-    """
     if not candidate:
         return candidate
 
@@ -523,16 +515,13 @@ def _repair_json_candidate(candidate: str) -> str:
     candidate = re.sub(r"^\s*```(?:json|JSON)?\s*", "", candidate)
     candidate = re.sub(r"\s*```\s*$", "", candidate).strip()
 
-    # 常见中文/弯引号 → 标准 JSON 双引号（对 Gemini 更稳）
     candidate = (candidate
                  .replace("\u201c", '"').replace("\u201d", '"')
                  .replace("\u2018", "'").replace("\u2019", "'")
                  .replace("「", '"').replace("」", '"'))
 
-    # 去除对象/数组结尾前的尾逗号：{"a": 1,} / [1,]
     candidate = re.sub(r",\s*([}\]])", r"\1", candidate)
 
-    # JSON 字符串内若出现真实控制字符，转成合法 JSON 转义。
     out = []
     in_string = False
     escaped = False
@@ -570,7 +559,6 @@ def _repair_json_candidate(candidate: str) -> str:
 
 
 def _iter_balanced_json_objects(text: str):
-    """按 JSON 字符串语义寻找完整 {...} 对象，避免简单 find/rfind 误截取。"""
     if not text:
         return
     n = len(text)
@@ -602,7 +590,6 @@ def _iter_balanced_json_objects(text: str):
 
 
 def _parse_json_object_candidate(candidate: str):
-    """严格解析 -> 最小修复后解析。"""
     try:
         obj = json.loads(candidate, strict=False)
         if isinstance(obj, dict):
@@ -621,20 +608,15 @@ def _parse_json_object_candidate(candidate: str):
 
 
 def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
-    """通用 JSON 提取器。
-    保留原有模型兼容性，同时解决代码块、前后说明、嵌套对象、控制字符和尾逗号问题。
-    """
     if not text:
         return None, text
 
     cleaned = _clean_possible_markdown_json(text)
 
-    # 1. 整段就是 JSON
     obj = _parse_json_object_candidate(cleaned)
     if isinstance(obj, dict):
         return obj, cleaned
 
-    # 2. 在任意位置寻找完整 JSON 对象
     for candidate in _iter_balanced_json_objects(cleaned):
         obj = _parse_json_object_candidate(candidate)
         if isinstance(obj, dict):
@@ -644,7 +626,6 @@ def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
 
 
 def _gemini_prefer_schema_objects(text: str):
-    """优先返回看起来像本任务 schema 的完整 JSON 对象（含 scores / predicted_pos）。"""
     preferred = []
     others = []
     for candidate in _iter_balanced_json_objects(text):
@@ -659,7 +640,6 @@ def _gemini_prefer_schema_objects(text: str):
 
 
 def _gemini_try_close_truncated(candidate: str) -> str:
-    """Gemini 长 explanation 偶发截断：尝试补全缺失的右括号。"""
     if not candidate:
         return candidate
     opens = candidate.count("{") - candidate.count("}")
@@ -669,13 +649,11 @@ def _gemini_try_close_truncated(candidate: str) -> str:
 
 
 def _truthy_token(s: str) -> bool:
-    """把各种『符合/不符合』写法统一成 bool。"""
     t = (s or "").strip().lower()
     if t in ("true", "yes", "y", "1", "是", "对", "符合", "√", "✓", "match", "positive"):
         return True
     if t in ("false", "no", "n", "0", "否", "不", "不符合", "×", "✗", "x", "mismatch", "negative"):
         return False
-    # 兜底：含“符合”且不含“不”视为 true
     if "不符合" in t or "不能" in t:
         return False
     if "符合" in t or "可以" in t:
@@ -684,9 +662,6 @@ def _truthy_token(s: str) -> bool:
 
 
 def _ultra_salvage_from_any_text(text: str) -> Dict[str, Any]:
-    """极宽松抢救：不管模型输出多乱，只要能抠出规则 true/false 或词类判断就返回。
-    目标：能解析出来就算成功，避免因格式问题判失败。
-    """
     if not text or not str(text).strip():
         return None
 
@@ -699,7 +674,6 @@ def _ultra_salvage_from_any_text(text: str) -> Dict[str, Any]:
     }
     found_any = False
 
-    # ---- predicted_pos：多种中英文写法 ----
     pos_patterns = [
         r'["\']?predicted_pos["\']?\s*[:=]\s*["\']?\s*(名动词|名词|动词)',
         r'预测词类\s*[：:=]\s*(名动词|名词|动词)',
@@ -714,7 +688,6 @@ def _ultra_salvage_from_any_text(text: str) -> Dict[str, Any]:
             found_any = True
             break
 
-    # ---- is_dual_category ----
     m = re.search(
         r'["\']?is_dual_category["\']?\s*[:=]\s*(true|false|True|False|是|否)|'
         r'(?:是否)?兼类\s*[：:=]?\s*(是|否|true|false)',
@@ -725,14 +698,11 @@ def _ultra_salvage_from_any_text(text: str) -> Dict[str, Any]:
         result["is_dual_category"] = val in ("true", "是")
         found_any = True
 
-    # ---- 规则分：兼容 N1 / N1_xxx / "N1_可受..." : true / 符合 ----
-    # 1) 标准 key: value
     rule_pat = re.compile(
         r'["\']?\s*((?:NV|N|V)\s*\d+[_\-\u4e00-\u9fa5A-Za-z0-9]*)\s*["\']?\s*[:=：]\s*'
         r'(true|false|True|False|是|否|yes|no|符合|不符合|√|×|✓|✗|1|0)',
         re.IGNORECASE
     )
-    # 2) 叙述式：N1 ... 符合/不符合
     narrative_pat = re.compile(
         r'((?:NV|N|V)\s*\d+)\s*[^。；;\n]{0,40}?(符合|不符合|可以|不能|是|否)',
         re.IGNORECASE
@@ -761,7 +731,6 @@ def _ultra_salvage_from_any_text(text: str) -> Dict[str, Any]:
             result["scores"][_bucket(key)][key] = is_match
             found_any = True
 
-    # ---- 按词类块再扫一遍（嵌套更深时）----
     for pos in ("名词", "动词", "名动词"):
         block_m = re.search(
             rf'["\']?{pos}["\']?\s*[:=：]\s*\{{(.*?)\}}',
@@ -776,12 +745,10 @@ def _ultra_salvage_from_any_text(text: str) -> Dict[str, Any]:
             result["scores"][pos][key] = is_match
             found_any = True
 
-    # 若完全抠不到任何信号，返回 None
     has_scores = any(result["scores"][p] for p in result["scores"])
     if not has_scores and result["predicted_pos"] == "未知":
         return None
 
-    # 没有 predicted_pos 时，用得分条目数粗略推断
     if result["predicted_pos"] == "未知" and has_scores:
         counts = {p: sum(1 for v in result["scores"][p].values() if v) for p in result["scores"]}
         best = max(counts, key=lambda k: counts[k])
@@ -792,46 +759,31 @@ def _ultra_salvage_from_any_text(text: str) -> Dict[str, Any]:
 
 
 def extract_gemini_json(text: str) -> Tuple[Dict[str, Any], str]:
-    """极宽松解析器：无论模型输出多乱，尽可能抠出可用结果。
-    策略顺序：
-      1. 清理 Markdown / 不可见字符
-      2. 标准 JSON loads
-      3. 截断补全后再 loads
-      4. 从文本任意位置找 JSON 对象
-      5. 极宽松正则抢救规则 true/false、词类、兼类
-    只要第 5 步能抠到一点信号就视为成功。
-    """
     if not text:
         return None, text
 
     cleaned = _clean_possible_markdown_json(text)
 
-    # 1) 整段尝试
     obj = _parse_json_object_candidate(cleaned)
     if isinstance(obj, dict) and ("scores" in obj or "predicted_pos" in obj or "is_dual_category" in obj):
         return obj, cleaned
 
-    # 2) 优先 schema 相关对象 + 截断补全
     for candidate in _gemini_prefer_schema_objects(cleaned):
         for cand in (candidate, _gemini_try_close_truncated(candidate)):
             obj = _parse_json_object_candidate(cand)
             if isinstance(obj, dict) and ("scores" in obj or "predicted_pos" in obj or "is_dual_category" in obj):
                 return obj, cand
 
-    # 3) 任意 balanced 对象
     for candidate in _iter_balanced_json_objects(cleaned):
         for cand in (candidate, _gemini_try_close_truncated(candidate)):
             obj = _parse_json_object_candidate(cand)
             if isinstance(obj, dict):
-                # 即使没有 scores 字段，只要有嵌套 dict 也先返回，后面 ask_model 会映射
                 return obj, cand
 
-    # 4) 把全文当“半结构化文本”极宽松抢救
     salvaged = _ultra_salvage_from_any_text(cleaned)
     if salvaged is not None:
         return salvaged, cleaned
 
-    # 5) 对原始未清理文本再抢救一次（防止清理误伤）
     salvaged = _ultra_salvage_from_any_text(text)
     if salvaged is not None:
         return salvaged, text
@@ -842,11 +794,9 @@ def normalize_key(k: str, pos_rules: list) -> str:
     if not isinstance(k, str):
         return None
     k_clean = re.sub(r'[\s_]+', '', k).upper()
-    # 1) 全名完全匹配
     for r in pos_rules:
         if re.sub(r'[\s_]+', '', r["name"]).upper() == k_clean:
             return r["name"]
-    # 2) 短码精确匹配（N1/V6/NV10），按码长度从长到短，避免 NV1 误匹配 NV10
     code_hits = []
     for r in pos_rules:
         code_match = re.match(r'^(NV\d+|N\d+|V\d+)', re.sub(r'[\s_]+', '', r["name"]).upper())
@@ -891,7 +841,7 @@ def get_top_10_positions(membership: Dict[str, float]) -> List[Tuple[str, float]
 # LLM调用与词类判定主函数
 # ===============================
 def get_provider_config(provider, api_key, model, messages, max_tokens, temperature):
-    """统一构造各厂商请求配置。OpenAI 用 Responses API；Gemini/xAI 用 Chat Completions。"""
+    """统一构造各厂商请求配置。"""
     if provider == "openai":
         url = os.getenv("OPENAI_RESPONSES_URL", "https://api.openai.com/v1/responses")
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -900,13 +850,11 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
             "input": messages,
             "max_output_tokens": max_tokens,
         }
-        # GPT-5.6 系列支持 reasoning_effort；批量词类判定使用 low，避免无谓增加成本。
         reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT", "low").strip().lower()
         if reasoning_effort in {"none", "low", "medium", "high", "xhigh", "max"}:
             payload["reasoning"] = {"effort": reasoning_effort}
         return url, headers, payload, "responses"
 
-    # ===== Gemini：官方 generateContent + 固定 responseSchema（输出格式锁死）=====
     if provider == "gemini":
         native_base = os.getenv(
             "GEMINI_NATIVE_BASE_URL",
@@ -946,11 +894,13 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
             }
         return url, headers, payload, "gemini_native"
 
+    # ===== OpenAI 兼容接口（DeepSeek / Moonshot / Qwen / xAI / Mistral）=====
     base_urls = {
         "deepseek": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
         "moonshot": os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1"),
-        "qwen": os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-        "xai": os.getenv("XAI_BASE_URL", "https://api.x.ai/v1"),
+        "qwen":     os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        "xai":      os.getenv("XAI_BASE_URL", "https://api.x.ai/v1"),
+        "mistral":  os.getenv("MISTRAL_BASE_URL", "https://api.mistral.ai/v1"),  # 新增
     }
     url = f"{base_urls.get(provider, base_urls['deepseek']).rstrip('/')}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -969,12 +919,13 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
             payload["reasoning_effort"] = reasoning_effort
         payload["max_tokens"] = max_tokens
     else:
+        # deepseek / qwen / mistral
         payload["max_tokens"] = max_tokens
+
     return url, headers, payload, "chat_completions"
 
 
 def _extract_openai_responses_text(body: Dict[str, Any]) -> str:
-    """解析 OpenAI Responses API 的 output_text / output.content.text。"""
     if not isinstance(body, dict):
         return ""
     if isinstance(body.get("output_text"), str) and body["output_text"].strip():
@@ -1007,7 +958,6 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
     for attempt in range(max_retries):
         try:
             if api_style == "gemini_native":
-                # 官方 generateContent + responseMimeType=application/json
                 response = requests.post(url, headers=headers, json=payload, timeout=180)
                 if response.status_code != 200:
                     try:
@@ -1026,14 +976,12 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
                         error_msg = f"Gemini API 错误: {response.status_code} - {detail}"
                     if response.status_code in [400, 401, 403]:
                         break
-                    # 429 等可重试错误：抛出让外层退避
                     response.raise_for_status()
 
                 body = response.json()
                 logger.info("Gemini native 响应摘要：%s", json.dumps(body, ensure_ascii=False)[:2000])
                 text = extract_text_from_response(body)
                 if not text:
-                    # native 结构兜底
                     try:
                         parts = (((body.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
                         text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
@@ -1046,7 +994,6 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
                 error_msg = f"Gemini native 未返回文本。摘要：{json.dumps(body, ensure_ascii=False)[:800]}"
 
             elif api_style == "responses":
-                # OpenAI Responses：非流式读取，解析稳定；不影响后台 Worker。
                 response = requests.post(url, headers=headers, json=payload, timeout=180)
                 if response.status_code != 200:
                     try:
@@ -1094,14 +1041,11 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
 
                     if not is_stream:
                         body = response.json()
-                        if _provider == "gemini":
-                            logger.info("Gemini 非流式原始响应摘要：%s", json.dumps(body, ensure_ascii=False)[:2000])
                         text = extract_text_from_response(body)
                         if text:
                             if streaming_placeholder is not None:
                                 streaming_placeholder.empty()
                             return True, body, ""
-                        # 不要把整段响应直接扔掉；保留安全摘要，方便定位 Gemini/xAI 兼容层问题。
                         try:
                             safe_body = json.dumps(body, ensure_ascii=False)[:1200]
                             error_msg = f"{_provider.upper()} 非流式接口未返回文本。响应摘要：{safe_body}"
@@ -1153,8 +1097,6 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     is_gemini_flash = is_gemini and "flash" in str(model).lower()
 
     if is_gemini:
-        # 与 GEMINI_FIXED_SCHEMA 完全对齐：规则只用短码 N1/V1/NV1 ... 值为 true/false
-        # 服务端 responseSchema 会强制输出该结构，本地只需 normalize_key 映射回全名
         def _short_rules(pos):
             lines = []
             for r in RULE_SETS[pos]:
@@ -1194,7 +1136,6 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 {{"explanation": "...", "predicted_pos": "...", "is_dual_category": true, "scores": {{"名词": {{...}}, "动词": {{...}}, "名动词": {{...}}}}}}"""
         user_prompt = f"请分析词语「{word}」。只返回一个 JSON 对象；不要输出 Markdown、```、前言、结语或 JSON 之外的任何文字。所有解释文字必须放在 explanation 字段中。"
 
-    # Flash：接口层也只尝试 1 次，避免 call_llm 内部再连打 3 次浪费 token
     api_retries = 1 if is_gemini_flash else 3
     with st.spinner(f"正在调用大模型 ({model}) 进行分析...") if show_ui else __import__("contextlib").nullcontext():
         ok, resp_json, err_msg = call_llm_api_cached(
@@ -1205,18 +1146,15 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         
     if not ok:
         if show_ui: st.error(f"模型调用失败: {err_msg}")
-        # Gemini Flash：即使接口失败也返回占位 scores，避免 Worker 再重入调用
         if is_gemini_flash:
             empty_scores = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
             return empty_scores, f"调用失败: {err_msg}", "调用失败", f"失败: {err_msg}", False
         return {}, f"调用失败: {err_msg}", "未知", f"失败: {err_msg}", False
 
     raw_text = extract_text_from_response(resp_json)
-    # 若标准提取为空，再从整包响应里深挖一次（Flash 偶发 content=null）
     if (not raw_text or not str(raw_text).strip()) and provider == "gemini":
         try:
             blob = json.dumps(resp_json, ensure_ascii=False)
-            # 从整包里找第一段看起来像 JSON 对象的文本
             for candidate in _iter_balanced_json_objects(blob):
                 if "scores" in candidate or "predicted_pos" in candidate:
                     raw_text = candidate
@@ -1226,7 +1164,6 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         except Exception:
             pass
 
-    # 解析策略：标准 JSON → 极宽松抢救（适用于任何乱七八糟输出）
     if provider == "gemini":
         parsed_json, _ = extract_gemini_json(raw_text)
         if parsed_json is None:
@@ -1234,7 +1171,6 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     else:
         parsed_json, _ = extract_json_from_text(raw_text)
         if parsed_json is None:
-            # 其它模型也允许极宽松抢救，能抠出来就算成功
             parsed_json, _ = extract_gemini_json(raw_text)
 
     if parsed_json and isinstance(parsed_json, dict):
@@ -1242,13 +1178,11 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         predicted_pos = parsed_json.get("predicted_pos", "未知")
         is_dual_category = parsed_json.get("is_dual_category", False)
         raw_scores = parsed_json.get("scores", {})
-        # scores 可能是 list 等异常结构，尽量拉平
         if not isinstance(raw_scores, dict):
             salv = _ultra_salvage_from_any_text(raw_text or "")
             raw_scores = (salv or {}).get("scores", {}) if salv else {}
     else:
         if show_ui: st.error("未能解析有效的 JSON。")
-        # 返回占位 scores（非空 dict），Worker 写盘前进，不重试
         empty_scores = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
         return empty_scores, raw_text or "", "解析失败", "JSON 解析失败", False
 
@@ -1321,7 +1255,6 @@ def _pid_alive(pid):
 
 
 def _kill_pid(pid):
-    """尝试结束指定进程（先 SIGTERM，再 SIGKILL）。"""
     if not pid:
         return False
     try:
@@ -1329,13 +1262,13 @@ def _kill_pid(pid):
         if pid <= 0 or not _pid_alive(pid):
             return False
         try:
-            os.kill(pid, 15)  # SIGTERM
+            os.kill(pid, 15)
         except ProcessLookupError:
             return True
         time.sleep(0.4)
         if _pid_alive(pid):
             try:
-                os.kill(pid, 9)  # SIGKILL
+                os.kill(pid, 9)
             except ProcessLookupError:
                 pass
         return True
@@ -1345,12 +1278,10 @@ def _kill_pid(pid):
 
 
 def stop_batch_job(job_state_file: Path) -> str:
-    """停止当前批次：标记 cancelled，并结束 supervisor / worker。"""
     state = _load_job_state(job_state_file)
     supervisor_pid = state.get("supervisor_pid")
     worker_pid = state.get("worker_pid")
 
-    # 从 pid 文件再读一次，防止 state 里 pid 过期
     for suffix, key in ((".supervisor.pid", "supervisor"), (".worker.pid", "worker")):
         try:
             p = _service_file(job_state_file, suffix)
@@ -1377,7 +1308,6 @@ def stop_batch_job(job_state_file: Path) -> str:
     if _kill_pid(supervisor_pid):
         killed.append(f"supervisor={supervisor_pid}")
 
-    # 清理锁/pid 文件，避免下次启动被挡
     for suffix in (".supervisor.pid", ".worker.pid", ".supervisor.lock"):
         try:
             f = _service_file(job_state_file, suffix)
@@ -1422,7 +1352,6 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
     )
 
     while start_row < total_rows:
-        # 用户点击「停止任务」后优雅退出
         cur_state = _load_job_state(job_state_file)
         if cur_state.get("status") == "cancelled":
             _write_job_state(job_state_file, status="cancelled", error="用户手动停止任务",
@@ -1433,7 +1362,6 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
         index = start_row
         row_number = index + 1
         
-        # 兼容处理 Excel 空行现象 (NaN)
         word_val = df_input.iloc[index][target_col]
         word = "" if pd.isna(word_val) else str(word_val).strip()
         task_id = _make_task_id(file_name, index)
@@ -1457,8 +1385,6 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
         retry_count = 0
         scores, raw_text, pred_pos, explanation, is_dual_category = {}, '', '处理失败', '无响应', False
         is_flash = provider == "gemini" and "flash" in str(model).lower()
-        # Flash：每个词最多调用 1 次 API，绝不再因解析失败反复烧 token
-        # 其它模型仍允许有限重试
         max_row_retries = 1 if is_flash else 8
 
         while not success:
@@ -1475,7 +1401,6 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
                     success = True
                     break
 
-                # 任意已返回原文 / 解析失败 / 空结果：Flash 立即落盘前进；其它模型同策略但保留少量重试
                 last_error = explanation or '模型返回为空或 JSON 解析失败'
                 if raw_text and str(raw_text).strip():
                     logger.warning(
@@ -1632,7 +1557,6 @@ def _supervisor_entry(job_state_file: Path):
                 if state.get('status') == 'completed':
                     return
                 if state.get('status') == 'cancelled':
-                    # 用户停止：结束 worker 后退出 supervisor
                     try:
                         if rc is None:
                             worker.terminate()
@@ -1708,7 +1632,6 @@ def start_or_resume_batch_job(df_input, target_col, uploaded_file, file_name, ba
 
 
 def _supervisor_or_worker_alive(job_state_file: Path, state: dict = None) -> bool:
-    """只有真实进程还在，才算任务在跑（不看过期 status 文案）。"""
     state = state or _load_job_state(job_state_file)
     if _pid_alive(state.get("supervisor_pid")) or _pid_alive(state.get("worker_pid")):
         return True
@@ -1725,7 +1648,6 @@ def _supervisor_or_worker_alive(job_state_file: Path, state: dict = None) -> boo
 
 
 def _reconcile_stale_job_state(job_state_file: Path) -> dict:
-    """状态写着 running 但进程已死 → 解锁，允许再次点「开始/继续」。"""
     state = _load_job_state(job_state_file)
     active_statuses = {
         "running", "retrying", "waiting_retry", "saving",
@@ -1735,7 +1657,6 @@ def _reconcile_stale_job_state(job_state_file: Path) -> dict:
         return state
     if _supervisor_or_worker_alive(job_state_file, state):
         return state
-    # 刚启动 15 秒内先不判定为僵死
     if state.get("status") == "starting" and _state_age_seconds(state) < 15:
         return state
     _write_job_state(
@@ -1749,9 +1670,6 @@ def _reconcile_stale_job_state(job_state_file: Path) -> dict:
 
 
 def _auto_recover_if_needed(job_state_file: Path):
-    """默认不再自动拉起 supervisor（避免用户停不掉 / 按钮按不了）。
-    仅当环境变量 BATCH_AUTO_RECOVER=1 时恢复旧的自动重连行为。
-    """
     state = _reconcile_stale_job_state(job_state_file)
     if os.getenv("BATCH_AUTO_RECOVER", "").strip() not in {"1", "true", "TRUE", "yes"}:
         return state
@@ -1781,7 +1699,7 @@ def _auto_recover_if_needed(job_state_file: Path):
 
 
 # ----------------------------------------------------------------------
-# 实时UI刷新组件（将所有状态同步绑定在一个片段内，杜绝延迟和不同步问题）
+# 实时UI刷新组件
 # ----------------------------------------------------------------------
 def render_live_monitor(job_state_file: Path, backup_file: Path, total_rows_default: int):
     latest_state = _auto_recover_if_needed(job_state_file)
@@ -1799,7 +1717,6 @@ def render_live_monitor(job_state_file: Path, backup_file: Path, total_rows_defa
         except Exception:
             pass
             
-    # 1. 顶部统计 & 下载
     c1, c2 = st.columns([3, 1])
     with c1:
         st.metric("已存数据量 (完美去重排序)", f"{count} 条")
@@ -1817,10 +1734,8 @@ def render_live_monitor(job_state_file: Path, backup_file: Path, total_rows_defa
         else:
             st.button("下载结果 (无数据)", disabled=True, use_container_width=True)
 
-    # 2. 进度条
     st.progress(min(1.0, max(0.0, completed / total)) if total else 0.0)
 
-    # 3. 运行状态
     if status_str in {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "supervisor_restarting"}:
         spinner_text = {"starting": "启动任务中…", "retrying": "调用失败自动重试中…", "waiting_retry": "等待重试…", "saving": "安全排序并覆盖保存中…", "supervisor_restarting": "断流重连中…"}.get(status_str, "任务正常运行中…")
         details = f"第 {min(int(latest_state.get('current_row', 0)) + 1, total)}/{total} 行 · 当前词语「{latest_state.get('current_word', '')}」"
@@ -1842,13 +1757,11 @@ def render_live_monitor(job_state_file: Path, backup_file: Path, total_rows_defa
     else:
         st.info("尚未运行。点击上方“开始处理 / 继续任务”即可启动队列。")
 
-    # 4. 实时数据表 (展示全部数据)
     st.markdown("#### 实时结果预览 (全部数据，最新结果在最上方)")
     if live_df is not None and count > 0:
         if '序数' in live_df.columns:
             live_df['序数_num'] = pd.to_numeric(live_df['序数'], errors='coerce')
             live_df = live_df.sort_values('序数_num').drop(columns=['序数_num'])
-        # 取消 tail(100) 限制，仅倒序排列展示全部数据
         display_df = live_df.iloc[::-1] 
         st.dataframe(display_df, use_container_width=True, height=400)
     else:
@@ -1891,8 +1804,8 @@ def main():
                 )
         with col2:
             st.markdown('<div class="section-title"><span class="icon-dot"></span> 实验配置</div>', unsafe_allow_html=True)
-            if selected_model_info.get("provider") in {"openai", "gemini", "xai"}:
-                st.caption("国外模型数据将按“批次 + 模型”独立保存，可分别跑出 Gemini / ChatGPT / Grok 数据后进行横向比较。")
+            if selected_model_info.get("provider") in {"openai", "gemini", "xai", "mistral"}:
+                st.caption("国外模型数据将按“批次 + 模型”独立保存，可分别跑出不同模型数据后进行横向比较。")
             st.session_state.project_code = st.text_input("实验批次码 (Project Code)", value=st.session_state.get("project_code", "default_task"), help="隔离不同量化分析任务")
             BACKUP_FILE, PROGRESS_FILE = get_project_files(st.session_state.project_code, selected_model_info.get("model", "default_model"))
         with col3:
@@ -1900,7 +1813,6 @@ def main():
             st.write("")
             if st.button("测试模型链接", type="secondary", use_container_width=True, disabled=not selected_model_info["api_key"]):
                 with st.spinner("正在测试连接..."):
-                    # 仅 Gemini 使用更大的测试预算；其他模型保持原来的测试参数。
                     test_provider = selected_model_info["provider"]
                     test_max_tokens = 4096 if test_provider == "gemini" else 100
                     test_prompt = "请只输出 pong，不要输出 Markdown、代码块或其他文字。" if test_provider == "gemini" else "请回复'pong'"
@@ -1957,12 +1869,10 @@ def main():
                         st.code(raw_text, language="text")
 
     with tab2:
-        # 将静态按钮与实时刷新组件严格分离
         st.markdown(f'<div class="section-title"><span class="icon-dot"></span> 批量任务管理 (当前批次: <code>{st.session_state.project_code}</code>)</div>', unsafe_allow_html=True)
         st.caption(f"代码版本：{CODE_VERSION}（若日志无此字符串=仍在跑旧进程，请先 kill 再重启）")
         col_c1, col_c2 = st.columns([3, 1])
         with col_c2:
-            # 清空缓存被放在外侧，以防止和 fragment 内的自动重刷发生冲突
             if st.button("清空本批次记录", use_container_width=True, type="secondary"):
                 if os.path.exists(BACKUP_FILE):
                     try:
@@ -1985,11 +1895,9 @@ def main():
                     
                     model_namespace = re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', selected_model_info.get("model", "default_model"))
                     job_state_file = BASE_DIR / f"batch_job_{re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', st.session_state.project_code)}__{model_namespace}.json"
-                    # 先清理「状态写着 running 但进程已死」的僵死状态，避免开始按钮永远灰掉
                     current_state = _auto_recover_if_needed(job_state_file)
 
                     really_running = _supervisor_or_worker_alive(job_state_file, current_state)
-                    # 只有真实进程在跑时才禁用开始按钮；不再被过期 status 卡住
                     can_start = not really_running
                     can_stop = really_running or current_state.get("status") in {
                         "starting", "running", "retrying", "waiting_retry", "saving",
@@ -2042,7 +1950,6 @@ def main():
 
                     st.divider()
                     
-                    # 使用 @st.fragment 将所有需刷新的指标统统打包，确保每次读取CSV时进度条和表格完美同步
                     if hasattr(st, "fragment"):
                         @st.fragment(run_every="2s")
                         def _live_batch_status_view():
