@@ -415,22 +415,13 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
             content = message.get("content", "")
             if isinstance(content, str) and content.strip():
                 return content
-            if isinstance(content, dict):
-                # 某些 Gemini/OpenAI 兼容层可能直接把结构化结果放入 content。
-                try:
-                    return json.dumps(content, ensure_ascii=False)
-                except Exception:
-                    pass
             if isinstance(content, list):
                 parts = []
                 for part in content:
                     if isinstance(part, dict):
-                        # Gemini 3.x 偶发：reasoning / thought 与 text 分 part
                         text = part.get("text") or part.get("content")
-                        if isinstance(text, str) and text.strip():
+                        if isinstance(text, str):
                             parts.append(text)
-                    elif isinstance(part, str) and part.strip():
-                        parts.append(part)
                 if parts:
                     return "".join(parts)
             # 某些兼容层可能把文本放进 delta
@@ -438,11 +429,6 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
             delta_content = delta.get("content", "")
             if isinstance(delta_content, str) and delta_content.strip():
                 return delta_content
-            # Gemini Flash 偶发：最终 JSON 在 refusal / reasoning 之外的扩展字段
-            for alt_key in ("reasoning_content", "reasoning", "output_text", "text"):
-                alt = message.get(alt_key)
-                if isinstance(alt, str) and alt.strip() and ("{" in alt or "scores" in alt.lower()):
-                    return alt
 
         # Gemini 原生/代理偶见结构：candidates[].content.parts[].text
         candidates = resp_json.get("candidates")
@@ -460,290 +446,71 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
     except Exception:
         return ""
 
-def _clean_possible_markdown_json(text: str) -> str:
-    """清理 Gemini 常见的 Markdown/不可见字符，但不破坏 JSON 内部文本。"""
-    if not text:
-        return ""
-    cleaned = str(text)
-    cleaned = cleaned.replace("\ufeff", "").replace("\u200b", "").replace("\u2060", "")
-    cleaned = cleaned.strip()
-
-    # 去除首尾 Markdown JSON 代码围栏
-    cleaned = re.sub(r"^\s*```(?:json|JSON|javascript|js)?\s*", "", cleaned)
-    cleaned = re.sub(r"\s*```\s*$", "", cleaned)
-    return cleaned.strip()
-
-
-def _repair_json_candidate(candidate: str) -> str:
-    """对已经定位到的 JSON 对象做最小侵入式修复。
-    重点处理：字符串中的真实换行/制表符、尾逗号、Markdown 残留、中文弯引号。
+def _extract_gemini_json(text: str):
     """
-    if not candidate:
-        return candidate
+    Gemini 专用 JSON 提取器。
+    仅用于 Gemini，不改变其他模型的 JSON 解析行为。
+    """
+    if not text or not isinstance(text, str):
+        return None, text
 
-    candidate = candidate.strip()
-    candidate = re.sub(r"^\s*```(?:json|JSON)?\s*", "", candidate)
-    candidate = re.sub(r"\s*```\s*$", "", candidate).strip()
+    cleaned = text.strip()
+    cleaned = re.sub(r"^\s*```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```\s*$", "", cleaned).strip()
 
-    # 常见中文/弯引号 → 标准 JSON 双引号（对 Gemini 更稳）
-    candidate = (candidate
-                 .replace("\u201c", '"').replace("\u201d", '"')
-                 .replace("\u2018", "'").replace("\u2019", "'")
-                 .replace("「", '"').replace("」", '"'))
+    try:
+        obj = json.loads(cleaned, strict=False)
+        if isinstance(obj, dict):
+            return obj, cleaned
+    except Exception:
+        pass
 
-    # 去除对象/数组结尾前的尾逗号：{"a": 1,} / [1,]
-    candidate = re.sub(r",\s*([}\]])", r"\1", candidate)
-
-    # JSON 字符串内若出现真实控制字符，转成合法 JSON 转义。
-    out = []
-    in_string = False
-    escaped = False
-    for ch in candidate:
-        if in_string:
-            if escaped:
-                out.append(ch)
-                escaped = False
-                continue
-            if ch == "\\":
-                out.append(ch)
-                escaped = True
-                continue
-            if ch == '"':
-                out.append(ch)
-                in_string = False
-                continue
-            if ch == "\n":
-                out.append("\\n")
-                continue
-            if ch == "\r":
-                out.append("\\r")
-                continue
-            if ch == "\t":
-                out.append("\\t")
-                continue
-            if ord(ch) < 32:
-                out.append(" ")
-                continue
-        else:
-            if ch == '"':
-                in_string = True
-        out.append(ch)
-    return "".join(out)
-
-
-def _iter_balanced_json_objects(text: str):
-    """按 JSON 字符串语义寻找完整 {...} 对象，避免简单 find/rfind 误截取。"""
-    if not text:
-        return
-    n = len(text)
-    for start in range(n):
-        if text[start] != "{":
+    decoder = json.JSONDecoder(strict=False)
+    for match in re.finditer(r"\{", cleaned):
+        start = match.start()
+        try:
+            obj, end = decoder.raw_decode(cleaned[start:])
+            if isinstance(obj, dict):
+                if "scores" in obj or "predicted_pos" in obj or "is_dual_category" in obj:
+                    return obj, cleaned[start:start + end]
+        except Exception:
             continue
-        depth = 0
-        in_string = False
-        escaped = False
-        for i in range(start, n):
-            ch = text[i]
-            if in_string:
-                if escaped:
-                    escaped = False
-                elif ch == "\\":
-                    escaped = True
-                elif ch == '"':
-                    in_string = False
-                continue
-            if ch == '"':
-                in_string = True
-            elif ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    yield text[start:i + 1]
-                    break
 
-
-def _parse_json_object_candidate(candidate: str):
-    """严格解析 -> 最小修复后解析。"""
-    try:
-        obj = json.loads(candidate, strict=False)
-        if isinstance(obj, dict):
-            return obj
-    except (json.JSONDecodeError, TypeError, ValueError):
-        pass
-
-    repaired = _repair_json_candidate(candidate)
-    try:
-        obj = json.loads(repaired, strict=False)
-        if isinstance(obj, dict):
-            return obj
-    except (json.JSONDecodeError, TypeError, ValueError):
-        pass
-    return None
+    return None, text
 
 
 def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
-    """通用 JSON 提取器。
-    保留原有模型兼容性，同时解决代码块、前后说明、嵌套对象、控制字符和尾逗号问题。
-    """
-    if not text:
+    if not text: 
         return None, text
 
-    cleaned = _clean_possible_markdown_json(text)
+    # 1. 优先提取 ```json ... ``` 代码块中的内容（改为贪婪匹配抓取最外层 JSON）
+    code_block_match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
+    if code_block_match:
+        try:
+            # strict=False 关键参数：允许字符串中存在未转义的控制字符（如多行换行）
+            return json.loads(code_block_match.group(1), strict=False), code_block_match.group(1)
+        except json.JSONDecodeError:
+            pass
 
-    # 1. 整段就是 JSON
-    obj = _parse_json_object_candidate(cleaned)
-    if isinstance(obj, dict):
-        return obj, cleaned
+    # 2. 抓取文本中最外层的 { 到 } 完整区间
+    first_bracket = text.find('{')
+    last_bracket = text.rfind('}')
+    if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
+        candidate = text[first_bracket:last_bracket+1]
+        try:
+            return json.loads(candidate, strict=False), candidate
+        except json.JSONDecodeError:
+            pass
 
-    # 2. 在任意位置寻找完整 JSON 对象
-    for candidate in _iter_balanced_json_objects(cleaned):
-        obj = _parse_json_object_candidate(candidate)
-        if isinstance(obj, dict):
-            return obj, candidate
-
-    return None, text
-
-
-def _gemini_prefer_schema_objects(text: str):
-    """优先返回看起来像本任务 schema 的完整 JSON 对象（含 scores / predicted_pos）。"""
-    preferred = []
-    others = []
-    for candidate in _iter_balanced_json_objects(text):
-        low = candidate.lower()
-        if ("scores" in low or "predicted_pos" in low or "is_dual_category" in low or
-                "名词" in candidate or "动词" in candidate):
-            preferred.append(candidate)
-        else:
-            others.append(candidate)
-    for c in preferred + others:
-        yield c
-
-
-def _gemini_try_close_truncated(candidate: str) -> str:
-    """Gemini 长 explanation 偶发截断：尝试补全缺失的右括号。"""
-    if not candidate:
-        return candidate
-    opens = candidate.count("{") - candidate.count("}")
-    if opens <= 0:
-        return candidate
-    return candidate + ("}" * min(opens, 8))
-
-
-def _gemini_regex_salvage_scores(text: str) -> Dict[str, Any]:
-    """当完整 JSON 解析失败时，用正则从原文中抢救 scores / predicted_pos / is_dual_category。
-    仅用于 Gemini，保证批量任务不因本地解析反复重试而浪费 token。
-    """
-    if not text:
-        return None
-    result = {
-        "explanation": "（本地从原文抢救解析，完整 JSON 未能直接 loads）",
-        "predicted_pos": "未知",
-        "is_dual_category": False,
-        "scores": {"名词": {}, "动词": {}, "名动词": {}},
-    }
-
-    m = re.search(
-        r'["\']?predicted_pos["\']?\s*[:=]\s*["\']([^"\']+)["\']',
-        text, re.IGNORECASE
-    )
-    if m:
-        result["predicted_pos"] = m.group(1).strip()
-
-    m = re.search(
-        r'["\']?is_dual_category["\']?\s*[:=]\s*(true|false|True|False|是|否)',
-        text, re.IGNORECASE
-    )
-    if m:
-        val = m.group(1).strip().lower()
-        result["is_dual_category"] = val in ("true", "是")
-
-    rule_pat = re.compile(
-        r'["\']?\s*((?:NV|N|V)\d+[_\u4e00-\u9fa5A-Za-z0-9]*)\s*["\']?\s*[:=]\s*'
-        r'(true|false|True|False|是|否|yes|no|符合|不符合)',
-        re.IGNORECASE
-    )
-    pos_blocks = {
-        "名词": re.search(r'["\']?名词["\']?\s*[:=]\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}', text, re.DOTALL),
-        "动词": re.search(r'["\']?动词["\']?\s*[:=]\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}', text, re.DOTALL),
-        "名动词": re.search(r'["\']?名动词["\']?\s*[:=]\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}', text, re.DOTALL),
-    }
-    found_any = False
-    for pos, block_m in pos_blocks.items():
-        block_text = block_m.group(1) if block_m else text
-        for rm in rule_pat.finditer(block_text):
-            key = rm.group(1).strip()
-            raw_v = rm.group(2).strip().lower()
-            is_match = raw_v in ("true", "是", "yes", "符合")
-            result["scores"][pos][key] = is_match
-            found_any = True
-
-    if not found_any:
-        for rm in rule_pat.finditer(text):
-            key = rm.group(1).strip()
-            raw_v = rm.group(2).strip().lower()
-            is_match = raw_v in ("true", "是", "yes", "符合")
-            if key.upper().startswith("NV"):
-                result["scores"]["名动词"][key] = is_match
-            elif key.upper().startswith("N"):
-                result["scores"]["名词"][key] = is_match
-            elif key.upper().startswith("V"):
-                result["scores"]["动词"][key] = is_match
-            found_any = True
-
-    if not found_any and result["predicted_pos"] == "未知":
-        return None
-    return result
-
-
-def extract_gemini_json(text: str) -> Tuple[Dict[str, Any], str]:
-    """Gemini 专用解析器（仅影响 Gemini 路径）。
-    目标：本地一次尽可能解析成功，避免 Worker 因 JSON 解析失败反复重试、浪费 token。
-    策略：
-      1. 清理 Markdown / 不可见字符
-      2. 优先解析含 scores / predicted_pos 的完整对象
-      3. 对截断对象尝试补全右括号后再解析
-      4. 仍失败则用正则从原文抢救 scores 等字段
-    """
-    if not text:
-        return None, text
-
-    cleaned = _clean_possible_markdown_json(text)
-
-    # 1) 整段尝试
-    obj = _parse_json_object_candidate(cleaned)
-    if isinstance(obj, dict) and ("scores" in obj or "predicted_pos" in obj):
-        return obj, cleaned
-
-    # 2) 优先 schema 相关对象
-    for candidate in _gemini_prefer_schema_objects(cleaned):
-        obj = _parse_json_object_candidate(candidate)
-        if isinstance(obj, dict) and ("scores" in obj or "predicted_pos" in obj or "is_dual_category" in obj):
-            return obj, candidate
-        closed = _gemini_try_close_truncated(candidate)
-        if closed != candidate:
-            obj = _parse_json_object_candidate(closed)
-            if isinstance(obj, dict) and ("scores" in obj or "predicted_pos" in obj):
-                return obj, closed
-
-    # 3) 通用 balanced 再试一遍
-    for candidate in _iter_balanced_json_objects(cleaned):
-        obj = _parse_json_object_candidate(candidate)
-        if isinstance(obj, dict):
-            return obj, candidate
-        closed = _gemini_try_close_truncated(candidate)
-        if closed != candidate:
-            obj = _parse_json_object_candidate(closed)
-            if isinstance(obj, dict):
-                return obj, closed
-
-    # 4) 正则抢救：只要能拿到部分 scores 就返回，保证 Worker 不重试
-    salvaged = _gemini_regex_salvage_scores(cleaned)
-    if salvaged is not None:
-        return salvaged, cleaned
+    # 3. 兜底正则匹配
+    match = re.search(r"(\{.*\})", text.strip(), re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(1), strict=False), match.group(1)
+        except json.JSONDecodeError:
+            pass
 
     return None, text
-
 def normalize_key(k: str, pos_rules: list) -> str:
     if not isinstance(k, str): return None
     k_clean = re.sub(r'[\s_]+', '', k).upper()
@@ -784,63 +551,65 @@ def get_top_10_positions(membership: Dict[str, float]) -> List[Tuple[str, float]
 # LLM调用与词类判定主函数
 # ===============================
 def get_provider_config(provider, api_key, model, messages, max_tokens, temperature):
-    """统一构造各厂商请求配置。OpenAI 用 Responses API；Gemini/xAI 用 Chat Completions。"""
+    """统一构造各厂商请求配置。
+    Gemini 改用 Google 原生 generateContent，其他供应商保持原有接口。
+    """
     if provider == "openai":
         url = os.getenv("OPENAI_RESPONSES_URL", "https://api.openai.com/v1/responses")
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        payload = {
-            "model": model,
-            "input": messages,
-            "max_output_tokens": max_tokens,
-        }
-        # GPT-5.6 系列支持 reasoning_effort；批量词类判定使用 low，避免无谓增加成本。
+        payload = {"model": model, "input": messages, "max_output_tokens": max_tokens}
         reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT", "low").strip().lower()
         if reasoning_effort in {"none", "low", "medium", "high", "xhigh", "max"}:
             payload["reasoning"] = {"effort": reasoning_effort}
         return url, headers, payload, "responses"
 
+    if provider == "gemini":
+        # Gemini 3.8 Flash：绕过 OpenAI-compatible 层，直接使用 Google 原生 REST。
+        # maxOutputTokens 包含 thinking token，因此给完整 JSON 留出足够预算。
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
+        system_parts = []
+        user_contents = []
+        for msg in messages:
+            role = msg.get("role", "user") if isinstance(msg, dict) else "user"
+            content = msg.get("content", "") if isinstance(msg, dict) else str(msg)
+            if isinstance(content, list):
+                text = "\n".join(str(x.get("text", "")) if isinstance(x, dict) else str(x) for x in content)
+            else:
+                text = str(content)
+            if role == "system":
+                system_parts.append(text)
+            else:
+                user_contents.append({"role": "user" if role != "assistant" else "model", "parts": [{"text": text}]})
+
+        payload = {
+            "contents": user_contents,
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "maxOutputTokens": max(16384, int(max_tokens or 16384)),
+                "thinkingConfig": {"thinkingLevel": "low"}
+            }
+        }
+        if system_parts:
+            payload["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_parts)}]}
+        return url, headers, payload, "gemini_native"
+
     base_urls = {
         "deepseek": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-        "gemini": os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"),
         "moonshot": os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1"),
         "qwen": os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
         "xai": os.getenv("XAI_BASE_URL", "https://api.x.ai/v1"),
     }
     url = f"{base_urls.get(provider, base_urls['deepseek']).rstrip('/')}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "stream": provider not in {"moonshot", "gemini"},
-    }
-
+    payload = {"model": model, "messages": messages, "temperature": temperature, "stream": provider != "moonshot"}
     if provider == "moonshot":
         payload.update({"max_tokens": 8192, "thinking": {"type": "disabled"}, "temperature": 0.6})
     elif provider == "xai":
-        # Grok 4.6 默认高推理；本项目以批量稳定性和速度为主，可通过环境变量调节。
         reasoning_effort = os.getenv("XAI_REASONING_EFFORT", "high").strip().lower()
         if reasoning_effort in {"low", "medium", "high", "xhigh"}:
             payload["reasoning_effort"] = reasoning_effort
         payload["max_tokens"] = max_tokens
-    elif provider == "gemini":
-        # ===== Gemini 专用配置 =====
-        # Gemini 3.x 使用 OpenAI-compatible Chat Completions。
-        # 这里仅修改 Gemini，不影响 DeepSeek / Kimi / Qwen / xAI。
-        payload.pop("temperature", None)
-        # 给 explanation 留足空间，降低截断导致本地 JSON 解析失败的概率
-        payload["max_tokens"] = max(max_tokens, 8192)
-        payload["stream"] = False
-        # 关键：让 Gemini 直接返回合法 JSON，而不是 Markdown + JSON。
-        payload["response_format"] = {"type": "json_object"}
-        model_l = str(model or "").lower()
-        # gemini-3.8-flash 对 reasoning_effort + json_object 组合更敏感：
-        # 容易把思考过程混进输出或 content 为空，导致本地“JSON 解析失败”并反复重试。
-        # Pro 系列保留 low；Flash 系列不传 reasoning_effort，优先保证稳定 JSON。
-        if "flash" in model_l:
-            payload.pop("reasoning_effort", None)
-        else:
-            payload["reasoning_effort"] = "low"
     else:
         payload["max_tokens"] = max_tokens
     return url, headers, payload, "chat_completions"
@@ -867,10 +636,116 @@ def _extract_openai_responses_text(body: Dict[str, Any]) -> str:
     return ""
 
 
+def _extract_gemini_native_text(body: Dict[str, Any]) -> str:
+    """解析 Google 原生 generateContent 返回的 candidates[].content.parts[].text。"""
+    if not isinstance(body, dict):
+        return ""
+    parts = []
+    for candidate in body.get("candidates", []) or []:
+        if not isinstance(candidate, dict):
+            continue
+        content = candidate.get("content", {}) or {}
+        for part in content.get("parts", []) or []:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                parts.append(part["text"])
+    return "".join(parts)
+
+
+def _gemini_finish_reason(body: Dict[str, Any]) -> str:
+    """提取 Gemini 原生 finishReason，便于定位空响应/预算耗尽。"""
+    try:
+        candidates = body.get("candidates", []) or []
+        if candidates and isinstance(candidates[0], dict):
+            return str(candidates[0].get("finishReason", ""))
+    except Exception:
+        pass
+    return ""
+
+
 def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, temperature=0.0, max_retries=3, show_ui=True):
     if not _api_key:
         return False, {"error": "API Key 为空"}, "API Key 未提供"
 
+    # Gemini 3.8 Flash 单独采用 Google 原生接口，并使用更大的总输出预算。
+    # 官方说明：maxOutputTokens 包括 thinking token；预算太小可能直接得到空输出。
+    if _provider == "gemini" and _model == "gemini-3.8-flash":
+        max_retries = min(max_retries, 2)
+        request_tokens = max(16384, int(max_tokens or 16384))
+        last_body = {}
+        last_error = ""
+        for attempt in range(max_retries):
+            # 第二次仅在确实因预算耗尽时扩大到 32768。
+            current_tokens = 32768 if attempt == 1 else request_tokens
+            url, headers, payload, api_style = get_provider_config(
+                _provider, _api_key, _model, messages, current_tokens, temperature
+            )
+            try:
+                with requests.post(url, headers=headers, json=payload, timeout=240) as response:
+                    if response.status_code != 200:
+                        try:
+                            detail = response.json()
+                        except Exception:
+                            detail = response.text
+                        last_body = detail if isinstance(detail, dict) else {"raw": str(detail)}
+                        if response.status_code == 401:
+                            last_error = "Gemini 鉴权失败 (401)。请检查 GEMINI_API_KEY。"
+                            break
+                        if response.status_code == 403:
+                            last_error = f"Gemini 权限错误 (403)：{detail}"
+                            break
+                        if response.status_code == 429:
+                            last_error = f"Gemini 请求限流 (429)：{detail}"
+                        else:
+                            last_error = f"Gemini API 错误 {response.status_code}：{detail}"
+                            if response.status_code < 500:
+                                break
+                    else:
+                        body = response.json()
+                        last_body = body
+                        text = _extract_gemini_native_text(body)
+                        finish_reason = _gemini_finish_reason(body)
+                        logger.info(
+                            "Gemini 3.8 Flash 原生响应：finishReason=%s，摘要=%s",
+                            finish_reason,
+                            json.dumps(body, ensure_ascii=False)[:2000]
+                        )
+                        if text.strip():
+                            if streaming_placeholder := (st.empty() if show_ui else None):
+                                streaming_placeholder.empty()
+                            return True, {"choices": [{"message": {"content": text}}], "_gemini_raw": body}, ""
+
+                        # 空输出最重要的诊断信息直接保留下来。
+                        usage = body.get("usageMetadata", {}) or {}
+                        last_error = (
+                            f"Gemini 3.8 Flash 返回空文本；finishReason={finish_reason or '未知'}；"
+                            f"promptTokenCount={usage.get('promptTokenCount', '?')}；"
+                            f"thoughtsTokenCount={usage.get('thoughtsTokenCount', '?')}；"
+                            f"candidatesTokenCount={usage.get('candidatesTokenCount', '?')}。"
+                        )
+                        # 只有明确是长度限制，下一次才扩大预算；其他空响应不要盲目重复调用。
+                        if str(finish_reason).upper() not in {"MAX_TOKENS", "LENGTH"}:
+                            break
+            except requests.RequestException as e:
+                last_error = f"Gemini 网络请求异常（第 {attempt + 1} 次）: {e}"
+            except Exception as e:
+                last_error = f"Gemini 请求异常（第 {attempt + 1} 次）: {type(e).__name__}: {e}"
+
+            if attempt < max_retries - 1:
+                time.sleep(2)
+
+        if show_ui:
+            try:
+                st.empty()
+            except Exception:
+                pass
+        # 把诊断摘要作为可记录的 raw_text 返回；Worker 会据此跳过该行，避免无限重试。
+        diagnostic = (
+            f"[Gemini 3.8 Flash API诊断] {last_error}\n"
+            f"原始响应摘要：{json.dumps(last_body, ensure_ascii=False)[:3000]}"
+        )
+        return False, {"error": diagnostic, "_gemini_raw": last_body}, diagnostic
+
+    # 其他模型保持原有调用路径。
     url, headers, payload, api_style = get_provider_config(
         _provider, _api_key, _model, messages, max_tokens, temperature
     )
@@ -880,7 +755,6 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
     for attempt in range(max_retries):
         try:
             if api_style == "responses":
-                # OpenAI Responses：非流式读取，解析稳定；不影响后台 Worker。
                 response = requests.post(url, headers=headers, json=payload, timeout=180)
                 if response.status_code != 200:
                     try:
@@ -898,7 +772,6 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
                     if response.status_code in [400, 401, 403]:
                         break
                     response.raise_for_status()
-
                 body = response.json()
                 text = _extract_openai_responses_text(body)
                 if text:
@@ -925,17 +798,13 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
                         if response.status_code in [400, 401, 403]:
                             break
                         response.raise_for_status()
-
                     if not is_stream:
                         body = response.json()
-                        if _provider == "gemini":
-                            logger.info("Gemini 非流式原始响应摘要：%s", json.dumps(body, ensure_ascii=False)[:2000])
                         text = extract_text_from_response(body)
                         if text:
                             if streaming_placeholder is not None:
                                 streaming_placeholder.empty()
                             return True, body, ""
-                        # 不要把整段响应直接扔掉；保留安全摘要，方便定位 Gemini/xAI 兼容层问题。
                         try:
                             safe_body = json.dumps(body, ensure_ascii=False)[:1200]
                             error_msg = f"{_provider.upper()} 非流式接口未返回文本。响应摘要：{safe_body}"
@@ -961,7 +830,6 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
                                         full_content += delta_text
                             except json.JSONDecodeError:
                                 continue
-
                         if full_content:
                             if streaming_placeholder is not None:
                                 streaming_placeholder.empty()
@@ -971,10 +839,8 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
             error_msg = f"网络请求异常（第{attempt + 1}次尝试）: {str(e)}"
         except Exception as e:
             error_msg = f"请求异常（第{attempt + 1}次尝试）: {str(e)}"
-
         if attempt < max_retries - 1:
             time.sleep(min(8, 2 ** attempt))
-
     if streaming_placeholder is not None:
         streaming_placeholder.empty()
     return False, {"error": error_msg}, error_msg
@@ -985,51 +851,43 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     
     system_msg = f"""你是一名中文词法与语法方面的专家。现在要分析词语「{word}」在下列词类中的表现：
 - 需要判断的词类：名词、动词、名动词
-- 你只需要判断每一条规则是"符合"还是"不符合"，在 JSON 中的 scores 里给出 true / false，程序自动赋值。
-【名词】\n{full_rules["名词"]}\n【动词】\n{full_rules["动词"]}\n【名动词】\n{full_rules["名动词"]}
-输出要求：
-1. explanation: 逐条规则说明判断依据并举例（写在 JSON 的 explanation 字段中）。
-2. scores: 各规则对应 true/false。
-3. predicted_pos: 选择最典型词类。
-4. is_dual_category: 是否属于兼类（true/false）。
+- 你只需要判断每一条规则是“符合”还是“不符合”，在 JSON 的 scores 中给出 true / false，程序自动赋值。
+【名词】
+{full_rules["名词"]}
+【动词】
+{full_rules["动词"]}
+【名动词】
+{full_rules["名动词"]}
 
-严格直接返回一段合法 JSON，不要输出任何 Markdown 外层文本或开场白。格式：
-{{"explanation": "...", "predicted_pos": "...", "is_dual_category": true, "scores": {{"名词": {{...}}, "动词": {{...}}, "名动词": {{...}}}}}}"""
+输出要求：
+1. explanation 必须逐条覆盖全部规则：N1-N8、V1-V9、NV1-NV10，一条都不能遗漏。
+2. explanation 中每条规则只写“判断结果 + 判断依据 + 至少一个具体中文例子（词组、短语或完整句子均可）”。
+3. 不要再次抄写或改写规则名称、规则定义，也不要机械重复题干；直接说明为什么符合/不符合，并给例子。
+4. scores 中必须完整给出三个词类下的全部规则代码，每项只能是 true 或 false。
+5. predicted_pos：选择最典型词类。
+6. is_dual_category：根据整体词类属性判断是否属于兼类（true/false）。
+7. 最终只能输出一个合法 JSON 对象，不得输出 Markdown、```、前言或结语。
+
+JSON 结构必须为：
+{{"explanation":"逐条判断、依据和例子", "predicted_pos":"名词/动词/名动词", "is_dual_category":false, "scores":{{"名词":{{...}},"动词":{{...}},"名动词":{{...}}}}}}"""
+
     
     # 消除与 system_msg 的逻辑冲突
-    user_prompt = f"请分析词语「{word}」。只返回一个 JSON 对象；不要输出 Markdown、```、前言、结语或 JSON 之外的任何文字。所有解释文字必须放在 explanation 字段中。"
-    # 仅对 Gemini Flash 稍加强调 JSON 纯净度（不改 system 主提示词结构）
-    if provider == "gemini" and "flash" in str(model).lower():
-        user_prompt += " 必须是可被 json.loads 解析的纯 JSON；explanation 请简短。"
-
+    user_prompt = f"请完整分析词语「{word}」。必须逐条覆盖全部 27 条规则；每条都写判断依据并给至少一个具体例子；不要重复规则原文；最终只返回合法 JSON。"
+    
     with st.spinner(f"正在调用大模型 ({model}) 进行分析...") if show_ui else __import__("contextlib").nullcontext():
-        ok, resp_json, err_msg = call_llm_api_cached(provider, model, api_key, [{"role": "system", "content": system_msg}, {"role": "user", "content": user_prompt}], show_ui=show_ui)
+        call_max_tokens = 16384 if (provider == "gemini" and model == "gemini-3.8-flash") else 4096
+        ok, resp_json, err_msg = call_llm_api_cached(provider, model, api_key, [{"role": "system", "content": system_msg}, {"role": "user", "content": user_prompt}], max_tokens=call_max_tokens, max_retries=2 if provider == "gemini" else 3, show_ui=show_ui)
         
     if not ok:
         if show_ui: st.error(f"模型调用失败: {err_msg}")
         return {}, f"调用失败: {err_msg}", "未知", f"失败: {err_msg}", False
 
     raw_text = extract_text_from_response(resp_json)
-    # 若标准提取为空，再从整包响应里深挖一次（Flash 偶发 content=null）
-    if (not raw_text or not str(raw_text).strip()) and provider == "gemini":
-        try:
-            blob = json.dumps(resp_json, ensure_ascii=False)
-            # 从整包里找第一段看起来像 JSON 对象的文本
-            for candidate in _iter_balanced_json_objects(blob):
-                if "scores" in candidate or "predicted_pos" in candidate:
-                    raw_text = candidate
-                    break
-            if not raw_text:
-                raw_text = blob
-        except Exception:
-            pass
 
-    # Gemini 单独使用专用解析器；其他模型保持原有解析流程。
+    # Gemini 使用专用 JSON 提取器；其他模型完全保持原有解析逻辑。
     if provider == "gemini":
-        parsed_json, _ = extract_gemini_json(raw_text)
-        if parsed_json is None:
-            # 再走一次通用解析器作为兜底
-            parsed_json, _ = extract_json_from_text(raw_text)
+        parsed_json, _ = _extract_gemini_json(raw_text)
     else:
         parsed_json, _ = extract_json_from_text(raw_text)
     
@@ -1039,11 +897,11 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         is_dual_category = parsed_json.get("is_dual_category", False)
         raw_scores = parsed_json.get("scores", {})
     else:
-        if show_ui: st.error("未能解析有效的 JSON。")
-        # Gemini：返回空规则分数字典（非 {}），让 Worker 写入本行并前进，避免无限重试烧 token
-        if provider == "gemini":
-            empty_scores = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
-            return empty_scores, raw_text or "", "解析失败", "JSON 解析失败", False
+        if show_ui:
+            if provider == "gemini":
+                st.error("Gemini 已返回内容，但未能解析为有效 JSON。请展开“模型原始响应”查看返回内容。")
+            else:
+                st.error("未能解析有效的 JSON。")
         return {}, raw_text, "未知", "JSON 解析失败", False
 
     scores_out = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
@@ -1171,8 +1029,6 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
         last_error = ''
         retry_count = 0
         scores, raw_text, pred_pos, explanation, is_dual_category = {}, '', '处理失败', '无响应', False
-        # Gemini Flash 解析/空响应时限制同词最大重试，防止烧 token
-        max_row_retries = 3 if (provider == "gemini" and "flash" in str(model).lower()) else 8
 
         while not success:
             retry_count += 1
@@ -1188,13 +1044,11 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
                     success = True
                     break
 
-                # 模型已返回非空原文，但本地 JSON 仍无法解析：
-                # 视为“本行解析失败”，写入占位结果并前进，绝不反复重调模型（尤其避免 Gemini 浪费 token）。
-                if raw_text and str(raw_text).strip():
-                    last_error = explanation or '模型已返回内容，但本地 JSON 解析失败；已跳过本行避免重复消耗 token'
-                    logger.warning(
-                        f'第{row_number}行「{word}」本地 JSON 解析失败，写入占位结果并继续。原文前 500 字：{str(raw_text)[:500]}'
-                    )
+                # Gemini 3.8 Flash 已完成有限次数的 API 恢复；若仍为空响应，
+                # 不再让外层 Worker 无限重试。保存诊断占位行并继续下一词。
+                if provider == "gemini" and raw_text and str(raw_text).startswith("[Gemini 3.8 Flash API诊断]"):
+                    last_error = str(raw_text)
+                    logger.warning(f"第{row_number}行「{word}」Gemini 3.8 Flash 最终仍未返回可解析内容，跳过本行。")
                     scores = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
                     pred_pos = "解析失败"
                     explanation = last_error
@@ -1202,26 +1056,10 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
                     success = True
                     break
 
-                last_error = explanation or '模型返回为空'
-                # 达到同词重试上限：写占位行并前进，避免死循环
-                if retry_count >= max_row_retries:
-                    logger.warning(f'第{row_number}行「{word}」达到重试上限({max_row_retries})，写占位结果并继续。最后错误：{last_error}')
-                    scores = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
-                    pred_pos = "调用失败"
-                    explanation = last_error
-                    is_dual_category = False
-                    success = True
-                    break
+                last_error = explanation or '模型返回为空或 JSON 解析失败'
             except BaseException as e:
                 last_error = f'{type(e).__name__}: {e}'
                 logger.exception(f'Worker处理第{row_number}行失败：{word}')
-                if retry_count >= max_row_retries:
-                    scores = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
-                    pred_pos = "调用失败"
-                    explanation = last_error
-                    is_dual_category = False
-                    success = True
-                    break
 
             wait_seconds = min(60, max(2, 2 ** min(retry_count - 1, 5)))
             _write_job_state(job_state_file, status='waiting_retry', current_row=index,
@@ -1557,12 +1395,16 @@ def main():
             st.write("")
             if st.button("测试模型链接", type="secondary", use_container_width=True, disabled=not selected_model_info["api_key"]):
                 with st.spinner("正在测试连接..."):
-                    # 仅 Gemini 使用更大的测试预算；其他模型保持原来的测试参数。
-                    test_provider = selected_model_info["provider"]
-                    test_max_tokens = 4096 if test_provider == "gemini" else 100
-                    test_prompt = "请只输出 pong，不要输出 Markdown、代码块或其他文字。" if test_provider == "gemini" else "请回复'pong'"
+                    # 仅 Gemini 使用更充足的输出预算；其他模型保持原来的 10。
+                    if selected_model_info.get("provider") == "gemini":
+                        test_prompt = "请只返回合法 JSON：{\"pong\":true}"
+                        test_max_tokens = 2048
+                    else:
+                        test_prompt = "请回复'pong'"
+                        test_max_tokens = 10
+
                     ok, _, err_msg = call_llm_api_cached(
-                        test_provider,
+                        selected_model_info["provider"],
                         selected_model_info["model"],
                         selected_model_info["api_key"],
                         [{"role": "user", "content": test_prompt}],
