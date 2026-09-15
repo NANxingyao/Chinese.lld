@@ -910,7 +910,9 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
             payload["reasoning"] = {"effort": reasoning_effort}
         return url, headers, payload, "responses"
 
-    # ===== Gemini：官方 generateContent + 固定 responseSchema（输出格式锁死）=====
+    # ===== Gemini：官方 generateContent + responseSchema + Thought Summary =====
+    # Gemini 3 的“思考”与最终答案是分开的：思考摘要通过 thought=true 的 parts 返回，
+    # 最终答案仍严格限制为 JSON。这样既保留推理摘要，又不会把推理文本混进 JSON 导致解析失败。
     if provider == "gemini":
         native_base = os.getenv(
             "GEMINI_NATIVE_BASE_URL",
@@ -921,6 +923,7 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
             "Content-Type": "application/json",
             "x-goog-api-key": api_key,
         }
+
         contents = []
         system_bits = []
         for m in messages or []:
@@ -935,13 +938,24 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
         if not contents:
             contents = [{"role": "user", "parts": [{"text": "\n\n".join(system_bits) or "请输出 JSON"}]}]
 
+        # Gemini 3：优先 high，确保获得较完整的思考摘要；可通过环境变量下调。
+        thinking_level = os.getenv("GEMINI_THINKING_LEVEL", "high").strip().lower()
+        if thinking_level not in {"low", "medium", "high"}:
+            thinking_level = "high"
+
         payload = {
             "contents": contents,
             "generationConfig": {
                 "responseMimeType": "application/json",
                 "responseSchema": GEMINI_FIXED_SCHEMA,
-                "maxOutputTokens": max(max_tokens, 4096),
-                "temperature": 0.0,
+                # 思考 token 也会占用输出预算；给足空间，避免 explanation / thought summary 被截断。
+                "maxOutputTokens": max(max_tokens, 16384),
+                # Gemini 3 官方建议保持 temperature 默认值 1.0。
+                "temperature": 1.0,
+                "thinkingConfig": {
+                    "includeThoughts": True,
+                    "thinkingLevel": thinking_level,
+                },
             },
         }
         if system_bits:
@@ -1034,20 +1048,52 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
                     response.raise_for_status()
 
                 body = response.json()
-                logger.info("Gemini native 响应摘要：%s", json.dumps(body, ensure_ascii=False)[:2000])
-                text = extract_text_from_response(body)
-                if not text:
-                    # native 结构兜底
-                    try:
-                        parts = (((body.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
-                        text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
-                    except Exception:
-                        text = ""
-                if text:
+                logger.info("Gemini native 响应摘要：%s", json.dumps(body, ensure_ascii=False)[:4000])
+
+                # 分离 Gemini Thought Summary 与最终 JSON。
+                thought_parts = []
+                answer_parts = []
+                try:
+                    candidates = body.get("candidates") or []
+                    for candidate in candidates:
+                        content = (candidate or {}).get("content") or {}
+                        for part in content.get("parts", []) or []:
+                            if not isinstance(part, dict):
+                                continue
+                            part_text = part.get("text")
+                            if not isinstance(part_text, str) or not part_text.strip():
+                                continue
+                            if part.get("thought") is True:
+                                thought_parts.append(part_text)
+                            else:
+                                answer_parts.append(part_text)
+                except Exception:
+                    thought_parts = []
+                    answer_parts = []
+
+                final_text = "".join(answer_parts).strip()
+                if not final_text:
+                    # 兼容极少数代理/版本将最终文本放在标准 choices 结构中的情况。
+                    final_text = extract_text_from_response(body).strip()
+
+                thought_text = "\n\n".join(t.strip() for t in thought_parts if t.strip())
+                if final_text:
                     if streaming_placeholder is not None:
                         streaming_placeholder.empty()
-                    return True, {"choices": [{"message": {"content": text}}], "_raw_gemini": body}, ""
-                error_msg = f"Gemini native 未返回文本。摘要：{json.dumps(body, ensure_ascii=False)[:800]}"
+                    # 保留原始 response，同时把 thought summary 单独放在 reasoning_content，
+                    # 解析 JSON 时永远只取 content，因此不会把推理混进 JSON。
+                    wrapped = {
+                        "choices": [{
+                            "message": {
+                                "content": final_text,
+                                "reasoning_content": thought_text,
+                            }
+                        }],
+                        "_raw_gemini": body,
+                    }
+                    return True, wrapped, ""
+
+                error_msg = f"Gemini native 未返回最终 JSON。思考摘要={bool(thought_text)}；响应摘要：{json.dumps(body, ensure_ascii=False)[:1200]}"
 
             elif api_style == "responses":
                 # OpenAI Responses：非流式读取，解析稳定；不影响后台 Worker。
@@ -1157,8 +1203,8 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     is_gemini_flash = is_gemini and "flash" in str(model).lower()
 
     if is_gemini:
-        # 与 GEMINI_FIXED_SCHEMA 完全对齐：规则只用短码 N1/V1/NV1 ... 值为 true/false
-        # 服务端 responseSchema 会强制输出该结构，本地只需 normalize_key 映射回全名
+        # Gemini 专用：保留用户给出的原版提示词逻辑，但把“推理过程”从最终 JSON 中分离。
+        # explanation = 可公开、逐条、带例子的分析依据；thought summary = API 返回的思考摘要。
         def _short_rules(pos):
             lines = []
             for r in RULE_SETS[pos]:
@@ -1167,22 +1213,31 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
                 lines.append(f"- {code}: {r['desc']}")
             return "\n".join(lines)
 
-        system_msg = f"""你是中文词法专家。判断词语「{word}」对下列规则是否符合（true=符合，false=不符合）。
-【名词】
+        system_msg = f"""你是一名中文词法与语法方面的专家。现在请严格分析词语「{word}」在名词、动词、名动词三类中的表现。
+
+你的任务有两个层次：
+第一层：进行充分的内部思考，逐条检查全部规则，结合真实、自然的现代汉语用法判断。API 会单独返回思考摘要，这部分不写进最终 JSON。
+第二层：给出最终结构化结果。最终结果必须严格符合给定 schema。
+
+【名词规则】
 {_short_rules("名词")}
-【动词】
+
+【动词规则】
 {_short_rules("动词")}
-【名动词】
+
+【名动词规则】
 {_short_rules("名动词")}
-输出必须严格符合 schema：
-- explanation: 一句话
-- predicted_pos: 只能是 名词 / 动词 / 名动词
-- is_dual_category: true 或 false
-- scores.名词: 必须包含 N1 到 N8 全部键，值为 boolean
-- scores.动词: 必须包含 V1 到 V9 全部键，值为 boolean
-- scores.名动词: 必须包含 NV1 到 NV10 全部键，值为 boolean
-不要输出 schema 以外的字段，不要 Markdown。"""
-        user_prompt = f"分析词语「{word}」，按 schema 填写全部规则的 true/false。"
+
+最终 JSON 的 explanation 字段必须是详细、可公开查看的分析依据，不得只写一句笼统结论。请：
+1. 按照 N1-N8、V1-V9、NV1-NV10 的顺序逐条说明“为什么符合/不符合”；
+2. 每条规则尽量结合该词的自然句法环境、搭配或例句说明判断依据；
+3. 不要遗漏任何一条规则；
+4. predicted_pos 选择最典型的词类；
+5. is_dual_category 仅根据整体词类属性判断；
+6. scores 中所有规则必须填写 true 或 false。
+
+注意：不要把分析说明写到 schema 之外；不要输出 Markdown；最终可见答案只能是符合 schema 的 JSON。"""
+        user_prompt = f"请严格按照上述规则分析词语「{word}」。先充分思考并核查每一条规则，再输出完整 JSON；不要省略任何规则的判断依据和例证。"
     else:
         system_msg = f"""你是一名中文词法与语法方面的专家。现在要分析词语「{word}」在下列词类中的表现：
 - 需要判断的词类：名词、动词、名动词
@@ -1215,22 +1270,30 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
             return empty_scores, f"调用失败: {err_msg}", "调用失败", f"失败: {err_msg}", False
         return {}, f"调用失败: {err_msg}", "未知", f"失败: {err_msg}", False
 
-    raw_text = extract_text_from_response(resp_json)
-    # 若标准提取为空，再从整包响应里深挖一次（Flash 偶发 content=null）
-    if (not raw_text or not str(raw_text).strip()) and provider == "gemini":
+    # Gemini：将“最终 JSON”与“思考摘要”分开。最终 JSON 才参与解析。
+    if provider == "gemini":
+        raw_content = ""
+        gemini_reasoning = ""
         try:
-            blob = json.dumps(resp_json, ensure_ascii=False)
-            # 从整包里找第一段看起来像 JSON 对象的文本
-            for candidate in _iter_balanced_json_objects(blob):
-                if "scores" in candidate or "predicted_pos" in candidate:
-                    raw_text = candidate
-                    break
-            if not raw_text:
-                raw_text = blob
+            choices = resp_json.get("choices") or []
+            message = (choices[0] or {}).get("message", {}) if choices else {}
+            raw_content = message.get("content", "") or ""
+            gemini_reasoning = message.get("reasoning_content", "") or ""
         except Exception:
             pass
+        raw_text = str(raw_content).strip()
+        if gemini_reasoning.strip():
+            raw_text_with_reasoning = (
+                "【Gemini 思考摘要】\n" + gemini_reasoning.strip() +
+                "\n\n【Gemini 最终 JSON】\n" + raw_text
+            )
+        else:
+            raw_text_with_reasoning = raw_text
+    else:
+        raw_text = extract_text_from_response(resp_json)
+        raw_text_with_reasoning = raw_text
 
-    # 解析策略：标准 JSON → 极宽松抢救（适用于任何乱七八糟输出）
+    # 解析时只使用最终 JSON，避免 Gemini Thought Summary 破坏 JSON 解析。
     if provider == "gemini":
         parsed_json, _ = extract_gemini_json(raw_text)
         if parsed_json is None:
@@ -1264,7 +1327,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
                 if norm_k:
                     rule_def = next(r for r in rules if r["name"] == norm_k)
                     scores_out[pos][norm_k] = map_to_allowed_score(rule_def, v)
-    return scores_out, raw_text, predicted_pos, explanation, is_dual_category
+    return scores_out, raw_text_with_reasoning, predicted_pos, explanation, is_dual_category
 
 def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
     if not scores_norm:
