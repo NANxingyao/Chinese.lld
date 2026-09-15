@@ -15,7 +15,7 @@ from pathlib import Path
 
 SERVICE_MODE = "--worker" in sys.argv or "--supervisor" in sys.argv
 # 版本戳：若界面/日志看不到此字符串，说明仍在跑旧进程，必须 kill 后重启
-CODE_VERSION = "2026-09-14-unlock-start-btn-v7"
+CODE_VERSION = "2026-09-15-stop-on-model-error-v1"
 
 # Gemini 原生 responseSchema：把输出格式锁死为固定 JSON（短规则码 + boolean）
 # normalize_key 可将 N1/V1/NV1 映射回完整规则名
@@ -1194,8 +1194,8 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 {{"explanation": "...", "predicted_pos": "...", "is_dual_category": true, "scores": {{"名词": {{...}}, "动词": {{...}}, "名动词": {{...}}}}}}"""
         user_prompt = f"请分析词语「{word}」。只返回一个 JSON 对象；不要输出 Markdown、```、前言、结语或 JSON 之外的任何文字。所有解释文字必须放在 explanation 字段中。"
 
-    # Flash：接口层也只尝试 1 次，避免 call_llm 内部再连打 3 次浪费 token
-    api_retries = 1 if is_gemini_flash else 3
+    # 模型请求只允许 1 次；失败后由批处理层直接停止整个任务，不再重复请求。
+    api_retries = 1
     with st.spinner(f"正在调用大模型 ({model}) 进行分析...") if show_ui else __import__("contextlib").nullcontext():
         ok, resp_json, err_msg = call_llm_api_cached(
             provider, model, api_key,
@@ -1456,57 +1456,78 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
         last_error = ''
         retry_count = 0
         scores, raw_text, pred_pos, explanation, is_dual_category = {}, '', '处理失败', '无响应', False
-        is_flash = provider == "gemini" and "flash" in str(model).lower()
-        # Flash：每个词最多调用 1 次 API，绝不再因解析失败反复烧 token
-        # 其它模型仍允许有限重试
-        max_row_retries = 1 if is_flash else 8
 
-        while not success:
-            retry_count += 1
-            _write_job_state(job_state_file,
-                             status='retrying' if retry_count > 1 else 'running',
-                             current_row=index, current_word=word, next_row=index,
-                             retry_count=retry_count, error=last_error, completed_rows=index)
-            try:
-                scores, raw_text, pred_pos, explanation, is_dual_category = ask_model_for_pos_and_scores(
-                    word, provider, model, api_key, show_ui=False
+        # 重要：模型调用失败后立即停止整个批次。
+        # 不再对同一个词持续重试，也不写入占位失败结果。
+        try:
+            _write_job_state(
+                job_state_file,
+                status='running',
+                current_row=index,
+                current_word=word,
+                next_row=index,
+                retry_count=0,
+                error='',
+                completed_rows=index
+            )
+            scores, raw_text, pred_pos, explanation, is_dual_category = ask_model_for_pos_and_scores(
+                word, provider, model, api_key, show_ui=False
+            )
+
+            if not scores:
+                last_error = explanation or '模型调用失败或返回结果为空'
+                detail = f'第 {row_number} 行「{word}」处理失败，批次已停止。{last_error}'
+                logger.error(detail)
+                _write_job_state(
+                    job_state_file,
+                    status='failed',
+                    current_row=index,
+                    current_word=word,
+                    next_row=index,
+                    completed_rows=index,
+                    retry_count=0,
+                    error=detail,
+                    model_error=True
                 )
-                if scores:
-                    success = True
-                    break
+                return
 
-                # 任意已返回原文 / 解析失败 / 空结果：Flash 立即落盘前进；其它模型同策略但保留少量重试
-                last_error = explanation or '模型返回为空或 JSON 解析失败'
-                if raw_text and str(raw_text).strip():
-                    logger.warning(
-                        f'第{row_number}行「{word}」本地 JSON 解析失败，写入占位结果并继续。原文前 500 字：{str(raw_text)[:500]}'
-                    )
-                    pred_pos = "解析失败"
-                else:
-                    pred_pos = "调用失败"
+            # 解析失败/调用失败不能当成 0 分正常结果保存。
+            if str(pred_pos) in {'解析失败', '调用失败', '处理失败', '未知'}:
+                detail = f'第 {row_number} 行「{word}」结果无效（{pred_pos}），批次已停止。{explanation or "未获得有效结果"}'
+                logger.error(detail)
+                _write_job_state(
+                    job_state_file,
+                    status='failed',
+                    current_row=index,
+                    current_word=word,
+                    next_row=index,
+                    completed_rows=index,
+                    retry_count=0,
+                    error=detail,
+                    model_error=True
+                )
+                return
 
-                if is_flash or retry_count >= max_row_retries or (raw_text and str(raw_text).strip()):
-                    scores = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
-                    explanation = last_error
-                    is_dual_category = False
-                    success = True
-                    break
-            except BaseException as e:
-                last_error = f'{type(e).__name__}: {e}'
-                logger.exception(f'Worker处理第{row_number}行失败：{word}')
-                if is_flash or retry_count >= max_row_retries:
-                    scores = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
-                    pred_pos = "调用失败"
-                    explanation = last_error
-                    is_dual_category = False
-                    success = True
-                    break
+            success = True
 
-            wait_seconds = min(60, max(2, 2 ** min(retry_count - 1, 5)))
-            _write_job_state(job_state_file, status='waiting_retry', current_row=index,
-                             current_word=word, next_row=index, retry_count=retry_count,
-                             error=last_error, retry_in_seconds=wait_seconds, completed_rows=index)
-            time.sleep(wait_seconds)
+        except BaseException as e:
+            detail = f'第 {row_number} 行「{word}」模型请求异常，批次已停止：{type(e).__name__}: {e}'
+            logger.exception(detail)
+            _write_job_state(
+                job_state_file,
+                status='failed',
+                current_row=index,
+                current_word=word,
+                next_row=index,
+                completed_rows=index,
+                retry_count=0,
+                error=detail,
+                model_error=True
+            )
+            return
+
+        if not success:
+            return
 
         membership = calculate_membership(scores)
         new_row = pd.DataFrame([{
@@ -1646,8 +1667,14 @@ def _supervisor_entry(job_state_file: Path):
                     break
                 time.sleep(1)
 
+            current_state = _load_job_state(job_state_file)
+            # Worker 因模型/API 错误主动把任务标记为 failed 时，Supervisor 必须立即停止，禁止自动拉起。
+            if current_state.get('status') == 'failed' and current_state.get('model_error'):
+                logger.error('检测到模型错误导致的 failed 状态，Supervisor 停止自动重启。')
+                return
+
             if rc == 0: detail = 'Worker正常退出，但任务状态未标记完成。将自动检查并继续。'
-            else: detail = f'Worker退出，状态码 {rc}。{("错误详情：" + str(_load_job_state(job_state_file).get("error"))) if _load_job_state(job_state_file).get("error") else "请查看日志。"}'
+            else: detail = f'Worker退出，状态码 {rc}。{("错误详情：" + str(current_state.get("error"))) if current_state.get("error") else "请查看日志。"}'
             delay = min(30, max(2, 2 ** min(restart_count - 1, 4)))
             _write_job_state(job_state_file, status='supervisor_restarting', supervisor_pid=os.getpid(),
                              worker_pid=None, supervisor_restart_count=restart_count,
@@ -1781,6 +1808,104 @@ def _auto_recover_if_needed(job_state_file: Path):
 
 
 # ----------------------------------------------------------------------
+# 批量结果清理
+# ----------------------------------------------------------------------
+def _get_bad_result_mask(df: pd.DataFrame) -> pd.Series:
+    """识别批量结果中的失败/解析失败/明显计算错误记录。"""
+    if df is None or df.empty:
+        return pd.Series(dtype=bool)
+
+    mask = pd.Series(False, index=df.index)
+
+    # 预测词类/说明字段中的明确失败标记
+    for col in ("预测词类", "状态", "错误", "说明", "explanation"):
+        if col in df.columns:
+            text = df[col].fillna("").astype(str)
+            mask |= text.str.contains(
+                r"调用失败|解析失败|处理失败|计算错误|JSON\s*解析失败|请求失败|未知",
+                case=False, regex=True, na=False
+            )
+
+    # 数值列明显异常：三类隶属度全部为 0 且属于失败/空响应记录
+    score_cols = [c for c in ("动词", "名词", "名动词") if c in df.columns]
+    if len(score_cols) == 3:
+        nums = df[score_cols].apply(pd.to_numeric, errors="coerce")
+        all_zero = nums.fillna(0).eq(0).all(axis=1)
+        invalid_num = nums.isna().any(axis=1)
+        raw = df.get("原始响应", pd.Series("", index=df.index)).fillna("").astype(str)
+        suspicious_raw = raw.str.contains(r"调用失败|解析失败|计算错误|429|401|403|404", case=False, regex=True, na=False)
+        mask |= all_zero & suspicious_raw
+        mask |= invalid_num
+
+    return mask
+
+
+def remove_bad_batch_rows(backup_file: Path) -> Tuple[bool, int, str]:
+    """删除失败/解析失败/明显计算错误记录，并原子覆盖原结果文件。"""
+    if not backup_file.exists() or backup_file.stat().st_size == 0:
+        return True, 0, "当前没有可清理的批量结果。"
+    lock_path = backup_file.with_suffix(backup_file.suffix + '.cleanup.lock')
+    fd = None
+    try:
+        fd = _lock_file(lock_path, timeout=15)
+        df = pd.read_csv(backup_file, encoding='utf-8-sig')
+        if df.empty:
+            return True, 0, "当前没有可清理的批量结果。"
+        bad_mask = _get_bad_result_mask(df)
+        removed = int(bad_mask.sum())
+        if removed == 0:
+            return True, 0, "未发现失败/解析失败/明显计算错误记录。"
+        cleaned = df.loc[~bad_mask].copy()
+        if '序数' in cleaned.columns:
+            cleaned['_seq_num'] = pd.to_numeric(cleaned['序数'], errors='coerce')
+            cleaned = cleaned.sort_values('_seq_num').drop(columns=['_seq_num'])
+        tmp = backup_file.with_suffix(backup_file.suffix + '.cleanup.tmp')
+        cleaned.to_csv(tmp, index=False, encoding='utf-8-sig')
+        os.replace(tmp, backup_file)
+        return True, removed, f"已删除 {removed} 条失败/解析失败/明显计算错误记录。"
+    except Exception as e:
+        logger.exception(f"清理失败/错误批量记录失败: {backup_file}")
+        return False, 0, f"清理失败：{type(e).__name__}: {e}"
+    finally:
+        if fd is not None:
+            _unlock_file(lock_path, fd)
+
+
+def remove_selected_batch_rows(backup_file: Path, task_ids: List[str]) -> Tuple[bool, int, str]:
+    """按任务ID删除用户在结果预览中勾选的记录。"""
+    task_ids = {str(x) for x in (task_ids or []) if str(x).strip()}
+    if not task_ids:
+        return True, 0, "未勾选任何记录。"
+    if not backup_file.exists() or backup_file.stat().st_size == 0:
+        return True, 0, "当前没有可删除的批量结果。"
+    lock_path = backup_file.with_suffix(backup_file.suffix + '.cleanup.lock')
+    fd = None
+    try:
+        fd = _lock_file(lock_path, timeout=15)
+        df = pd.read_csv(backup_file, encoding='utf-8-sig')
+        if '任务ID' not in df.columns:
+            return False, 0, "当前结果文件没有“任务ID”列，无法安全删除。"
+        mask = df['任务ID'].astype(str).isin(task_ids)
+        removed = int(mask.sum())
+        if removed == 0:
+            return True, 0, "未找到需要删除的记录。"
+        cleaned = df.loc[~mask].copy()
+        if '序数' in cleaned.columns:
+            cleaned['_seq_num'] = pd.to_numeric(cleaned['序数'], errors='coerce')
+            cleaned = cleaned.sort_values('_seq_num').drop(columns=['_seq_num'])
+        tmp = backup_file.with_suffix(backup_file.suffix + '.selected_cleanup.tmp')
+        cleaned.to_csv(tmp, index=False, encoding='utf-8-sig')
+        os.replace(tmp, backup_file)
+        return True, removed, f"已删除 {removed} 条勾选记录。"
+    except Exception as e:
+        logger.exception(f"删除勾选批量记录失败: {backup_file}")
+        return False, 0, f"删除失败：{type(e).__name__}: {e}"
+    finally:
+        if fd is not None:
+            _unlock_file(lock_path, fd)
+
+
+# ----------------------------------------------------------------------
 # 实时UI刷新组件（将所有状态同步绑定在一个片段内，杜绝延迟和不同步问题）
 # ----------------------------------------------------------------------
 def render_live_monitor(job_state_file: Path, backup_file: Path, total_rows_default: int):
@@ -1838,7 +1963,8 @@ def render_live_monitor(job_state_file: Path, backup_file: Path, total_rows_defa
     elif status_str == "interrupted":
         st.warning(f"⚠ 后台进程已退出，任务已解锁（进度约 {completed}/{total}）。点「开始处理 / 继续断点任务」即可续跑。")
     elif status_str == "failed":
-        st.error(f"❌ 任务停止：{error_str or '未记录到具体异常，请查看 process_log.log。'}")
+        st.error(f"❌ 任务已停止：{error_str or '未记录到具体异常，请查看 process_log.log。'}")
+        st.caption("本次失败不会写入占位数据。修复模型/API 后，可点击“开始处理 / 继续断点任务”从失败词项继续。")
     else:
         st.info("尚未运行。点击上方“开始处理 / 继续任务”即可启动队列。")
 
@@ -1848,9 +1974,42 @@ def render_live_monitor(job_state_file: Path, backup_file: Path, total_rows_defa
         if '序数' in live_df.columns:
             live_df['序数_num'] = pd.to_numeric(live_df['序数'], errors='coerce')
             live_df = live_df.sort_values('序数_num').drop(columns=['序数_num'])
-        # 取消 tail(100) 限制，仅倒序排列展示全部数据
-        display_df = live_df.iloc[::-1] 
-        st.dataframe(display_df, use_container_width=True, height=400)
+        # 全部结果倒序展示；增加“删除”勾选列，支持手动删除不满意记录。
+        display_df = live_df.iloc[::-1].copy()
+        if '任务ID' in display_df.columns:
+            editor_df = display_df.copy()
+            editor_df.insert(0, '删除', False)
+            edited_df = st.data_editor(
+                editor_df,
+                use_container_width=True,
+                height=420,
+                hide_index=True,
+                disabled=[c for c in editor_df.columns if c != '删除'],
+                column_config={
+                    '删除': st.column_config.CheckboxColumn('删除', help='勾选后点击下方“删除勾选记录”')
+                },
+                key=f'batch_editor_{job_state_file.stem}'
+            )
+            selected_ids = edited_df.loc[edited_df['删除'] == True, '任务ID'].astype(str).tolist() if '删除' in edited_df.columns else []
+            del_col1, del_col2 = st.columns(2)
+            with del_col1:
+                if st.button('🗑 删除勾选记录', use_container_width=True, key=f'del_selected_{job_state_file.stem}'):
+                    ok_del, removed, msg = remove_selected_batch_rows(backup_file, selected_ids)
+                    if ok_del:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+            with del_col2:
+                if st.button('🧹 删除失败 / 计算错误记录', use_container_width=True, key=f'del_bad_{job_state_file.stem}'):
+                    ok_del, removed, msg = remove_bad_batch_rows(backup_file)
+                    if ok_del:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+        else:
+            st.dataframe(display_df, use_container_width=True, height=400)
     else:
         st.info("暂无数据。任务开启后实时数据将在此严格依序显示。")
 
