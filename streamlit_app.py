@@ -14,44 +14,6 @@ from typing import Tuple, Dict, Any, List
 from pathlib import Path
 
 SERVICE_MODE = "--worker" in sys.argv or "--supervisor" in sys.argv
-# 版本戳：若界面/日志看不到此字符串，说明仍在跑旧进程，必须 kill 后重启
-CODE_VERSION = "2026-09-14-unlock-start-btn-v7"
-
-# Gemini 原生 responseSchema：把输出格式锁死为固定 JSON（短规则码 + boolean）
-# normalize_key 可将 N1/V1/NV1 映射回完整规则名
-def _bool_props(codes):
-    return {c: {"type": "BOOLEAN"} for c in codes}
-
-GEMINI_FIXED_SCHEMA = {
-    "type": "OBJECT",
-    "properties": {
-        "explanation": {"type": "STRING"},
-        "predicted_pos": {"type": "STRING", "enum": ["名词", "动词", "名动词"]},
-        "is_dual_category": {"type": "BOOLEAN"},
-        "scores": {
-            "type": "OBJECT",
-            "properties": {
-                "名词": {
-                    "type": "OBJECT",
-                    "properties": _bool_props([f"N{i}" for i in range(1, 9)]),
-                    "required": [f"N{i}" for i in range(1, 9)],
-                },
-                "动词": {
-                    "type": "OBJECT",
-                    "properties": _bool_props([f"V{i}" for i in range(1, 10)]),
-                    "required": [f"V{i}" for i in range(1, 10)],
-                },
-                "名动词": {
-                    "type": "OBJECT",
-                    "properties": _bool_props([f"NV{i}" for i in range(1, 11)]),
-                    "required": [f"NV{i}" for i in range(1, 11)],
-                },
-            },
-            "required": ["名词", "动词", "名动词"],
-        },
-    },
-    "required": ["explanation", "predicted_pos", "is_dual_category", "scores"],
-}
 
 # ===============================
 # 基础配置与日志
@@ -453,22 +415,13 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
             content = message.get("content", "")
             if isinstance(content, str) and content.strip():
                 return content
-            if isinstance(content, dict):
-                # 某些 Gemini/OpenAI 兼容层可能直接把结构化结果放入 content。
-                try:
-                    return json.dumps(content, ensure_ascii=False)
-                except Exception:
-                    pass
             if isinstance(content, list):
                 parts = []
                 for part in content:
                     if isinstance(part, dict):
-                        # Gemini 3.x 偶发：reasoning / thought 与 text 分 part
                         text = part.get("text") or part.get("content")
-                        if isinstance(text, str) and text.strip():
+                        if isinstance(text, str):
                             parts.append(text)
-                    elif isinstance(part, str) and part.strip():
-                        parts.append(part)
                 if parts:
                     return "".join(parts)
             # 某些兼容层可能把文本放进 delta
@@ -476,11 +429,6 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
             delta_content = delta.get("content", "")
             if isinstance(delta_content, str) and delta_content.strip():
                 return delta_content
-            # Gemini Flash 偶发：最终 JSON 在 refusal / reasoning 之外的扩展字段
-            for alt_key in ("reasoning_content", "reasoning", "output_text", "text"):
-                alt = message.get(alt_key)
-                if isinstance(alt, str) and alt.strip() and ("{" in alt or "scores" in alt.lower()):
-                    return alt
 
         # Gemini 原生/代理偶见结构：candidates[].content.parts[].text
         candidates = resp_json.get("candidates")
@@ -498,368 +446,80 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
     except Exception:
         return ""
 
-def _clean_possible_markdown_json(text: str) -> str:
-    """清理 Gemini 常见的 Markdown/不可见字符，但不破坏 JSON 内部文本。"""
-    if not text:
-        return ""
-    cleaned = str(text)
-    cleaned = cleaned.replace("\ufeff", "").replace("\u200b", "").replace("\u2060", "")
-    cleaned = cleaned.strip()
-
-    # 去除首尾 Markdown JSON 代码围栏
-    cleaned = re.sub(r"^\s*```(?:json|JSON|javascript|js)?\s*", "", cleaned)
-    cleaned = re.sub(r"\s*```\s*$", "", cleaned)
-    return cleaned.strip()
-
-
-def _repair_json_candidate(candidate: str) -> str:
-    """对已经定位到的 JSON 对象做最小侵入式修复。
-    重点处理：字符串中的真实换行/制表符、尾逗号、Markdown 残留、中文弯引号。
+def _extract_gemini_json(text: str):
     """
-    if not candidate:
-        return candidate
+    Gemini 专用 JSON 提取器。
+    仅用于 Gemini，不改变其他模型的 JSON 解析行为。
+    """
+    if not text or not isinstance(text, str):
+        return None, text
 
-    candidate = candidate.strip()
-    candidate = re.sub(r"^\s*```(?:json|JSON)?\s*", "", candidate)
-    candidate = re.sub(r"\s*```\s*$", "", candidate).strip()
+    cleaned = text.strip()
+    cleaned = re.sub(r"^\s*```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```\s*$", "", cleaned).strip()
 
-    # 常见中文/弯引号 → 标准 JSON 双引号（对 Gemini 更稳）
-    candidate = (candidate
-                 .replace("\u201c", '"').replace("\u201d", '"')
-                 .replace("\u2018", "'").replace("\u2019", "'")
-                 .replace("「", '"').replace("」", '"'))
+    try:
+        obj = json.loads(cleaned, strict=False)
+        if isinstance(obj, dict):
+            return obj, cleaned
+    except Exception:
+        pass
 
-    # 去除对象/数组结尾前的尾逗号：{"a": 1,} / [1,]
-    candidate = re.sub(r",\s*([}\]])", r"\1", candidate)
-
-    # JSON 字符串内若出现真实控制字符，转成合法 JSON 转义。
-    out = []
-    in_string = False
-    escaped = False
-    for ch in candidate:
-        if in_string:
-            if escaped:
-                out.append(ch)
-                escaped = False
-                continue
-            if ch == "\\":
-                out.append(ch)
-                escaped = True
-                continue
-            if ch == '"':
-                out.append(ch)
-                in_string = False
-                continue
-            if ch == "\n":
-                out.append("\\n")
-                continue
-            if ch == "\r":
-                out.append("\\r")
-                continue
-            if ch == "\t":
-                out.append("\\t")
-                continue
-            if ord(ch) < 32:
-                out.append(" ")
-                continue
-        else:
-            if ch == '"':
-                in_string = True
-        out.append(ch)
-    return "".join(out)
-
-
-def _iter_balanced_json_objects(text: str):
-    """按 JSON 字符串语义寻找完整 {...} 对象，避免简单 find/rfind 误截取。"""
-    if not text:
-        return
-    n = len(text)
-    for start in range(n):
-        if text[start] != "{":
+    decoder = json.JSONDecoder(strict=False)
+    for match in re.finditer(r"\{", cleaned):
+        start = match.start()
+        try:
+            obj, end = decoder.raw_decode(cleaned[start:])
+            if isinstance(obj, dict):
+                if "scores" in obj or "predicted_pos" in obj or "is_dual_category" in obj:
+                    return obj, cleaned[start:start + end]
+        except Exception:
             continue
-        depth = 0
-        in_string = False
-        escaped = False
-        for i in range(start, n):
-            ch = text[i]
-            if in_string:
-                if escaped:
-                    escaped = False
-                elif ch == "\\":
-                    escaped = True
-                elif ch == '"':
-                    in_string = False
-                continue
-            if ch == '"':
-                in_string = True
-            elif ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    yield text[start:i + 1]
-                    break
 
-
-def _parse_json_object_candidate(candidate: str):
-    """严格解析 -> 最小修复后解析。"""
-    try:
-        obj = json.loads(candidate, strict=False)
-        if isinstance(obj, dict):
-            return obj
-    except (json.JSONDecodeError, TypeError, ValueError):
-        pass
-
-    repaired = _repair_json_candidate(candidate)
-    try:
-        obj = json.loads(repaired, strict=False)
-        if isinstance(obj, dict):
-            return obj
-    except (json.JSONDecodeError, TypeError, ValueError):
-        pass
-    return None
+    return None, text
 
 
 def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
-    """通用 JSON 提取器。
-    保留原有模型兼容性，同时解决代码块、前后说明、嵌套对象、控制字符和尾逗号问题。
-    """
-    if not text:
+    if not text: 
         return None, text
 
-    cleaned = _clean_possible_markdown_json(text)
+    # 1. 优先提取 ```json ... ``` 代码块中的内容（改为贪婪匹配抓取最外层 JSON）
+    code_block_match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
+    if code_block_match:
+        try:
+            # strict=False 关键参数：允许字符串中存在未转义的控制字符（如多行换行）
+            return json.loads(code_block_match.group(1), strict=False), code_block_match.group(1)
+        except json.JSONDecodeError:
+            pass
 
-    # 1. 整段就是 JSON
-    obj = _parse_json_object_candidate(cleaned)
-    if isinstance(obj, dict):
-        return obj, cleaned
+    # 2. 抓取文本中最外层的 { 到 } 完整区间
+    first_bracket = text.find('{')
+    last_bracket = text.rfind('}')
+    if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
+        candidate = text[first_bracket:last_bracket+1]
+        try:
+            return json.loads(candidate, strict=False), candidate
+        except json.JSONDecodeError:
+            pass
 
-    # 2. 在任意位置寻找完整 JSON 对象
-    for candidate in _iter_balanced_json_objects(cleaned):
-        obj = _parse_json_object_candidate(candidate)
-        if isinstance(obj, dict):
-            return obj, candidate
-
-    return None, text
-
-
-def _gemini_prefer_schema_objects(text: str):
-    """优先返回看起来像本任务 schema 的完整 JSON 对象（含 scores / predicted_pos）。"""
-    preferred = []
-    others = []
-    for candidate in _iter_balanced_json_objects(text):
-        low = candidate.lower()
-        if ("scores" in low or "predicted_pos" in low or "is_dual_category" in low or
-                "名词" in candidate or "动词" in candidate):
-            preferred.append(candidate)
-        else:
-            others.append(candidate)
-    for c in preferred + others:
-        yield c
-
-
-def _gemini_try_close_truncated(candidate: str) -> str:
-    """Gemini 长 explanation 偶发截断：尝试补全缺失的右括号。"""
-    if not candidate:
-        return candidate
-    opens = candidate.count("{") - candidate.count("}")
-    if opens <= 0:
-        return candidate
-    return candidate + ("}" * min(opens, 8))
-
-
-def _truthy_token(s: str) -> bool:
-    """把各种『符合/不符合』写法统一成 bool。"""
-    t = (s or "").strip().lower()
-    if t in ("true", "yes", "y", "1", "是", "对", "符合", "√", "✓", "match", "positive"):
-        return True
-    if t in ("false", "no", "n", "0", "否", "不", "不符合", "×", "✗", "x", "mismatch", "negative"):
-        return False
-    # 兜底：含“符合”且不含“不”视为 true
-    if "不符合" in t or "不能" in t:
-        return False
-    if "符合" in t or "可以" in t:
-        return True
-    return False
-
-
-def _ultra_salvage_from_any_text(text: str) -> Dict[str, Any]:
-    """极宽松抢救：不管模型输出多乱，只要能抠出规则 true/false 或词类判断就返回。
-    目标：能解析出来就算成功，避免因格式问题判失败。
-    """
-    if not text or not str(text).strip():
-        return None
-
-    raw = str(text)
-    result = {
-        "explanation": "（极宽松本地抢救解析）",
-        "predicted_pos": "未知",
-        "is_dual_category": False,
-        "scores": {"名词": {}, "动词": {}, "名动词": {}},
-    }
-    found_any = False
-
-    # ---- predicted_pos：多种中英文写法 ----
-    pos_patterns = [
-        r'["\']?predicted_pos["\']?\s*[:=]\s*["\']?\s*(名动词|名词|动词)',
-        r'预测词类\s*[：:=]\s*(名动词|名词|动词)',
-        r'最可能的?词类(?:是|为)?\s*[：:=]?\s*(名动词|名词|动词)',
-        r'(?:属于|判定为|归为)\s*(名动词|名词|动词)',
-        r'\b(名动词|名词|动词)\b\s*(?:隶属度最高|得分最高|最典型)',
-    ]
-    for pat in pos_patterns:
-        m = re.search(pat, raw, re.IGNORECASE)
-        if m:
-            result["predicted_pos"] = m.group(1)
-            found_any = True
-            break
-
-    # ---- is_dual_category ----
-    m = re.search(
-        r'["\']?is_dual_category["\']?\s*[:=]\s*(true|false|True|False|是|否)|'
-        r'(?:是否)?兼类\s*[：:=]?\s*(是|否|true|false)',
-        raw, re.IGNORECASE
-    )
-    if m:
-        val = (m.group(1) or m.group(2) or "").strip().lower()
-        result["is_dual_category"] = val in ("true", "是")
-        found_any = True
-
-    # ---- 规则分：兼容 N1 / N1_xxx / "N1_可受..." : true / 符合 ----
-    # 1) 标准 key: value
-    rule_pat = re.compile(
-        r'["\']?\s*((?:NV|N|V)\s*\d+[_\-\u4e00-\u9fa5A-Za-z0-9]*)\s*["\']?\s*[:=：]\s*'
-        r'(true|false|True|False|是|否|yes|no|符合|不符合|√|×|✓|✗|1|0)',
-        re.IGNORECASE
-    )
-    # 2) 叙述式：N1 ... 符合/不符合
-    narrative_pat = re.compile(
-        r'((?:NV|N|V)\s*\d+)\s*[^。；;\n]{0,40}?(符合|不符合|可以|不能|是|否)',
-        re.IGNORECASE
-    )
-
-    def _bucket(key: str) -> str:
-        k = re.sub(r'\s+', '', key).upper()
-        if k.startswith("NV"):
-            return "名动词"
-        if k.startswith("N"):
-            return "名词"
-        if k.startswith("V"):
-            return "动词"
-        return "名词"
-
-    for rm in rule_pat.finditer(raw):
-        key = re.sub(r'\s+', '', rm.group(1).strip())
-        is_match = _truthy_token(rm.group(2))
-        result["scores"][_bucket(key)][key] = is_match
-        found_any = True
-
-    if not any(result["scores"][p] for p in result["scores"]):
-        for rm in narrative_pat.finditer(raw):
-            key = re.sub(r'\s+', '', rm.group(1).strip())
-            is_match = _truthy_token(rm.group(2))
-            result["scores"][_bucket(key)][key] = is_match
-            found_any = True
-
-    # ---- 按词类块再扫一遍（嵌套更深时）----
-    for pos in ("名词", "动词", "名动词"):
-        block_m = re.search(
-            rf'["\']?{pos}["\']?\s*[:=：]\s*\{{(.*?)\}}',
-            raw, re.DOTALL
-        )
-        if not block_m:
-            continue
-        block = block_m.group(1)
-        for rm in rule_pat.finditer(block):
-            key = re.sub(r'\s+', '', rm.group(1).strip())
-            is_match = _truthy_token(rm.group(2))
-            result["scores"][pos][key] = is_match
-            found_any = True
-
-    # 若完全抠不到任何信号，返回 None
-    has_scores = any(result["scores"][p] for p in result["scores"])
-    if not has_scores and result["predicted_pos"] == "未知":
-        return None
-
-    # 没有 predicted_pos 时，用得分条目数粗略推断
-    if result["predicted_pos"] == "未知" and has_scores:
-        counts = {p: sum(1 for v in result["scores"][p].values() if v) for p in result["scores"]}
-        best = max(counts, key=lambda k: counts[k])
-        if counts[best] > 0:
-            result["predicted_pos"] = best
-
-    return result
-
-
-def extract_gemini_json(text: str) -> Tuple[Dict[str, Any], str]:
-    """极宽松解析器：无论模型输出多乱，尽可能抠出可用结果。
-    策略顺序：
-      1. 清理 Markdown / 不可见字符
-      2. 标准 JSON loads
-      3. 截断补全后再 loads
-      4. 从文本任意位置找 JSON 对象
-      5. 极宽松正则抢救规则 true/false、词类、兼类
-    只要第 5 步能抠到一点信号就视为成功。
-    """
-    if not text:
-        return None, text
-
-    cleaned = _clean_possible_markdown_json(text)
-
-    # 1) 整段尝试
-    obj = _parse_json_object_candidate(cleaned)
-    if isinstance(obj, dict) and ("scores" in obj or "predicted_pos" in obj or "is_dual_category" in obj):
-        return obj, cleaned
-
-    # 2) 优先 schema 相关对象 + 截断补全
-    for candidate in _gemini_prefer_schema_objects(cleaned):
-        for cand in (candidate, _gemini_try_close_truncated(candidate)):
-            obj = _parse_json_object_candidate(cand)
-            if isinstance(obj, dict) and ("scores" in obj or "predicted_pos" in obj or "is_dual_category" in obj):
-                return obj, cand
-
-    # 3) 任意 balanced 对象
-    for candidate in _iter_balanced_json_objects(cleaned):
-        for cand in (candidate, _gemini_try_close_truncated(candidate)):
-            obj = _parse_json_object_candidate(cand)
-            if isinstance(obj, dict):
-                # 即使没有 scores 字段，只要有嵌套 dict 也先返回，后面 ask_model 会映射
-                return obj, cand
-
-    # 4) 把全文当“半结构化文本”极宽松抢救
-    salvaged = _ultra_salvage_from_any_text(cleaned)
-    if salvaged is not None:
-        return salvaged, cleaned
-
-    # 5) 对原始未清理文本再抢救一次（防止清理误伤）
-    salvaged = _ultra_salvage_from_any_text(text)
-    if salvaged is not None:
-        return salvaged, text
+    # 3. 兜底正则匹配
+    match = re.search(r"(\{.*\})", text.strip(), re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(1), strict=False), match.group(1)
+        except json.JSONDecodeError:
+            pass
 
     return None, text
-
 def normalize_key(k: str, pos_rules: list) -> str:
-    if not isinstance(k, str):
-        return None
+    if not isinstance(k, str): return None
     k_clean = re.sub(r'[\s_]+', '', k).upper()
-    # 1) 全名完全匹配
     for r in pos_rules:
-        if re.sub(r'[\s_]+', '', r["name"]).upper() == k_clean:
-            return r["name"]
-    # 2) 短码精确匹配（N1/V6/NV10），按码长度从长到短，避免 NV1 误匹配 NV10
-    code_hits = []
+        if re.sub(r'[\s_]+', '', r["name"]).upper() == k_clean: return r["name"]
     for r in pos_rules:
         code_match = re.match(r'^(NV\d+|N\d+|V\d+)', re.sub(r'[\s_]+', '', r["name"]).upper())
-        if not code_match:
-            continue
-        code = code_match.group(1)
-        if k_clean == code:
-            code_hits.append((len(code), r["name"]))
-        elif k_clean.startswith(code) and not k_clean[len(code):len(code) + 1].isdigit():
-            code_hits.append((len(code), r["name"]))
-    if code_hits:
-        code_hits.sort(key=lambda x: -x[0])
-        return code_hits[0][1]
+        if code_match and (k_clean == code_match.group(1) or k_clean.startswith(code_match.group(1)) or code_match.group(1) in k_clean):
+            return r["name"]
     return None
 
 def map_to_allowed_score(rule: dict, raw_val) -> int:
@@ -906,48 +566,9 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
             payload["reasoning"] = {"effort": reasoning_effort}
         return url, headers, payload, "responses"
 
-    # ===== Gemini：官方 generateContent + 固定 responseSchema（输出格式锁死）=====
-    if provider == "gemini":
-        native_base = os.getenv(
-            "GEMINI_NATIVE_BASE_URL",
-            "https://generativelanguage.googleapis.com/v1beta"
-        ).rstrip("/")
-        url = f"{native_base}/models/{model}:generateContent"
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": api_key,
-        }
-        contents = []
-        system_bits = []
-        for m in messages or []:
-            role = (m.get("role") or "user").lower()
-            text = m.get("content") or ""
-            if role == "system":
-                system_bits.append(str(text))
-            elif role == "assistant":
-                contents.append({"role": "model", "parts": [{"text": str(text)}]})
-            else:
-                contents.append({"role": "user", "parts": [{"text": str(text)}]})
-        if not contents:
-            contents = [{"role": "user", "parts": [{"text": "\n\n".join(system_bits) or "请输出 JSON"}]}]
-
-        payload = {
-            "contents": contents,
-            "generationConfig": {
-                "responseMimeType": "application/json",
-                "responseSchema": GEMINI_FIXED_SCHEMA,
-                "maxOutputTokens": max(max_tokens, 4096),
-                "temperature": 0.0,
-            },
-        }
-        if system_bits:
-            payload["systemInstruction"] = {
-                "parts": [{"text": "\n\n".join(system_bits)}]
-            }
-        return url, headers, payload, "gemini_native"
-
     base_urls = {
         "deepseek": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+        "gemini": os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"),
         "moonshot": os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1"),
         "qwen": os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
         "xai": os.getenv("XAI_BASE_URL", "https://api.x.ai/v1"),
@@ -958,16 +579,29 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
         "model": model,
         "messages": messages,
         "temperature": temperature,
-        "stream": provider not in {"moonshot"},
+        "stream": provider not in {"moonshot", "gemini"},
     }
 
     if provider == "moonshot":
         payload.update({"max_tokens": 8192, "thinking": {"type": "disabled"}, "temperature": 0.6})
     elif provider == "xai":
+        # Grok 4.6 默认高推理；本项目以批量稳定性和速度为主，可通过环境变量调节。
         reasoning_effort = os.getenv("XAI_REASONING_EFFORT", "high").strip().lower()
         if reasoning_effort in {"low", "medium", "high", "xhigh"}:
             payload["reasoning_effort"] = reasoning_effort
         payload["max_tokens"] = max_tokens
+    elif provider == "gemini":
+        # ==================== Gemini 专用配置 ====================
+        # Gemini 3.x 是推理模型。输出预算太小时可能在完成可见文本前
+        # 就以 finish_reason=length 结束，因此只对 Gemini 提高预算。
+        payload.pop("temperature", None)
+        payload["max_tokens"] = max(max_tokens, 4096)
+
+        # Gemini OpenAI-compatible 接口支持 reasoning_effort。
+        payload["reasoning_effort"] = "low"
+
+        # 仅 Gemini 开启 JSON object 输出，降低 Markdown/前缀导致的解析失败概率。
+        payload["response_format"] = {"type": "json_object"}
     else:
         payload["max_tokens"] = max_tokens
     return url, headers, payload, "chat_completions"
@@ -1006,46 +640,7 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
 
     for attempt in range(max_retries):
         try:
-            if api_style == "gemini_native":
-                # 官方 generateContent + responseMimeType=application/json
-                response = requests.post(url, headers=headers, json=payload, timeout=180)
-                if response.status_code != 200:
-                    try:
-                        detail = response.json()
-                    except Exception:
-                        detail = response.text
-                    if response.status_code == 404:
-                        error_msg = f"路径错误 (404)。请确保请求地址正确：{url}"
-                    elif response.status_code == 401:
-                        error_msg = "Gemini 鉴权失败 (401)。请检查 GEMINI_API_KEY。"
-                    elif response.status_code == 429:
-                        error_msg = f"Gemini 限流 (429)：{detail}"
-                    elif response.status_code in [400, 403]:
-                        error_msg = f"Gemini 请求错误 ({response.status_code})：{detail}"
-                    else:
-                        error_msg = f"Gemini API 错误: {response.status_code} - {detail}"
-                    if response.status_code in [400, 401, 403]:
-                        break
-                    # 429 等可重试错误：抛出让外层退避
-                    response.raise_for_status()
-
-                body = response.json()
-                logger.info("Gemini native 响应摘要：%s", json.dumps(body, ensure_ascii=False)[:2000])
-                text = extract_text_from_response(body)
-                if not text:
-                    # native 结构兜底
-                    try:
-                        parts = (((body.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
-                        text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
-                    except Exception:
-                        text = ""
-                if text:
-                    if streaming_placeholder is not None:
-                        streaming_placeholder.empty()
-                    return True, {"choices": [{"message": {"content": text}}], "_raw_gemini": body}, ""
-                error_msg = f"Gemini native 未返回文本。摘要：{json.dumps(body, ensure_ascii=False)[:800]}"
-
-            elif api_style == "responses":
+            if api_style == "responses":
                 # OpenAI Responses：非流式读取，解析稳定；不影响后台 Worker。
                 response = requests.post(url, headers=headers, json=payload, timeout=180)
                 if response.status_code != 200:
@@ -1149,38 +744,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     if not word: return {}, "", "未知", "", False
     full_rules = {pos: "\n".join([f"- {r['name']}: {r['desc']}（符合: {r['match_score']} 分，不符合: {r['mismatch_score']} 分）" for r in rules]) for pos, rules in RULE_SETS.items()}
     
-    is_gemini = provider == "gemini"
-    is_gemini_flash = is_gemini and "flash" in str(model).lower()
-
-    if is_gemini:
-        # 与 GEMINI_FIXED_SCHEMA 完全对齐：规则只用短码 N1/V1/NV1 ... 值为 true/false
-        # 服务端 responseSchema 会强制输出该结构，本地只需 normalize_key 映射回全名
-        def _short_rules(pos):
-            lines = []
-            for r in RULE_SETS[pos]:
-                code = re.match(r'^(NV\d+|N\d+|V\d+)', r["name"])
-                code = code.group(1) if code else r["name"]
-                lines.append(f"- {code}: {r['desc']}")
-            return "\n".join(lines)
-
-        system_msg = f"""你是中文词法专家。判断词语「{word}」对下列规则是否符合（true=符合，false=不符合）。
-【名词】
-{_short_rules("名词")}
-【动词】
-{_short_rules("动词")}
-【名动词】
-{_short_rules("名动词")}
-输出必须严格符合 schema：
-- explanation: 一句话
-- predicted_pos: 只能是 名词 / 动词 / 名动词
-- is_dual_category: true 或 false
-- scores.名词: 必须包含 N1 到 N8 全部键，值为 boolean
-- scores.动词: 必须包含 V1 到 V9 全部键，值为 boolean
-- scores.名动词: 必须包含 NV1 到 NV10 全部键，值为 boolean
-不要输出 schema 以外的字段，不要 Markdown。"""
-        user_prompt = f"分析词语「{word}」，按 schema 填写全部规则的 true/false。"
-    else:
-        system_msg = f"""你是一名中文词法与语法方面的专家。现在要分析词语「{word}」在下列词类中的表现：
+    system_msg = f"""你是一名中文词法与语法方面的专家。现在要分析词语「{word}」在下列词类中的表现：
 - 需要判断的词类：名词、动词、名动词
 - 你只需要判断每一条规则是"符合"还是"不符合"，在 JSON 中的 scores 里给出 true / false，程序自动赋值。
 【名词】\n{full_rules["名词"]}\n【动词】\n{full_rules["动词"]}\n【名动词】\n{full_rules["名动词"]}
@@ -1192,65 +756,37 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 
 严格直接返回一段合法 JSON，不要输出任何 Markdown 外层文本或开场白。格式：
 {{"explanation": "...", "predicted_pos": "...", "is_dual_category": true, "scores": {{"名词": {{...}}, "动词": {{...}}, "名动词": {{...}}}}}}"""
-        user_prompt = f"请分析词语「{word}」。只返回一个 JSON 对象；不要输出 Markdown、```、前言、结语或 JSON 之外的任何文字。所有解释文字必须放在 explanation 字段中。"
-
-    # Flash：接口层也只尝试 1 次，避免 call_llm 内部再连打 3 次浪费 token
-    api_retries = 1 if is_gemini_flash else 3
+    
+    # 消除与 system_msg 的逻辑冲突
+    user_prompt = f"请严格按照上述要求分析词语「{word}」，并将推理过程写入 JSON 的 explanation 字段中。直接输出合法 JSON。"
+    
     with st.spinner(f"正在调用大模型 ({model}) 进行分析...") if show_ui else __import__("contextlib").nullcontext():
-        ok, resp_json, err_msg = call_llm_api_cached(
-            provider, model, api_key,
-            [{"role": "system", "content": system_msg}, {"role": "user", "content": user_prompt}],
-            show_ui=show_ui, max_retries=api_retries
-        )
+        ok, resp_json, err_msg = call_llm_api_cached(provider, model, api_key, [{"role": "system", "content": system_msg}, {"role": "user", "content": user_prompt}], show_ui=show_ui)
         
     if not ok:
         if show_ui: st.error(f"模型调用失败: {err_msg}")
-        # Gemini Flash：即使接口失败也返回占位 scores，避免 Worker 再重入调用
-        if is_gemini_flash:
-            empty_scores = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
-            return empty_scores, f"调用失败: {err_msg}", "调用失败", f"失败: {err_msg}", False
         return {}, f"调用失败: {err_msg}", "未知", f"失败: {err_msg}", False
 
     raw_text = extract_text_from_response(resp_json)
-    # 若标准提取为空，再从整包响应里深挖一次（Flash 偶发 content=null）
-    if (not raw_text or not str(raw_text).strip()) and provider == "gemini":
-        try:
-            blob = json.dumps(resp_json, ensure_ascii=False)
-            # 从整包里找第一段看起来像 JSON 对象的文本
-            for candidate in _iter_balanced_json_objects(blob):
-                if "scores" in candidate or "predicted_pos" in candidate:
-                    raw_text = candidate
-                    break
-            if not raw_text:
-                raw_text = blob
-        except Exception:
-            pass
 
-    # 解析策略：标准 JSON → 极宽松抢救（适用于任何乱七八糟输出）
+    # Gemini 使用专用 JSON 提取器；其他模型完全保持原有解析逻辑。
     if provider == "gemini":
-        parsed_json, _ = extract_gemini_json(raw_text)
-        if parsed_json is None:
-            parsed_json, _ = extract_json_from_text(raw_text)
+        parsed_json, _ = _extract_gemini_json(raw_text)
     else:
         parsed_json, _ = extract_json_from_text(raw_text)
-        if parsed_json is None:
-            # 其它模型也允许极宽松抢救，能抠出来就算成功
-            parsed_json, _ = extract_gemini_json(raw_text)
-
+    
     if parsed_json and isinstance(parsed_json, dict):
         explanation = parsed_json.get("explanation", "无推理过程。")
         predicted_pos = parsed_json.get("predicted_pos", "未知")
         is_dual_category = parsed_json.get("is_dual_category", False)
         raw_scores = parsed_json.get("scores", {})
-        # scores 可能是 list 等异常结构，尽量拉平
-        if not isinstance(raw_scores, dict):
-            salv = _ultra_salvage_from_any_text(raw_text or "")
-            raw_scores = (salv or {}).get("scores", {}) if salv else {}
     else:
-        if show_ui: st.error("未能解析有效的 JSON。")
-        # 返回占位 scores（非空 dict），Worker 写盘前进，不重试
-        empty_scores = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
-        return empty_scores, raw_text or "", "解析失败", "JSON 解析失败", False
+        if show_ui:
+            if provider == "gemini":
+                st.error("Gemini 已返回内容，但未能解析为有效 JSON。请展开“模型原始响应”查看返回内容。")
+            else:
+                st.error("未能解析有效的 JSON。")
+        return {}, raw_text, "未知", "JSON 解析失败", False
 
     scores_out = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
     for pos, rules in RULE_SETS.items():
@@ -1320,77 +856,6 @@ def _pid_alive(pid):
     except (ValueError, OSError): return False
 
 
-def _kill_pid(pid):
-    """尝试结束指定进程（先 SIGTERM，再 SIGKILL）。"""
-    if not pid:
-        return False
-    try:
-        pid = int(pid)
-        if pid <= 0 or not _pid_alive(pid):
-            return False
-        try:
-            os.kill(pid, 15)  # SIGTERM
-        except ProcessLookupError:
-            return True
-        time.sleep(0.4)
-        if _pid_alive(pid):
-            try:
-                os.kill(pid, 9)  # SIGKILL
-            except ProcessLookupError:
-                pass
-        return True
-    except Exception as e:
-        logger.warning(f"结束进程失败 pid={pid}: {e}")
-        return False
-
-
-def stop_batch_job(job_state_file: Path) -> str:
-    """停止当前批次：标记 cancelled，并结束 supervisor / worker。"""
-    state = _load_job_state(job_state_file)
-    supervisor_pid = state.get("supervisor_pid")
-    worker_pid = state.get("worker_pid")
-
-    # 从 pid 文件再读一次，防止 state 里 pid 过期
-    for suffix, key in ((".supervisor.pid", "supervisor"), (".worker.pid", "worker")):
-        try:
-            p = _service_file(job_state_file, suffix)
-            if p.exists():
-                txt = p.read_text(encoding="utf-8").strip()
-                if txt.isdigit():
-                    if key == "supervisor":
-                        supervisor_pid = int(txt)
-                    else:
-                        worker_pid = int(txt)
-        except Exception:
-            pass
-
-    _write_job_state(
-        job_state_file,
-        status="cancelled",
-        error="用户手动停止任务",
-        worker_pid=None,
-    )
-
-    killed = []
-    if _kill_pid(worker_pid):
-        killed.append(f"worker={worker_pid}")
-    if _kill_pid(supervisor_pid):
-        killed.append(f"supervisor={supervisor_pid}")
-
-    # 清理锁/pid 文件，避免下次启动被挡
-    for suffix in (".supervisor.pid", ".worker.pid", ".supervisor.lock"):
-        try:
-            f = _service_file(job_state_file, suffix)
-            if f.exists():
-                f.unlink()
-        except Exception:
-            pass
-
-    if killed:
-        return f"已停止任务，并结束进程：{', '.join(killed)}"
-    return "已标记停止（cancelled）。若界面仍在转，请刷新页面。"
-
-
 def _state_age_seconds(state):
     try:
         ts = state.get('updated_at')
@@ -1422,14 +887,6 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
     )
 
     while start_row < total_rows:
-        # 用户点击「停止任务」后优雅退出
-        cur_state = _load_job_state(job_state_file)
-        if cur_state.get("status") == "cancelled":
-            _write_job_state(job_state_file, status="cancelled", error="用户手动停止任务",
-                             next_row=start_row, completed_rows=start_row)
-            logger.info("Worker 收到 cancelled，退出。next_row=%s", start_row)
-            return
-
         index = start_row
         row_number = index + 1
         
@@ -1456,10 +913,6 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
         last_error = ''
         retry_count = 0
         scores, raw_text, pred_pos, explanation, is_dual_category = {}, '', '处理失败', '无响应', False
-        is_flash = provider == "gemini" and "flash" in str(model).lower()
-        # Flash：每个词最多调用 1 次 API，绝不再因解析失败反复烧 token
-        # 其它模型仍允许有限重试
-        max_row_retries = 1 if is_flash else 8
 
         while not success:
             retry_count += 1
@@ -1474,33 +927,10 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
                 if scores:
                     success = True
                     break
-
-                # 任意已返回原文 / 解析失败 / 空结果：Flash 立即落盘前进；其它模型同策略但保留少量重试
                 last_error = explanation or '模型返回为空或 JSON 解析失败'
-                if raw_text and str(raw_text).strip():
-                    logger.warning(
-                        f'第{row_number}行「{word}」本地 JSON 解析失败，写入占位结果并继续。原文前 500 字：{str(raw_text)[:500]}'
-                    )
-                    pred_pos = "解析失败"
-                else:
-                    pred_pos = "调用失败"
-
-                if is_flash or retry_count >= max_row_retries or (raw_text and str(raw_text).strip()):
-                    scores = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
-                    explanation = last_error
-                    is_dual_category = False
-                    success = True
-                    break
             except BaseException as e:
                 last_error = f'{type(e).__name__}: {e}'
                 logger.exception(f'Worker处理第{row_number}行失败：{word}')
-                if is_flash or retry_count >= max_row_retries:
-                    scores = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
-                    pred_pos = "调用失败"
-                    explanation = last_error
-                    is_dual_category = False
-                    success = True
-                    break
 
             wait_seconds = min(60, max(2, 2 ** min(retry_count - 1, 5)))
             _write_job_state(job_state_file, status='waiting_retry', current_row=index,
@@ -1556,7 +986,6 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
 
 def _worker_entry(job_state_file: Path):
     try:
-        logger.info("Worker 启动 CODE_VERSION=%s pid=%s", CODE_VERSION, os.getpid())
         spec_file = _service_file(job_state_file, '.spec.json')
         if not spec_file.exists():
             raise FileNotFoundError(f'找不到任务配置文件：{spec_file}')
@@ -1629,21 +1058,8 @@ def _supervisor_entry(job_state_file: Path):
             while True:
                 rc = worker.poll()
                 state = _load_job_state(job_state_file)
-                if state.get('status') == 'completed':
-                    return
-                if state.get('status') == 'cancelled':
-                    # 用户停止：结束 worker 后退出 supervisor
-                    try:
-                        if rc is None:
-                            worker.terminate()
-                            time.sleep(0.3)
-                            if worker.poll() is None:
-                                worker.kill()
-                    except Exception:
-                        pass
-                    return
-                if rc is not None:
-                    break
+                if state.get('status') == 'completed': return
+                if rc is not None: break
                 time.sleep(1)
 
             if rc == 0: detail = 'Worker正常退出，但任务状态未标记完成。将自动检查并继续。'
@@ -1707,66 +1123,20 @@ def start_or_resume_batch_job(df_input, target_col, uploaded_file, file_name, ba
     return True, _load_job_state(job_state_file)
 
 
-def _supervisor_or_worker_alive(job_state_file: Path, state: dict = None) -> bool:
-    """只有真实进程还在，才算任务在跑（不看过期 status 文案）。"""
-    state = state or _load_job_state(job_state_file)
-    if _pid_alive(state.get("supervisor_pid")) or _pid_alive(state.get("worker_pid")):
-        return True
-    for suffix in (".supervisor.pid", ".worker.pid"):
-        try:
-            p = _service_file(job_state_file, suffix)
-            if p.exists():
-                txt = p.read_text(encoding="utf-8").strip()
-                if txt.isdigit() and _pid_alive(int(txt)):
-                    return True
-        except Exception:
-            pass
-    return False
-
-
-def _reconcile_stale_job_state(job_state_file: Path) -> dict:
-    """状态写着 running 但进程已死 → 解锁，允许再次点「开始/继续」。"""
-    state = _load_job_state(job_state_file)
-    active_statuses = {
-        "running", "retrying", "waiting_retry", "saving",
-        "waiting_save_retry", "starting", "supervisor_restarting",
-    }
-    if state.get("status") not in active_statuses:
-        return state
-    if _supervisor_or_worker_alive(job_state_file, state):
-        return state
-    # 刚启动 15 秒内先不判定为僵死
-    if state.get("status") == "starting" and _state_age_seconds(state) < 15:
-        return state
-    _write_job_state(
-        job_state_file,
-        status="interrupted",
-        supervisor_pid=None,
-        worker_pid=None,
-        error="检测到后台进程已退出，任务已解锁。可点击「开始处理 / 继续断点任务」继续。",
-    )
-    return _load_job_state(job_state_file)
-
-
 def _auto_recover_if_needed(job_state_file: Path):
-    """默认不再自动拉起 supervisor（避免用户停不掉 / 按钮按不了）。
-    仅当环境变量 BATCH_AUTO_RECOVER=1 时恢复旧的自动重连行为。
-    """
-    state = _reconcile_stale_job_state(job_state_file)
-    if os.getenv("BATCH_AUTO_RECOVER", "").strip() not in {"1", "true", "TRUE", "yes"}:
-        return state
-
+    state = _load_job_state(job_state_file)
     active_statuses = {'running', 'retrying', 'waiting_retry', 'saving', 'waiting_save_retry', 'starting', 'supervisor_restarting'}
-    if state.get('status') not in active_statuses:
-        return state
-    if _supervisor_or_worker_alive(job_state_file, state):
-        return state
+    if state.get('status') not in active_statuses: return state
+    if _pid_alive(state.get('supervisor_pid')): return state
 
-    if state.get('status') == 'starting' and _state_age_seconds(state) < 15:
-        return state
+    try:
+        pid_text = _service_file(job_state_file, '.supervisor.pid').read_text(encoding='utf-8').strip()
+        if _pid_alive(int(pid_text)): return state
+    except Exception: pass
+
+    if state.get('status') == 'starting' and _state_age_seconds(state) < 15: return state
     spec_file = _service_file(job_state_file, '.spec.json')
-    if not spec_file.exists():
-        return state
+    if not spec_file.exists(): return state
 
     try:
         proc = spawn_detached([sys.executable, str(Path(__file__).resolve()), '--supervisor', str(job_state_file)],
@@ -1833,10 +1203,6 @@ def render_live_monitor(job_state_file: Path, backup_file: Path, total_rows_defa
         st.markdown(status_html, unsafe_allow_html=True)
     elif status_str == "completed":
         st.success(f"🎉 任务全部完毕，共 {total} 条。")
-    elif status_str == "cancelled":
-        st.warning(f"⏹ 任务已手动停止（进度约 {completed}/{total}）。可随时点「开始处理 / 继续断点任务」从断点续跑。")
-    elif status_str == "interrupted":
-        st.warning(f"⚠ 后台进程已退出，任务已解锁（进度约 {completed}/{total}）。点「开始处理 / 继续断点任务」即可续跑。")
     elif status_str == "failed":
         st.error(f"❌ 任务停止：{error_str or '未记录到具体异常，请查看 process_log.log。'}")
     else:
@@ -1900,12 +1266,16 @@ def main():
             st.write("")
             if st.button("测试模型链接", type="secondary", use_container_width=True, disabled=not selected_model_info["api_key"]):
                 with st.spinner("正在测试连接..."):
-                    # 仅 Gemini 使用更大的测试预算；其他模型保持原来的测试参数。
-                    test_provider = selected_model_info["provider"]
-                    test_max_tokens = 4096 if test_provider == "gemini" else 100
-                    test_prompt = "请只输出 pong，不要输出 Markdown、代码块或其他文字。" if test_provider == "gemini" else "请回复'pong'"
+                    # 仅 Gemini 使用更充足的输出预算；其他模型保持原来的 10。
+                    if selected_model_info.get("provider") == "gemini":
+                        test_prompt = "请只输出字符串 pong，不要输出任何其他内容。"
+                        test_max_tokens = 4096
+                    else:
+                        test_prompt = "请回复'pong'"
+                        test_max_tokens = 10
+
                     ok, _, err_msg = call_llm_api_cached(
-                        test_provider,
+                        selected_model_info["provider"],
                         selected_model_info["model"],
                         selected_model_info["api_key"],
                         [{"role": "user", "content": test_prompt}],
@@ -1959,7 +1329,6 @@ def main():
     with tab2:
         # 将静态按钮与实时刷新组件严格分离
         st.markdown(f'<div class="section-title"><span class="icon-dot"></span> 批量任务管理 (当前批次: <code>{st.session_state.project_code}</code>)</div>', unsafe_allow_html=True)
-        st.caption(f"代码版本：{CODE_VERSION}（若日志无此字符串=仍在跑旧进程，请先 kill 再重启）")
         col_c1, col_c2 = st.columns([3, 1])
         with col_c2:
             # 清空缓存被放在外侧，以防止和 fragment 内的自动重刷发生冲突
@@ -1985,60 +1354,20 @@ def main():
                     
                     model_namespace = re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', selected_model_info.get("model", "default_model"))
                     job_state_file = BASE_DIR / f"batch_job_{re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', st.session_state.project_code)}__{model_namespace}.json"
-                    # 先清理「状态写着 running 但进程已死」的僵死状态，避免开始按钮永远灰掉
                     current_state = _auto_recover_if_needed(job_state_file)
+                    
+                    can_start = not _pid_alive(current_state.get("supervisor_pid")) and current_state.get("status") not in {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "supervisor_restarting"}
 
-                    really_running = _supervisor_or_worker_alive(job_state_file, current_state)
-                    # 只有真实进程在跑时才禁用开始按钮；不再被过期 status 卡住
-                    can_start = not really_running
-                    can_stop = really_running or current_state.get("status") in {
-                        "starting", "running", "retrying", "waiting_retry", "saving",
-                        "waiting_save_retry", "supervisor_restarting",
-                    }
-
-                    btn_col1, btn_col2, btn_col3 = st.columns([2.5, 1, 1])
-                    with btn_col1:
-                        if st.button("▶ 开始处理 / 继续断点任务", type="primary", use_container_width=True, disabled=not can_start):
-                            if not selected_model_info["api_key"]:
-                                st.error("请配置有效的 API Key")
-                            else:
-                                try:
-                                    started, state = start_or_resume_batch_job(
-                                        df_input, target_col, uploaded_file,
-                                        f"{st.session_state.project_code}_{uploaded_file.name}",
-                                        BACKUP_FILE,
-                                        selected_model_info["provider"],
-                                        selected_model_info["model"],
-                                        selected_model_info["env_var"],
-                                        job_state_file,
-                                    )
-                                    if started:
-                                        st.success("守护任务已启动，将在后台持续处理并自动恢复。")
-                                        time.sleep(0.5)
-                                        st.rerun()
-                                    else:
-                                        st.warning("任务似乎仍在运行。若按钮一直灰，请先点「停止任务」或「强制解锁」。")
-                                except Exception as e:
-                                    st.error(f"启动失败：{e}")
-                    with btn_col2:
-                        if st.button("⏹ 停止任务", type="secondary", use_container_width=True, disabled=not can_stop and not really_running):
-                            msg = stop_batch_job(job_state_file)
-                            st.warning(msg)
-                            time.sleep(0.5)
-                            st.rerun()
-                    with btn_col3:
-                        if st.button("强制解锁", type="secondary", use_container_width=True, help="进程已死但按钮仍灰时点这个"):
-                            stop_batch_job(job_state_file)
-                            _write_job_state(
-                                job_state_file,
-                                status="interrupted",
-                                supervisor_pid=None,
-                                worker_pid=None,
-                                error="用户强制解锁，可重新开始/继续",
-                            )
-                            st.info("已强制解锁，请再点「开始处理 / 继续断点任务」。")
-                            time.sleep(0.4)
-                            st.rerun()
+                    if st.button("▶ 开始处理 / 继续断点任务", type="primary", use_container_width=True, disabled=not can_start):
+                        if not selected_model_info["api_key"]: st.error("请配置有效的 API Key")
+                        else:
+                            try:
+                                started, state = start_or_resume_batch_job(df_input, target_col, uploaded_file, f"{st.session_state.project_code}_{uploaded_file.name}", BACKUP_FILE, selected_model_info["provider"], selected_model_info["model"], selected_model_info["env_var"], job_state_file)
+                                if started: 
+                                    st.success("守护任务已启动，将在后台持续处理并自动恢复。")
+                                    time.sleep(0.5)
+                                    st.rerun()
+                            except Exception as e: st.error(f"启动失败：{e}")
 
                     st.divider()
                     
