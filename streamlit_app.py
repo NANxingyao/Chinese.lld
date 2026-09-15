@@ -266,6 +266,10 @@ MODEL_OPTIONS = {
         "provider": "gemini", "model": "gemini-3.8-flash",
         "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
     },
+    "Google Gemini 3 Flash": {
+        "provider": "gemini", "model": "gemini-3-flash-preview",
+        "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
+    },
     "Google Gemini 3.1 Pro Preview": {
         "provider": "gemini", "model": "gemini-3.1-pro-preview",
         "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
