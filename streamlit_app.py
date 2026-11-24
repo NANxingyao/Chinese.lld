@@ -533,7 +533,7 @@ def _inject_background_images():
         css_parts.append(f"""
         .stApp, [data-testid="stAppViewContainer"] {{
             background:
-                linear-gradient(rgba(246, 247, 249, 0.80), rgba(246, 247, 249, 0.84)),
+                linear-gradient(rgba(246, 247, 249, 0.52), rgba(246, 247, 249, 0.58)),
                 url("data:image/jpeg;base64,{b64_bg}") center / cover fixed no-repeat !important;
         }}
         [data-testid="stMain"], .main {{
@@ -620,7 +620,7 @@ def _inject_background_images():
         css_parts.append(f"""
         .stApp, [data-testid="stAppViewContainer"] {{
             background:
-                linear-gradient(rgba(246, 247, 249, 0.80), rgba(246, 247, 249, 0.84)),
+                linear-gradient(rgba(246, 247, 249, 0.52), rgba(246, 247, 249, 0.58)),
                 url("data:image/jpeg;base64,{b64_bg}") center / cover fixed no-repeat !important;
         }}
         [data-testid="stMain"], .main {{
@@ -703,7 +703,7 @@ def _inject_background_images():
         css_parts.append(f"""
         .stApp {{
             background-image:
-                linear-gradient(rgba(246, 247, 249, 0.85), rgba(246, 247, 249, 0.88)),
+                linear-gradient(rgba(246, 247, 249, 0.52), rgba(246, 247, 249, 0.58)),
                 url("data:image/jpeg;base64,{b64_bg}") !important;
             background-size: cover !important;
             background-position: center !important;
