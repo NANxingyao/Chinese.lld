@@ -312,22 +312,26 @@ footer {
   background: rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(8px);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 5px;
+  border-radius: 999px !important;
+  padding: 5px 6px;
   margin-bottom: 1.15rem;
   width: fit-content;
-  box-shadow: 0 2px 10px rgba(13, 34, 64, 0.06);
+  box-shadow: 0 4px 14px rgba(13, 34, 64, 0.07);
+}
+.stTabs [data-baseweb="tab-highlight"],
+.stTabs [data-baseweb="tab-border"] {
+  display: none !important;
 }
 .stTabs [data-baseweb="tab"] {
   height: 2.35rem;
-  border-radius: 8px !important;
-  padding: 0 1.35rem !important;
+  border-radius: 999px !important;
+  padding: 0 1.5rem !important;
   font-weight: 600 !important;
   font-size: .9rem !important;
   color: var(--ink-soft) !important;
   background: transparent !important;
-  border-bottom: none !important;
-  transition: all .15s ease !important;
+  border: none !important;
+  transition: all .18s ease !important;
 }
 .stTabs [data-baseweb="tab"]:hover {
   color: var(--sorbonne-blue) !important;
@@ -336,8 +340,8 @@ footer {
 .stTabs [aria-selected="true"] {
   color: #ffffff !important;
   background: linear-gradient(135deg, var(--sorbonne-blue) 0%, var(--sorbonne-mid) 100%) !important;
-  border-bottom: none !important;
-  box-shadow: 0 2px 8px rgba(22, 58, 112, 0.24) !important;
+  border-radius: 999px !important;
+  box-shadow: 0 3px 10px rgba(22, 58, 112, 0.26) !important;
 }
 
 /* ---------- 表单容器 ---------- */
@@ -2204,12 +2208,10 @@ if __name__ == "__main__":
 
 if not SERVICE_MODE:
     st.markdown(
-        '<div style="text-align: center; padding: 18px 0 8px 0;">'
-        '<div style="display: inline-block; background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(6px); '
-        'border: 1px solid #e2e6ec; border-radius: 10px; padding: 8px 22px; color: #334155; '
-        'font-size: 13px; line-height: 1.75; box-shadow: 0 2px 8px rgba(13, 34, 64, 0.05);">'
+        '<div style="text-align: center; color: #f8fafc; font-size: 13px; line-height: 1.85; '
+        'padding: 20px 0 8px 0; text-shadow: 0 1px 4px rgba(13, 34, 64, 0.75);">'
         '汉语词类隶属度检测划类平台 · © 2026 Ryan<br>'
-        '<a href="mailto:shenrui26@gmail.com" style="color: #163a70; text-decoration: none; font-weight: 500;">✉ shenrui26@gmail.com</a>'
-        '</div></div>',
+        '<a href="mailto:shenrui26@gmail.com" style="color: #e6cb7a; text-decoration: none; font-weight: 500;">✉ shenrui26@gmail.com</a>'
+        '</div>',
         unsafe_allow_html=True
     )
