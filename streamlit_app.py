@@ -589,6 +589,93 @@ def check_optional_auth():
 # ===============================
 BASE_DIR = Path(__file__).parent
 
+# ===============================
+# 全局常量与动态文件路径生成
+# ===============================
+BASE_DIR = Path(__file__).parent
+
+def _find_asset(*filenames: str) -> Path:
+    for filename in filenames:
+        for candidate in (BASE_DIR / "assets" / filename, BASE_DIR / filename):
+            if candidate.exists():
+                return candidate
+    return None
+
+def _inject_background_images():
+    css_parts = []
+    banner_path = _find_asset("banner.jpg", "banner_1.jpg")
+    if banner_path:
+        b64_banner = base64.b64encode(banner_path.read_bytes()).decode("ascii")
+        css_parts.append(f"""
+        .lab-masthead {{
+            background:
+                linear-gradient(90deg, rgba(13, 34, 64, 0.72) 0%, rgba(13, 34, 64, 0.25) 65%, rgba(13, 34, 64, 0.08) 100%),
+                url("data:image/jpeg;base64,{b64_banner}") center / cover no-repeat !important;
+        }}
+        """)
+
+    bg_path = _find_asset("bg_library.jpg", "bg_library_1.jpg")
+    if bg_path:
+        b64_bg = base64.b64encode(bg_path.read_bytes()).decode("ascii")
+        css_parts.append(f"""
+        .stApp, [data-testid="stAppViewContainer"] {{
+            background:
+                linear-gradient(rgba(246, 247, 249, 0.80), rgba(246, 247, 249, 0.84)),
+                url("data:image/jpeg;base64,{b64_bg}") center / cover fixed no-repeat !important;
+        }}
+        [data-testid="stMain"], .main {{
+            background: transparent !important;
+        }}
+        """)
+
+    if css_parts:
+        st.markdown("<style>" + "\n".join(css_parts) + "</style>", unsafe_allow_html=True)
+
+# ===============================
+# 可选访问密码门禁（配置 APP_PASSWORD 后自动启用）
+# ===============================
+def _get_app_password() -> str:
+    try:
+        if "APP_PASSWORD" in st.secrets:
+            return str(st.secrets["APP_PASSWORD"]).strip()
+    except Exception:
+        pass
+    return os.getenv("APP_PASSWORD", "").strip()
+
+def check_optional_auth():
+    expected = _get_app_password()
+    if not expected or st.session_state.get("authenticated"):
+        return
+
+    st.markdown("""
+    <div class="lab-masthead">
+        <div class="lab-topline">
+            <span class="lab-brand">CHINESE LEXICAL MEMBERSHIP LAB</span>
+            <span class="lab-edition">ACCESS VERIFICATION</span>
+        </div>
+        <div class="lab-hero">
+            <div>
+                <h1 class="lab-title">基于大语言模型的汉语词类隶属度检测划类平台</h1>
+                <div class="lab-subtitle">Chinese Membership Detection &amp; Classification Platform Based on Large Language Models</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    with st.form("auth_form"):
+        pwd = st.text_input("请输入访问密码", type="password", placeholder="输入管理员配置的访问口令")
+        if st.form_submit_button("验证并进入", type="primary", use_container_width=True):
+            if hmac.compare_digest(pwd, expected):
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("访问密码错误。")
+    st.stop()
+
+# ===============================
+# 全局常量与动态文件路径生成
+# ===============================
+BASE_DIR = Path(__file__).parent
+
 def _find_asset(filename: str) -> Path:
     for candidate in (BASE_DIR / "assets" / filename, BASE_DIR / filename):
         if candidate.exists():
@@ -1815,6 +1902,7 @@ def render_live_monitor(job_state_file: Path, backup_file: Path, total_rows_defa
 
 
 def main():
+    _inject_background_images()
     check_optional_auth()
 
     # ---------- 页首：研究机构主页式排版 ----------
