@@ -3,7 +3,6 @@ import requests
 import json
 import re
 import os
-import hmac
 import pandas as pd
 import plotly.graph_objects as go
 import time
@@ -15,6 +14,7 @@ from typing import Tuple, Dict, Any, List
 from pathlib import Path
 
 SERVICE_MODE = "--worker" in sys.argv or "--supervisor" in sys.argv
+# 版本戳：若界面/日志看不到此字符串，说明仍在跑旧进程，必须 kill 后重启
 CODE_VERSION = "2026-09-15-stop-on-model-error-v1"
 
 # Gemini 原生 responseSchema：把输出格式锁死为固定 JSON（短规则码 + boolean）
@@ -69,364 +69,101 @@ logger = logging.getLogger(__name__)
 if not SERVICE_MODE:
     st.set_page_config(
         page_title="基于大语言模型的汉语隶属度检测划类平台",
-        page_icon="📘",
         layout="wide",
-        initial_sidebar_state="expanded",
+        initial_sidebar_state="collapsed",
         menu_items=None
     )
 
 # ===============================
-# 自定义 CSS 样式（保留丰富色彩与现代卡片层次）
+# 自定义CSS样式
 # ===============================
 custom_css = """
 <style>
 /* ===== 全局基础样式 ===== */
-#MainMenu {visibility: hidden;}
+header {visibility: hidden;}
 footer {visibility: hidden;}
-.stApp {
-    background: linear-gradient(180deg, #F1F5FB 0%, #F8FAFC 100%);
-}
-.block-container {
-    padding-top: 1.5rem;
-    padding-bottom: 2.5rem;
-    max-width: 1120px !important;
-}
+[data-testid="stSidebar"] {display: none !important;}
+.stApp > div:first-child {padding-top: 0.5rem;}
 
-/* ===== 侧边栏样式 ===== */
-[data-testid="stSidebar"] {
-    background: #FFFFFF;
-    border-right: 1px solid #E2E8F0;
-}
-[data-testid="stSidebar"] .block-container {
-    padding-top: 1.5rem;
-}
-.sidebar-brand {
-    padding: 0.25rem 0 0.75rem 0;
-    border-bottom: 1px solid #E2E8F0;
-    margin-bottom: 1rem;
-}
-.sidebar-brand h2 {
-    font-size: 1.1rem !important;
-    font-weight: 700 !important;
-    color: #0F172A !important;
-    margin: 0 !important;
-}
-.sidebar-brand p {
-    font-size: 0.78rem !important;
-    color: #64748B !important;
-    margin: 0.2rem 0 0 0 !important;
-}
-.sidebar-section-label {
-    font-size: 0.82rem;
-    font-weight: 700;
-    color: #334155;
-    letter-spacing: 0.02em;
-    margin: 0.6rem 0 0.4rem 0;
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-}
-.sidebar-section-label .dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: #2563EB;
-    display: inline-block;
-}
+/* ===== 主背景：扁平浅色，去掉堆叠渐变 ===== */
+.stApp {background: #f6f8fb;}
 
-/* ===== 顶部紧凑渐变横幅 ===== */
+/* ===== 主容器：收窄内容区，提升阅读舒适度 ===== */
+.block-container {padding-top: 1rem; padding-bottom: 2rem; max-width: 1280px !important;}
+
+/* ===== 标题栏：紧凑扁平 ===== */
 .title-header-card {
-    background: linear-gradient(125deg, #1E3A8A 0%, #2563EB 55%, #0284C7 100%);
-    padding: 1.25rem 1.75rem;
-    border-radius: 16px;
-    margin-bottom: 1.35rem;
-    box-shadow: 0 8px 24px rgba(37, 99, 235, 0.16);
+    background: #1e4d7b; padding: 1.2rem 1.75rem; border-radius: 14px; margin-bottom: 1.25rem;
 }
 .title-header-card h1 {
-    color: #FFFFFF !important;
-    font-size: 1.48rem !important;
-    font-weight: 700 !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    letter-spacing: 0.3px;
+    color: #ffffff !important; font-size: 1.45rem !important; font-weight: 600 !important;
+    margin: 0 !important; padding: 0 !important; letter-spacing: 0.3px;
 }
 .title-header-card .subtitle {
-    color: rgba(255, 255, 255, 0.86) !important;
-    font-size: 0.85rem !important;
-    margin-top: 0.3rem !important;
+    color: rgba(255, 255, 255, 0.78) !important; font-size: 0.86rem !important; margin-top: 0.35rem !important;
 }
-.title-header-card .badges {
-    margin-top: 0.8rem;
-    display: flex;
-    gap: 0.45rem;
-    flex-wrap: wrap;
-}
+.title-header-card .badges {margin-top: 0.85rem; display: flex; gap: 0.5rem; flex-wrap: wrap;}
 .title-header-card .badge {
-    background: rgba(255, 255, 255, 0.16);
-    color: #FFFFFF;
-    padding: 0.22rem 0.7rem;
-    border-radius: 999px;
-    font-size: 0.75rem;
-    font-weight: 500;
-    border: 1px solid rgba(255, 255, 255, 0.24);
-    backdrop-filter: blur(4px);
-}
-.title-header-card .badge.amber {
-    background: rgba(245, 158, 11, 0.24);
-    border-color: rgba(252, 211, 77, 0.45);
-}
-.title-header-card .badge.emerald {
-    background: rgba(16, 185, 129, 0.24);
-    border-color: rgba(110, 231, 183, 0.45);
+    background: rgba(255, 255, 255, 0.12); color: #fff; padding: 0.25rem 0.7rem;
+    border-radius: 16px; font-size: 0.76rem; border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
 /* ===== 区块标题 ===== */
 .section-title {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 1.02rem !important;
-    font-weight: 700 !important;
-    color: #1E293B !important;
-    margin: 0.75rem 0 0.85rem 0 !important;
-    padding-bottom: 0.45rem;
-    border-bottom: 1px solid #E2E8F0;
+    display: flex; align-items: center; gap: 0.5rem; font-size: 1.05rem !important;
+    font-weight: 600 !important; color: #1e3a5f !important; margin-bottom: 0.9rem !important;
+    padding-bottom: 0.5rem; border-bottom: 1px solid #e2e8f0;
 }
 .section-title .icon-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #2563EB;
-    flex-shrink: 0;
+    width: 8px; height: 8px; border-radius: 50%; background: #2d6cb8; flex-shrink: 0;
 }
 
-/* ===== 按钮样式 ===== */
-.stButton > button[kind="primary"],
-.stFormSubmitButton > button[kind="primary"] {
-    background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%) !important;
-    border: none !important;
-    border-radius: 10px !important;
-    padding: 0.55rem 1.25rem !important;
-    font-weight: 600 !important;
-    font-size: 0.92rem !important;
-    color: #FFFFFF !important;
-    box-shadow: 0 3px 10px rgba(37, 99, 235, 0.22) !important;
+/* ===== 按钮：扁平克制 ===== */
+.stButton > button[kind="primary"] {
+    background: #2563a8 !important; border: none !important; border-radius: 10px !important;
+    padding: 0.7rem 1.75rem !important; font-weight: 600 !important; font-size: 0.95rem !important;
+    color: white !important; transition: background 0.2s ease !important; width: 100%;
+}
+.stButton > button[kind="primary"]:hover {background: #1e4d7b !important;}
+.stButton > button[kind="secondary"] {
+    background: #ffffff !important; border: 1px solid #cbd5e1 !important; border-radius: 10px !important;
+    padding: 0.55rem 1.25rem !important; font-weight: 500 !important; color: #475569 !important;
     transition: all 0.2s ease !important;
 }
-.stButton > button[kind="primary"]:hover,
-.stFormSubmitButton > button[kind="primary"]:hover {
-    background: linear-gradient(135deg, #1D4ED8 0%, #1E40AF 100%) !important;
-    transform: translateY(-1px);
-}
-.stButton > button[kind="secondary"],
-.stFormSubmitButton > button[kind="secondary"] {
-    background: #FFFFFF !important;
-    border: 1px solid #CBD5E1 !important;
-    border-radius: 10px !important;
-    padding: 0.45rem 0.9rem !important;
-    font-weight: 500 !important;
-    color: #334155 !important;
-    transition: all 0.2s ease !important;
-}
-.stButton > button[kind="secondary"]:hover,
-.stFormSubmitButton > button[kind="secondary"]:hover {
-    border-color: #2563EB !important;
-    color: #2563EB !important;
-    background: #EFF6FF !important;
-}
 
-/* ===== 表单卡片与输入框 ===== */
-div[data-testid="stForm"] {
-    background: #FFFFFF;
-    border: 1px solid #DBEAFE;
-    border-radius: 16px;
-    padding: 1.25rem 1.4rem;
-    box-shadow: 0 4px 18px rgba(15, 23, 42, 0.04);
+/* ===== 输入框及标签页 ===== */
+.stTextInput > div > div > input, .stTextArea > div > div > textarea, .stSelectbox > div > div > div {
+    border-radius: 10px !important; border: 1px solid #d8e0ea !important;
+    transition: all 0.2s ease !important; background: #ffffff !important;
 }
-.stTextInput > div > div > input,
-.stTextArea > div > div > textarea,
-.stSelectbox > div > div > div {
-    border-radius: 10px !important;
-    border: 1px solid #CBD5E1 !important;
-    background: #FFFFFF !important;
+.stTextInput > div > div > input:focus, .stTextArea > div > div > textarea:focus, .stSelectbox > div > div > div:focus {
+    border-color: #2d6cb8 !important; box-shadow: 0 0 0 3px rgba(45, 108, 184, 0.12) !important; background: #ffffff !important;
 }
-.stTextInput > div > div > input:focus,
-.stTextArea > div > div > textarea:focus {
-    border-color: #2563EB !important;
-    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14) !important;
-}
-
-/* ===== Tabs 导航栏 ===== */
 .stTabs [data-baseweb="tab-list"] {
-    gap: 0.5rem;
-    background: #E2E8F0;
-    padding: 0.35rem;
-    border-radius: 12px;
-    margin-bottom: 1.2rem;
-    width: fit-content;
+    gap: 0.35rem; background: #eef2f7; padding: 0.4rem; border-radius: 12px; margin-bottom: 1.25rem;
 }
-.stTabs [data-baseweb="tab"] {
-    height: 2.35rem;
-    border-radius: 9px !important;
-    padding: 0 1.4rem !important;
-    font-weight: 600 !important;
-    font-size: 0.9rem !important;
-    color: #475569 !important;
-    background: transparent !important;
-}
-.stTabs [aria-selected="true"] {
-    background: #FFFFFF !important;
-    color: #1D4ED8 !important;
-    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08) !important;
-}
+.stTabs [data-baseweb="tab"] {height: 2.5rem; border-radius: 9px !important; padding: 0 1.5rem !important; font-weight: 500 !important; color: #64748b !important;}
+.stTabs [aria-selected="true"] {background: #2563a8 !important; color: white !important;}
 
-/* ===== 结果展示卡片 ===== */
-.result-success-card {
-    background: linear-gradient(135deg, #ECFDF5 0%, #EFF6FF 100%);
-    border-radius: 14px;
-    padding: 1.1rem 1.35rem;
-    border: 1px solid #A7F3D0;
-    border-left: 5px solid #10B981;
-    margin: 1rem 0 1.15rem 0;
-    box-shadow: 0 4px 14px rgba(16, 185, 129, 0.08);
-}
-.kpi-card {
-    background: #FFFFFF;
-    border: 1px solid #E2E8F0;
-    border-radius: 12px;
-    padding: 0.9rem 1.1rem;
-    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.03);
-}
-.kpi-card.noun {border-top: 3px solid #10B981;}
-.kpi-card.verb {border-top: 3px solid #2563EB;}
-.kpi-card.nv {border-top: 3px solid #7C3AED;}
-.kpi-label {font-size: 0.82rem; color: #64748B; font-weight: 600;}
-.kpi-value {font-size: 1.45rem; font-weight: 700; color: #0F172A; margin-top: 0.2rem;}
+/* ===== 通用小组件 ===== */
+.result-success-card {background: #ecfdf5; border-radius: 10px; padding: 0.9rem 1.1rem; border-left: 3px solid #10b981; margin: 0.9rem 0;}
+.info-highlight {background: #eff6ff; border-radius: 10px; padding: 0.9rem 1.1rem; border-left: 3px solid #3b82f6; margin: 0.65rem 0;}
+.error-highlight {background: #fef2f2; border-radius: 10px; padding: 0.9rem 1.1rem; border-left: 3px solid #ef4444; margin: 0.65rem 0;}
+.rank-card {display: flex; align-items: center; justify-content: space-between; padding: 0.7rem 1.1rem; border-radius: 10px; margin-bottom: 0.5rem; background: #ffffff; border: 1px solid #e2e8f0;}
+.rank-card .rank-num {width: 28px; height: 28px; border-radius: 50%; background: #eef2f7; color: #64748b; display: flex; align-items: center; justify-content: center; font-weight: 600;}
+.rank-card.top-1 .rank-num {background: #f59e0b; color: white;}
+.status-badge {display: inline-block; padding: 0.22rem 0.7rem; border-radius: 16px; font-size: 0.78rem; font-weight: 500;}
+.status-badge.success {background: #d1fae5; color: #065f46;}
 
-.info-highlight {
-    background: #EFF6FF;
-    border-radius: 10px;
-    padding: 0.85rem 1.1rem;
-    border-left: 4px solid #2563EB;
-    margin: 0.65rem 0;
-}
-.error-highlight {
-    background: #FEF2F2;
-    border-radius: 10px;
-    padding: 0.85rem 1.1rem;
-    border-left: 4px solid #EF4444;
-    margin: 0.65rem 0;
-}
-
-/* ===== 排名卡片 ===== */
-.rank-card {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.75rem 1.1rem;
-    border-radius: 12px;
-    margin-bottom: 0.55rem;
-    background: #FFFFFF;
-    border: 1px solid #E2E8F0;
-    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.02);
-}
-.rank-card.top-1 {
-    background: linear-gradient(90deg, #FFFBEB 0%, #FFFFFF 100%);
-    border-color: #FDE68A;
-}
-.rank-card .rank-num {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    background: #E2E8F0;
-    color: #475569;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 700;
-    font-size: 0.85rem;
-}
-.rank-card.top-1 .rank-num {background: #F59E0B; color: #FFFFFF;}
-.rank-card.top-2 .rank-num {background: #64748B; color: #FFFFFF;}
-.rank-card.top-3 .rank-num {background: #D97706; color: #FFFFFF;}
-
-/* ===== 状态徽章与运行提示 ===== */
-.status-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 0.22rem 0.68rem;
-    border-radius: 999px;
-    font-size: 0.78rem;
-    font-weight: 600;
-}
-.status-badge.success {background: #DCFCE7; color: #166534; border: 1px solid #BBF7D0;}
-.status-badge.warn {background: #FEF3C7; color: #92400E; border: 1px solid #FDE68A;}
-
-.running-status {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.85rem 1.1rem;
-    margin: 0.6rem 0 1rem 0;
-    border-radius: 12px;
-    background: #EFF6FF;
-    border: 1px solid #BFDBFE;
-    color: #1E40AF;
-    font-weight: 600;
-}
-.running-spinner {
-    display: inline-block;
-    width: 16px;
-    height: 16px;
-    min-width: 16px;
-    border: 2.5px solid rgba(37, 99, 235, 0.22);
-    border-top-color: #2563EB;
-    border-radius: 50%;
-    animation: batch-spin 0.75s linear infinite;
-    flex: 0 0 auto;
-}
-@keyframes batch-spin {to {transform: rotate(360deg);}}
-.batch-detail {margin-top: 0.25rem; font-size: 0.86rem; font-weight: 500; color: #475569;}
+/* ===== 任务状态圈 ===== */
+.running-status{display:flex;align-items:center;gap:.7rem;padding:.8rem 1rem;margin:.5rem 0 1rem 0;border-radius:10px;background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;font-weight:600;}
+.running-spinner{display:inline-block;width:16px;height:16px;min-width:16px;border:2.5px solid rgba(45,108,184,.22);border-top-color:#2d6cb8;border-radius:50%;animation:batch-spin .75s linear infinite;flex:0 0 auto;}
+@keyframes batch-spin{to{transform:rotate(360deg);}}
+.batch-detail{margin-top:.3rem;font-size:.88rem;font-weight:500;color:#475569;}
 </style>
 """
 if not SERVICE_MODE:
     st.markdown(custom_css, unsafe_allow_html=True)
-
-# ===============================
-# 可选访问密码门禁（配置 APP_PASSWORD 后自动启用）
-# ===============================
-def _get_app_password() -> str:
-    try:
-        if "APP_PASSWORD" in st.secrets:
-            return str(st.secrets["APP_PASSWORD"]).strip()
-    except Exception:
-        pass
-    return os.getenv("APP_PASSWORD", "").strip()
-
-def check_optional_auth():
-    expected = _get_app_password()
-    if not expected:
-        return  # 未配置 APP_PASSWORD 时保持开放（可在侧边栏提示）
-    if st.session_state.get("authenticated"):
-        return
-
-    st.markdown("""
-    <div class="title-header-card">
-        <h1>汉语词类隶属度检测划类平台</h1>
-        <div class="subtitle">Chinese Membership Detection & Classification · 访问验证</div>
-    </div>
-    """, unsafe_allow_html=True)
-    with st.form("auth_form"):
-        pwd = st.text_input("请输入访问密码", type="password", placeholder="输入管理员配置的访问口令")
-        submitted = st.form_submit_button("验证并进入平台", type="primary", use_container_width=True)
-        if submitted:
-            if hmac.compare_digest(pwd, expected):
-                st.session_state["authenticated"] = True
-                st.rerun()
-            else:
-                st.error("访问密码错误，请重试。")
-    st.stop()
 
 # ===============================
 # 全局常量与动态文件路径生成
@@ -481,6 +218,7 @@ RULE_SETS = {
 }
 
 MODEL_OPTIONS = {
+    # ===================== 国内模型（保留原有） =====================
     "DeepSeek Chat": {
         "provider": "deepseek", "model": "deepseek-chat",
         "api_key": os.getenv("DEEPSEEK_API_KEY"), "env_var": "DEEPSEEK_API_KEY"
@@ -493,6 +231,9 @@ MODEL_OPTIONS = {
         "provider": "qwen", "model": "qwen-max",
         "api_key": os.getenv("QWEN_API_KEY"), "env_var": "QWEN_API_KEY"
     },
+
+    # ===================== 国外模型：OpenAI =====================
+    # ChatGPT 本身是产品名；API 实际调用的是 OpenAI 的 GPT 模型。
     "ChatGPT（GPT-5.6 Luna）": {
         "provider": "openai", "model": "gpt-5.6-luna",
         "api_key": os.getenv("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"
@@ -505,6 +246,8 @@ MODEL_OPTIONS = {
         "provider": "openai", "model": "gpt-5.6-sol",
         "api_key": os.getenv("OPENAI_API_KEY"), "env_var": "OPENAI_API_KEY"
     },
+
+    # ===================== 国外模型：Google Gemini =====================
     "Google Gemini 3.8 Flash": {
         "provider": "gemini", "model": "gemini-3.8-flash",
         "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
@@ -517,6 +260,8 @@ MODEL_OPTIONS = {
         "provider": "gemini", "model": "gemini-3.1-pro-preview",
         "api_key": os.getenv("GEMINI_API_KEY"), "env_var": "GEMINI_API_KEY"
     },
+
+    # ===================== 国外模型：xAI Grok =====================
     "xAI Grok 4.6": {
         "provider": "xai", "model": "grok-4.6",
         "api_key": os.getenv("XAI_API_KEY"), "env_var": "XAI_API_KEY"
@@ -524,8 +269,7 @@ MODEL_OPTIONS = {
 }
 
 AVAILABLE_MODEL_OPTIONS = {name: info for name, info in MODEL_OPTIONS.items() if info["api_key"]}
-if not AVAILABLE_MODEL_OPTIONS:
-    AVAILABLE_MODEL_OPTIONS = MODEL_OPTIONS
+if not AVAILABLE_MODEL_OPTIONS: AVAILABLE_MODEL_OPTIONS = MODEL_OPTIONS
 
 # ===============================
 # 安全操作辅助函数
@@ -540,6 +284,7 @@ def _lock_file(lock_path: Path, timeout=30, poll=0.2):
             return fd
         except FileExistsError:
             try:
+                # 死锁解脱：如果锁文件存在且已严重超时（例如强杀进程遗留），强行清理
                 if time.time() - os.path.getmtime(str(lock_path)) > timeout * 2:
                     os.unlink(str(lock_path))
             except Exception:
@@ -559,10 +304,12 @@ def _unlock_file(lock_path: Path, fd):
 
 
 def _make_task_id(file_name: str, row_index: int) -> str:
+    """批次内每个 Excel 行的稳定唯一 ID。"""
     return f"{file_name}::row::{row_index + 1}"
 
 
 def clean_csv_duplicates(file_path: Path):
+    """确保全表严格去重并严格按【序数】递增排序。"""
     if not file_path.exists() or file_path.stat().st_size == 0:
         return
     lock_path = file_path.with_suffix(file_path.suffix + '.maintenance.lock')
@@ -588,7 +335,7 @@ def clean_csv_duplicates(file_path: Path):
             tmp = file_path.with_suffix(file_path.suffix + '.clean.tmp')
             df.to_csv(tmp, index=False, encoding='utf-8-sig')
             os.replace(tmp, file_path)
-    except Exception:
+    except Exception as e:
         logger.exception(f"清理并排序 CSV 失败: {file_path}")
     finally:
         if fd is not None:
@@ -596,6 +343,10 @@ def clean_csv_duplicates(file_path: Path):
 
 
 def append_unique_csv(df: pd.DataFrame, file_path: Path, task_id: str, max_retries=30):
+    """
+    原子写入：读取原表合并新行 -> 严格按ID去重 -> 严格按序数重新排序 -> 原子覆盖写入。
+    彻底解决多进程读写导致的错序和重复。
+    """
     lock_path = file_path.with_suffix(file_path.suffix + '.write.lock')
     last_error = ''
     for attempt in range(1, max_retries + 1):
@@ -605,6 +356,7 @@ def append_unique_csv(df: pd.DataFrame, file_path: Path, task_id: str, max_retri
             if file_path.exists() and file_path.stat().st_size > 0:
                 existing_all = pd.read_csv(file_path, encoding='utf-8-sig')
 
+                # 兼容旧版本：旧 CSV 没有任务ID时，先补全ID列
                 if '任务ID' not in existing_all.columns:
                     if '序数' in existing_all.columns:
                         existing_all['任务ID'] = existing_all['序数'].apply(
@@ -613,6 +365,7 @@ def append_unique_csv(df: pd.DataFrame, file_path: Path, task_id: str, max_retri
                     else:
                         existing_all['任务ID'] = [f'legacy::index::{i+1}' for i in range(len(existing_all))]
 
+                # 如果明确已经存在最新结果，跳过
                 existing_ids = set(existing_all['任务ID'].astype(str).tolist())
                 if task_id in existing_ids:
                     return True, '该任务ID已经写入，跳过重复写入。', True
@@ -621,15 +374,17 @@ def append_unique_csv(df: pd.DataFrame, file_path: Path, task_id: str, max_retri
             else:
                 combined = df.copy()
 
+            # 强制剔除任何重复项并强制按序数排序
             if '序数' in combined.columns:
                 combined['序数_num'] = pd.to_numeric(combined['序数'], errors='coerce')
                 combined = combined.drop_duplicates(subset=['任务ID'], keep='last')
                 combined = combined.sort_values('序数_num').drop(columns=['序数_num'])
 
+            # 写入临时文件后覆盖，防止崩溃导致文件损坏
             tmp_path = file_path.with_suffix('.write.tmp')
             combined.to_csv(tmp_path, index=False, encoding='utf-8-sig')
             os.replace(tmp_path, file_path)
-
+            
             return True, '写入并重排序成功。', False
         except Exception as e:
             last_error = f"{type(e).__name__}: {e}"
@@ -642,6 +397,7 @@ def append_unique_csv(df: pd.DataFrame, file_path: Path, task_id: str, max_retri
 
 
 def is_task_processed(file_path: Path, task_id: str, row_number: int) -> bool:
+    """判断具体 Excel 行是否已经处理"""
     if not file_path.exists() or file_path.stat().st_size == 0:
         return False
     try:
@@ -653,12 +409,13 @@ def is_task_processed(file_path: Path, task_id: str, row_number: int) -> bool:
             existing = pd.read_csv(file_path, encoding='utf-8-sig', usecols=['序数'])
             vals = pd.to_numeric(existing['序数'], errors='coerce').dropna().astype(int)
             return row_number in set(vals.tolist())
-    except Exception:
+    except Exception as e:
         pass
     return False
 
 
 def spawn_detached(cmd, cwd):
+    """跨平台脱离式进程启动，防止 Streamlit 页面刷新误杀子进程。"""
     kwargs = {}
     if os.name == 'nt':
         kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
@@ -670,12 +427,15 @@ def spawn_detached(cmd, cwd):
 # 文本解析工具
 # ===============================
 def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
+    """兼容 OpenAI / Gemini / xAI 等返回结构，尽可能提取最终文本。"""
     if not isinstance(resp_json, dict):
         return ""
     try:
+        # OpenAI Responses API
         if isinstance(resp_json.get("output_text"), str) and resp_json["output_text"].strip():
             return resp_json["output_text"]
 
+        # OpenAI-compatible Chat Completions
         choices = resp_json.get("choices")
         if isinstance(choices, list) and choices:
             choice = choices[0] or {}
@@ -684,6 +444,7 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
             if isinstance(content, str) and content.strip():
                 return content
             if isinstance(content, dict):
+                # 某些 Gemini/OpenAI 兼容层可能直接把结构化结果放入 content。
                 try:
                     return json.dumps(content, ensure_ascii=False)
                 except Exception:
@@ -692,6 +453,7 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
                 parts = []
                 for part in content:
                     if isinstance(part, dict):
+                        # Gemini 3.x 偶发：reasoning / thought 与 text 分 part
                         text = part.get("text") or part.get("content")
                         if isinstance(text, str) and text.strip():
                             parts.append(text)
@@ -699,15 +461,18 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
                         parts.append(part)
                 if parts:
                     return "".join(parts)
+            # 某些兼容层可能把文本放进 delta
             delta = choice.get("delta", {}) or {}
             delta_content = delta.get("content", "")
             if isinstance(delta_content, str) and delta_content.strip():
                 return delta_content
+            # Gemini Flash 偶发：最终 JSON 在 refusal / reasoning 之外的扩展字段
             for alt_key in ("reasoning_content", "reasoning", "output_text", "text"):
                 alt = message.get(alt_key)
                 if isinstance(alt, str) and alt.strip() and ("{" in alt or "scores" in alt.lower()):
                     return alt
 
+        # Gemini 原生/代理偶见结构：candidates[].content.parts[].text
         candidates = resp_json.get("candidates")
         if isinstance(candidates, list):
             parts = []
@@ -724,29 +489,40 @@ def extract_text_from_response(resp_json: Dict[str, Any]) -> str:
         return ""
 
 def _clean_possible_markdown_json(text: str) -> str:
+    """清理 Gemini 常见的 Markdown/不可见字符，但不破坏 JSON 内部文本。"""
     if not text:
         return ""
     cleaned = str(text)
     cleaned = cleaned.replace("\ufeff", "").replace("\u200b", "").replace("\u2060", "")
     cleaned = cleaned.strip()
+
+    # 去除首尾 Markdown JSON 代码围栏
     cleaned = re.sub(r"^\s*```(?:json|JSON|javascript|js)?\s*", "", cleaned)
     cleaned = re.sub(r"\s*```\s*$", "", cleaned)
     return cleaned.strip()
 
 
 def _repair_json_candidate(candidate: str) -> str:
+    """对已经定位到的 JSON 对象做最小侵入式修复。
+    重点处理：字符串中的真实换行/制表符、尾逗号、Markdown 残留、中文弯引号。
+    """
     if not candidate:
         return candidate
 
     candidate = candidate.strip()
     candidate = re.sub(r"^\s*```(?:json|JSON)?\s*", "", candidate)
     candidate = re.sub(r"\s*```\s*$", "", candidate).strip()
+
+    # 常见中文/弯引号 → 标准 JSON 双引号（对 Gemini 更稳）
     candidate = (candidate
                  .replace("\u201c", '"').replace("\u201d", '"')
                  .replace("\u2018", "'").replace("\u2019", "'")
                  .replace("「", '"').replace("」", '"'))
+
+    # 去除对象/数组结尾前的尾逗号：{"a": 1,} / [1,]
     candidate = re.sub(r",\s*([}\]])", r"\1", candidate)
 
+    # JSON 字符串内若出现真实控制字符，转成合法 JSON 转义。
     out = []
     in_string = False
     escaped = False
@@ -784,6 +560,7 @@ def _repair_json_candidate(candidate: str) -> str:
 
 
 def _iter_balanced_json_objects(text: str):
+    """按 JSON 字符串语义寻找完整 {...} 对象，避免简单 find/rfind 误截取。"""
     if not text:
         return
     n = len(text)
@@ -815,6 +592,7 @@ def _iter_balanced_json_objects(text: str):
 
 
 def _parse_json_object_candidate(candidate: str):
+    """严格解析 -> 最小修复后解析。"""
     try:
         obj = json.loads(candidate, strict=False)
         if isinstance(obj, dict):
@@ -833,20 +611,30 @@ def _parse_json_object_candidate(candidate: str):
 
 
 def extract_json_from_text(text: str) -> Tuple[Dict[str, Any], str]:
+    """通用 JSON 提取器。
+    保留原有模型兼容性，同时解决代码块、前后说明、嵌套对象、控制字符和尾逗号问题。
+    """
     if not text:
         return None, text
+
     cleaned = _clean_possible_markdown_json(text)
+
+    # 1. 整段就是 JSON
     obj = _parse_json_object_candidate(cleaned)
     if isinstance(obj, dict):
         return obj, cleaned
+
+    # 2. 在任意位置寻找完整 JSON 对象
     for candidate in _iter_balanced_json_objects(cleaned):
         obj = _parse_json_object_candidate(candidate)
         if isinstance(obj, dict):
             return obj, candidate
+
     return None, text
 
 
 def _gemini_prefer_schema_objects(text: str):
+    """优先返回看起来像本任务 schema 的完整 JSON 对象（含 scores / predicted_pos）。"""
     preferred = []
     others = []
     for candidate in _iter_balanced_json_objects(text):
@@ -861,6 +649,7 @@ def _gemini_prefer_schema_objects(text: str):
 
 
 def _gemini_try_close_truncated(candidate: str) -> str:
+    """Gemini 长 explanation 偶发截断：尝试补全缺失的右括号。"""
     if not candidate:
         return candidate
     opens = candidate.count("{") - candidate.count("}")
@@ -870,11 +659,13 @@ def _gemini_try_close_truncated(candidate: str) -> str:
 
 
 def _truthy_token(s: str) -> bool:
+    """把各种『符合/不符合』写法统一成 bool。"""
     t = (s or "").strip().lower()
     if t in ("true", "yes", "y", "1", "是", "对", "符合", "√", "✓", "match", "positive"):
         return True
     if t in ("false", "no", "n", "0", "否", "不", "不符合", "×", "✗", "x", "mismatch", "negative"):
         return False
+    # 兜底：含“符合”且不含“不”视为 true
     if "不符合" in t or "不能" in t:
         return False
     if "符合" in t or "可以" in t:
@@ -883,6 +674,9 @@ def _truthy_token(s: str) -> bool:
 
 
 def _ultra_salvage_from_any_text(text: str) -> Dict[str, Any]:
+    """极宽松抢救：不管模型输出多乱，只要能抠出规则 true/false 或词类判断就返回。
+    目标：能解析出来就算成功，避免因格式问题判失败。
+    """
     if not text or not str(text).strip():
         return None
 
@@ -893,7 +687,9 @@ def _ultra_salvage_from_any_text(text: str) -> Dict[str, Any]:
         "is_dual_category": False,
         "scores": {"名词": {}, "动词": {}, "名动词": {}},
     }
+    found_any = False
 
+    # ---- predicted_pos：多种中英文写法 ----
     pos_patterns = [
         r'["\']?predicted_pos["\']?\s*[:=]\s*["\']?\s*(名动词|名词|动词)',
         r'预测词类\s*[：:=]\s*(名动词|名词|动词)',
@@ -905,8 +701,10 @@ def _ultra_salvage_from_any_text(text: str) -> Dict[str, Any]:
         m = re.search(pat, raw, re.IGNORECASE)
         if m:
             result["predicted_pos"] = m.group(1)
+            found_any = True
             break
 
+    # ---- is_dual_category ----
     m = re.search(
         r'["\']?is_dual_category["\']?\s*[:=]\s*(true|false|True|False|是|否)|'
         r'(?:是否)?兼类\s*[：:=]?\s*(是|否|true|false)',
@@ -915,12 +713,16 @@ def _ultra_salvage_from_any_text(text: str) -> Dict[str, Any]:
     if m:
         val = (m.group(1) or m.group(2) or "").strip().lower()
         result["is_dual_category"] = val in ("true", "是")
+        found_any = True
 
+    # ---- 规则分：兼容 N1 / N1_xxx / "N1_可受..." : true / 符合 ----
+    # 1) 标准 key: value
     rule_pat = re.compile(
         r'["\']?\s*((?:NV|N|V)\s*\d+[_\-\u4e00-\u9fa5A-Za-z0-9]*)\s*["\']?\s*[:=：]\s*'
         r'(true|false|True|False|是|否|yes|no|符合|不符合|√|×|✓|✗|1|0)',
         re.IGNORECASE
     )
+    # 2) 叙述式：N1 ... 符合/不符合
     narrative_pat = re.compile(
         r'((?:NV|N|V)\s*\d+)\s*[^。；;\n]{0,40}?(符合|不符合|可以|不能|是|否)',
         re.IGNORECASE
@@ -940,15 +742,21 @@ def _ultra_salvage_from_any_text(text: str) -> Dict[str, Any]:
         key = re.sub(r'\s+', '', rm.group(1).strip())
         is_match = _truthy_token(rm.group(2))
         result["scores"][_bucket(key)][key] = is_match
+        found_any = True
 
     if not any(result["scores"][p] for p in result["scores"]):
         for rm in narrative_pat.finditer(raw):
             key = re.sub(r'\s+', '', rm.group(1).strip())
             is_match = _truthy_token(rm.group(2))
             result["scores"][_bucket(key)][key] = is_match
+            found_any = True
 
+    # ---- 按词类块再扫一遍（嵌套更深时）----
     for pos in ("名词", "动词", "名动词"):
-        block_m = re.search(rf'["\']?{pos}["\']?\s*[:=：]\s*\{{(.*?)\}}', raw, re.DOTALL)
+        block_m = re.search(
+            rf'["\']?{pos}["\']?\s*[:=：]\s*\{{(.*?)\}}',
+            raw, re.DOTALL
+        )
         if not block_m:
             continue
         block = block_m.group(1)
@@ -956,11 +764,14 @@ def _ultra_salvage_from_any_text(text: str) -> Dict[str, Any]:
             key = re.sub(r'\s+', '', rm.group(1).strip())
             is_match = _truthy_token(rm.group(2))
             result["scores"][pos][key] = is_match
+            found_any = True
 
+    # 若完全抠不到任何信号，返回 None
     has_scores = any(result["scores"][p] for p in result["scores"])
     if not has_scores and result["predicted_pos"] == "未知":
         return None
 
+    # 没有 predicted_pos 时，用得分条目数粗略推断
     if result["predicted_pos"] == "未知" and has_scores:
         counts = {p: sum(1 for v in result["scores"][p].values() if v) for p in result["scores"]}
         best = max(counts, key=lambda k: counts[k])
@@ -971,30 +782,46 @@ def _ultra_salvage_from_any_text(text: str) -> Dict[str, Any]:
 
 
 def extract_gemini_json(text: str) -> Tuple[Dict[str, Any], str]:
+    """极宽松解析器：无论模型输出多乱，尽可能抠出可用结果。
+    策略顺序：
+      1. 清理 Markdown / 不可见字符
+      2. 标准 JSON loads
+      3. 截断补全后再 loads
+      4. 从文本任意位置找 JSON 对象
+      5. 极宽松正则抢救规则 true/false、词类、兼类
+    只要第 5 步能抠到一点信号就视为成功。
+    """
     if not text:
         return None, text
+
     cleaned = _clean_possible_markdown_json(text)
 
+    # 1) 整段尝试
     obj = _parse_json_object_candidate(cleaned)
     if isinstance(obj, dict) and ("scores" in obj or "predicted_pos" in obj or "is_dual_category" in obj):
         return obj, cleaned
 
+    # 2) 优先 schema 相关对象 + 截断补全
     for candidate in _gemini_prefer_schema_objects(cleaned):
         for cand in (candidate, _gemini_try_close_truncated(candidate)):
             obj = _parse_json_object_candidate(cand)
             if isinstance(obj, dict) and ("scores" in obj or "predicted_pos" in obj or "is_dual_category" in obj):
                 return obj, cand
 
+    # 3) 任意 balanced 对象
     for candidate in _iter_balanced_json_objects(cleaned):
         for cand in (candidate, _gemini_try_close_truncated(candidate)):
             obj = _parse_json_object_candidate(cand)
             if isinstance(obj, dict):
+                # 即使没有 scores 字段，只要有嵌套 dict 也先返回，后面 ask_model 会映射
                 return obj, cand
 
+    # 4) 把全文当“半结构化文本”极宽松抢救
     salvaged = _ultra_salvage_from_any_text(cleaned)
     if salvaged is not None:
         return salvaged, cleaned
 
+    # 5) 对原始未清理文本再抢救一次（防止清理误伤）
     salvaged = _ultra_salvage_from_any_text(text)
     if salvaged is not None:
         return salvaged, text
@@ -1005,9 +832,11 @@ def normalize_key(k: str, pos_rules: list) -> str:
     if not isinstance(k, str):
         return None
     k_clean = re.sub(r'[\s_]+', '', k).upper()
+    # 1) 全名完全匹配
     for r in pos_rules:
         if re.sub(r'[\s_]+', '', r["name"]).upper() == k_clean:
             return r["name"]
+    # 2) 短码精确匹配（N1/V6/NV10），按码长度从长到短，避免 NV1 误匹配 NV10
     code_hits = []
     for r in pos_rules:
         code_match = re.match(r'^(NV\d+|N\d+|V\d+)', re.sub(r'[\s_]+', '', r["name"]).upper())
@@ -1033,8 +862,7 @@ def map_to_allowed_score(rule: dict, raw_val) -> int:
             if s in ("no", "n", "false", "否", "×", "不符合"): return mismatch
         if isinstance(raw_val, (int, float)):
             return match if int(raw_val) == match else mismatch
-    except Exception:
-        pass
+    except Exception: pass
     return mismatch
 
 def calculate_membership(scores_all: Dict[str, Dict[str, int]]) -> Dict[str, float]:
@@ -1042,20 +870,18 @@ def calculate_membership(scores_all: Dict[str, Dict[str, int]]) -> Dict[str, flo
     try:
         for pos, scores in scores_all.items():
             membership[pos] = max(-1.0, min(1.0, sum(scores.values()) / 100))
-    except Exception:
-        pass
+    except Exception: pass
     return membership
 
 def get_top_10_positions(membership: Dict[str, float]) -> List[Tuple[str, float]]:
-    try:
-        return sorted(membership.items(), key=lambda x: x[1], reverse=True)[:10]
-    except Exception:
-        return []
+    try: return sorted(membership.items(), key=lambda x: x[1], reverse=True)[:10]
+    except Exception: return []
 
 # ===============================
-# LLM 调用与词类判定主函数
+# LLM调用与词类判定主函数
 # ===============================
 def get_provider_config(provider, api_key, model, messages, max_tokens, temperature):
+    """统一构造各厂商请求配置。OpenAI 用 Responses API；Gemini/xAI 用 Chat Completions。"""
     if provider == "openai":
         url = os.getenv("OPENAI_RESPONSES_URL", "https://api.openai.com/v1/responses")
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -1064,11 +890,15 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
             "input": messages,
             "max_output_tokens": max_tokens,
         }
+        # GPT-5.6 系列支持 reasoning_effort；批量词类判定使用 low，避免无谓增加成本。
         reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT", "low").strip().lower()
         if reasoning_effort in {"none", "low", "medium", "high", "xhigh", "max"}:
             payload["reasoning"] = {"effort": reasoning_effort}
         return url, headers, payload, "responses"
 
+    # ===== Gemini：官方 generateContent + responseSchema + Thought Summary =====
+    # Gemini 3 的“思考”与最终答案是分开的：思考摘要通过 thought=true 的 parts 返回，
+    # 最终答案仍严格限制为 JSON。这样既保留推理摘要，又不会把推理文本混进 JSON 导致解析失败。
     if provider == "gemini":
         native_base = os.getenv(
             "GEMINI_NATIVE_BASE_URL",
@@ -1094,6 +924,7 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
         if not contents:
             contents = [{"role": "user", "parts": [{"text": "\n\n".join(system_bits) or "请输出 JSON"}]}]
 
+        # Gemini 3：优先 high，确保获得较完整的思考摘要；可通过环境变量下调。
         thinking_level = os.getenv("GEMINI_THINKING_LEVEL", "high").strip().lower()
         if thinking_level not in {"low", "medium", "high"}:
             thinking_level = "high"
@@ -1103,7 +934,9 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
             "generationConfig": {
                 "responseMimeType": "application/json",
                 "responseSchema": GEMINI_FIXED_SCHEMA,
+                # 思考 token 也会占用输出预算；给足空间，避免 explanation / thought summary 被截断。
                 "maxOutputTokens": max(max_tokens, 16384),
+                # Gemini 3 官方建议保持 temperature 默认值 1.0。
                 "temperature": 1.0,
                 "thinkingConfig": {
                     "includeThoughts": True,
@@ -1112,7 +945,9 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
             },
         }
         if system_bits:
-            payload["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_bits)}]}
+            payload["systemInstruction"] = {
+                "parts": [{"text": "\n\n".join(system_bits)}]
+            }
         return url, headers, payload, "gemini_native"
 
     base_urls = {
@@ -1143,6 +978,7 @@ def get_provider_config(provider, api_key, model, messages, max_tokens, temperat
 
 
 def _extract_openai_responses_text(body: Dict[str, Any]) -> str:
+    """解析 OpenAI Responses API 的 output_text / output.content.text。"""
     if not isinstance(body, dict):
         return ""
     if isinstance(body.get("output_text"), str) and body["output_text"].strip():
@@ -1175,6 +1011,7 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
     for attempt in range(max_retries):
         try:
             if api_style == "gemini_native":
+                # 官方 generateContent + responseMimeType=application/json
                 response = requests.post(url, headers=headers, json=payload, timeout=180)
                 if response.status_code != 200:
                     try:
@@ -1193,11 +1030,13 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
                         error_msg = f"Gemini API 错误: {response.status_code} - {detail}"
                     if response.status_code in [400, 401, 403]:
                         break
+                    # 429 等可重试错误：抛出让外层退避
                     response.raise_for_status()
 
                 body = response.json()
                 logger.info("Gemini native 响应摘要：%s", json.dumps(body, ensure_ascii=False)[:4000])
 
+                # 分离 Gemini Thought Summary 与最终 JSON。
                 thought_parts = []
                 answer_parts = []
                 try:
@@ -1220,12 +1059,15 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
 
                 final_text = "".join(answer_parts).strip()
                 if not final_text:
+                    # 兼容极少数代理/版本将最终文本放在标准 choices 结构中的情况。
                     final_text = extract_text_from_response(body).strip()
 
                 thought_text = "\n\n".join(t.strip() for t in thought_parts if t.strip())
                 if final_text:
                     if streaming_placeholder is not None:
                         streaming_placeholder.empty()
+                    # 保留原始 response，同时把 thought summary 单独放在 reasoning_content，
+                    # 解析 JSON 时永远只取 content，因此不会把推理混进 JSON。
                     wrapped = {
                         "choices": [{
                             "message": {
@@ -1240,6 +1082,7 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
                 error_msg = f"Gemini native 未返回最终 JSON。思考摘要={bool(thought_text)}；响应摘要：{json.dumps(body, ensure_ascii=False)[:1200]}"
 
             elif api_style == "responses":
+                # OpenAI Responses：非流式读取，解析稳定；不影响后台 Worker。
                 response = requests.post(url, headers=headers, json=payload, timeout=180)
                 if response.status_code != 200:
                     try:
@@ -1294,6 +1137,7 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
                             if streaming_placeholder is not None:
                                 streaming_placeholder.empty()
                             return True, body, ""
+                        # 不要把整段响应直接扔掉；保留安全摘要，方便定位 Gemini/xAI 兼容层问题。
                         try:
                             safe_body = json.dumps(body, ensure_ascii=False)[:1200]
                             error_msg = f"{_provider.upper()} 非流式接口未返回文本。响应摘要：{safe_body}"
@@ -1338,14 +1182,15 @@ def call_llm_api_cached(_provider, _model, _api_key, messages, max_tokens=4096, 
     return False, {"error": error_msg}, error_msg
 
 def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: str, show_ui=True) -> Tuple[Dict[str, Dict[str, int]], str, str, str, bool]:
-    if not word:
-        return {}, "", "未知", "", False
+    if not word: return {}, "", "未知", "", False
     full_rules = {pos: "\n".join([f"- {r['name']}: {r['desc']}（符合: {r['match_score']} 分，不符合: {r['mismatch_score']} 分）" for r in rules]) for pos, rules in RULE_SETS.items()}
-
+    
     is_gemini = provider == "gemini"
     is_gemini_flash = is_gemini and "flash" in str(model).lower()
 
     if is_gemini:
+        # Gemini 专用：保留用户给出的原版提示词逻辑，但把“推理过程”从最终 JSON 中分离。
+        # explanation = 可公开、逐条、带例子的分析依据；thought summary = API 返回的思考摘要。
         def _short_rules(pos):
             lines = []
             for r in RULE_SETS[pos]:
@@ -1394,6 +1239,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
 {{"explanation": "...", "predicted_pos": "...", "is_dual_category": true, "scores": {{"名词": {{...}}, "动词": {{...}}, "名动词": {{...}}}}}}"""
         user_prompt = f"请分析词语「{word}」。只返回一个 JSON 对象；不要输出 Markdown、```、前言、结语或 JSON 之外的任何文字。所有解释文字必须放在 explanation 字段中。"
 
+    # 模型请求只允许 1 次；失败后由批处理层直接停止整个任务，不再重复请求。
     api_retries = 1
     with st.spinner(f"正在调用大模型 ({model}) 进行分析...") if show_ui else __import__("contextlib").nullcontext():
         ok, resp_json, err_msg = call_llm_api_cached(
@@ -1401,15 +1247,16 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
             [{"role": "system", "content": system_msg}, {"role": "user", "content": user_prompt}],
             show_ui=show_ui, max_retries=api_retries
         )
-
+        
     if not ok:
-        if show_ui:
-            st.error(f"模型调用失败: {err_msg}")
+        if show_ui: st.error(f"模型调用失败: {err_msg}")
+        # Gemini Flash：即使接口失败也返回占位 scores，避免 Worker 再重入调用
         if is_gemini_flash:
             empty_scores = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
             return empty_scores, f"调用失败: {err_msg}", "调用失败", f"失败: {err_msg}", False
         return {}, f"调用失败: {err_msg}", "未知", f"失败: {err_msg}", False
 
+    # Gemini：将“最终 JSON”与“思考摘要”分开。最终 JSON 才参与解析。
     if provider == "gemini":
         raw_content = ""
         gemini_reasoning = ""
@@ -1432,6 +1279,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         raw_text = extract_text_from_response(resp_json)
         raw_text_with_reasoning = raw_text
 
+    # 解析时只使用最终 JSON，避免 Gemini Thought Summary 破坏 JSON 解析。
     if provider == "gemini":
         parsed_json, _ = extract_gemini_json(raw_text)
         if parsed_json is None:
@@ -1439,6 +1287,7 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
     else:
         parsed_json, _ = extract_json_from_text(raw_text)
         if parsed_json is None:
+            # 其它模型也允许极宽松抢救，能抠出来就算成功
             parsed_json, _ = extract_gemini_json(raw_text)
 
     if parsed_json and isinstance(parsed_json, dict):
@@ -1446,12 +1295,13 @@ def ask_model_for_pos_and_scores(word: str, provider: str, model: str, api_key: 
         predicted_pos = parsed_json.get("predicted_pos", "未知")
         is_dual_category = parsed_json.get("is_dual_category", False)
         raw_scores = parsed_json.get("scores", {})
+        # scores 可能是 list 等异常结构，尽量拉平
         if not isinstance(raw_scores, dict):
             salv = _ultra_salvage_from_any_text(raw_text or "")
             raw_scores = (salv or {}).get("scores", {}) if salv else {}
     else:
-        if show_ui:
-            st.error("未能解析有效的 JSON。")
+        if show_ui: st.error("未能解析有效的 JSON。")
+        # 返回占位 scores（非空 dict），Worker 写盘前进，不重试
         empty_scores = {pos: {r["name"]: 0 for r in rules} for pos, rules in RULE_SETS.items()}
         return empty_scores, raw_text or "", "解析失败", "JSON 解析失败", False
 
@@ -1471,41 +1321,8 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
         return
     categories = list(scores_norm.keys()) + [list(scores_norm.keys())[0]]
     values = list(scores_norm.values()) + [list(scores_norm.values())[0]]
-    fig = go.Figure(
-        data=[
-            go.Scatterpolar(
-                r=values,
-                theta=categories,
-                fill="toself",
-                fillcolor="rgba(37, 99, 235, 0.22)",
-                line=dict(color="#2563EB", width=2.5),
-                marker=dict(color="#1D4ED8", size=7),
-                hovertemplate='<b>%{theta}</b><br>隶属度: %{r:.4f}<extra></extra>'
-            )
-        ]
-    )
-    fig.update_layout(
-        polar=dict(
-            bgcolor="#F8FAFC",
-            radialaxis=dict(
-                visible=True,
-                range=[min(min(values), -0.1), max(max(values), 1.0)],
-                gridcolor="#CBD5E1",
-                linecolor="#CBD5E1",
-                tickfont=dict(size=10, color="#64748B")
-            ),
-            angularaxis=dict(
-                gridcolor="#CBD5E1",
-                linecolor="#CBD5E1",
-                tickfont=dict(size=13, color="#1E293B")
-            )
-        ),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        showlegend=False,
-        margin=dict(l=40, r=40, t=45, b=25),
-        title=dict(text=title, x=0.5, font=dict(size=15, color="#0F172A"))
-    )
+    fig = go.Figure(data=[go.Scatterpolar(r=values, theta=categories, fill="toself", hovertemplate='<b>%{theta}</b><br>隶属度: %{r:.4f}<extra></extra>')])
+    fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[min(min(values), -0.1), max(max(values), 1.0)])), showlegend=False, title=dict(text=title, x=0.5))
     st.plotly_chart(fig, use_container_width=True)
 
 # ===============================
@@ -1540,28 +1357,24 @@ def _write_job_state(state_file: Path, **updates):
 def _load_job_state(state_file: Path):
     try:
         return json.loads(state_file.read_text(encoding='utf-8')) if state_file.exists() else {}
-    except Exception:
+    except Exception as e:
         return {}
 
 
 def _pid_alive(pid):
-    if not pid:
-        return False
+    if not pid: return False
     try:
         pid = int(pid)
-        if pid <= 0:
-            return False
+        if pid <= 0: return False
         os.kill(pid, 0)
         return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except (ValueError, OSError):
-        return False
+    except ProcessLookupError: return False
+    except PermissionError: return True
+    except (ValueError, OSError): return False
 
 
 def _kill_pid(pid):
+    """尝试结束指定进程（先 SIGTERM，再 SIGKILL）。"""
     if not pid:
         return False
     try:
@@ -1569,13 +1382,13 @@ def _kill_pid(pid):
         if pid <= 0 or not _pid_alive(pid):
             return False
         try:
-            os.kill(pid, 15)
+            os.kill(pid, 15)  # SIGTERM
         except ProcessLookupError:
             return True
         time.sleep(0.4)
         if _pid_alive(pid):
             try:
-                os.kill(pid, 9)
+                os.kill(pid, 9)  # SIGKILL
             except ProcessLookupError:
                 pass
         return True
@@ -1585,10 +1398,12 @@ def _kill_pid(pid):
 
 
 def stop_batch_job(job_state_file: Path) -> str:
+    """停止当前批次：标记 cancelled，并结束 supervisor / worker。"""
     state = _load_job_state(job_state_file)
     supervisor_pid = state.get("supervisor_pid")
     worker_pid = state.get("worker_pid")
 
+    # 从 pid 文件再读一次，防止 state 里 pid 过期
     for suffix, key in ((".supervisor.pid", "supervisor"), (".worker.pid", "worker")):
         try:
             p = _service_file(job_state_file, suffix)
@@ -1615,6 +1430,7 @@ def stop_batch_job(job_state_file: Path) -> str:
     if _kill_pid(supervisor_pid):
         killed.append(f"supervisor={supervisor_pid}")
 
+    # 清理锁/pid 文件，避免下次启动被挡
     for suffix in (".supervisor.pid", ".worker.pid", ".supervisor.lock"):
         try:
             f = _service_file(job_state_file, suffix)
@@ -1631,8 +1447,7 @@ def stop_batch_job(job_state_file: Path) -> str:
 def _state_age_seconds(state):
     try:
         ts = state.get('updated_at')
-        if not ts:
-            return 0
+        if not ts: return 0
         return max(0, time.time() - time.mktime(time.strptime(ts, '%Y-%m-%d %H:%M:%S')))
     except Exception:
         return 0
@@ -1660,6 +1475,7 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
     )
 
     while start_row < total_rows:
+        # 用户点击「停止任务」后优雅退出
         cur_state = _load_job_state(job_state_file)
         if cur_state.get("status") == "cancelled":
             _write_job_state(job_state_file, status="cancelled", error="用户手动停止任务",
@@ -1669,6 +1485,8 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
 
         index = start_row
         row_number = index + 1
+        
+        # 兼容处理 Excel 空行现象 (NaN)
         word_val = df_input.iloc[index][target_col]
         word = "" if pd.isna(word_val) else str(word_val).strip()
         task_id = _make_task_id(file_name, index)
@@ -1688,8 +1506,12 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
             continue
 
         success = False
+        last_error = ''
+        retry_count = 0
         scores, raw_text, pred_pos, explanation, is_dual_category = {}, '', '处理失败', '无响应', False
 
+        # 重要：模型调用失败后立即停止整个批次。
+        # 不再对同一个词持续重试，也不写入占位失败结果。
         try:
             _write_job_state(
                 job_state_file,
@@ -1722,6 +1544,7 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
                 )
                 return
 
+            # 解析失败/调用失败不能当成 0 分正常结果保存。
             if str(pred_pos) in {'解析失败', '调用失败', '处理失败', '未知'}:
                 detail = f'第 {row_number} 行「{word}」结果无效（{pred_pos}），批次已停止。{explanation or "未获得有效结果"}'
                 logger.error(detail)
@@ -1779,7 +1602,7 @@ def _batch_worker(df_input, target_col, file_name, backup_file, provider, model,
         _write_job_state(job_state_file, status='saving', current_row=index,
                          current_word=word, next_row=index, completed_rows=index,
                          retry_count=0, error='')
-
+        
         write_ok, write_detail, already_exists = append_unique_csv(new_row, backup_file, task_id)
         if not write_ok:
             save_retry = 0
@@ -1821,7 +1644,8 @@ def _worker_entry(job_state_file: Path):
     except BaseException as e:
         detail = f'{type(e).__name__}: {e}\n{traceback.format_exc()}'
         logger.error(f'Worker致命退出：\n{detail}')
-        _write_job_state(job_state_file, status='failed', error=detail, worker_fatal_error=True)
+        _write_job_state(job_state_file, status='failed', error=detail,
+                         worker_fatal_error=True)
         raise
 
 
@@ -1836,10 +1660,8 @@ def _acquire_pid_guard(lock_file: Path):
         except Exception:
             old_pid = 0
         if not _pid_alive(old_pid):
-            try:
-                lock_file.unlink()
-            except FileNotFoundError:
-                pass
+            try: lock_file.unlink()
+            except FileNotFoundError: pass
             fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_RDWR)
             os.write(fd, str(os.getpid()).encode('utf-8'))
             return fd
@@ -1847,13 +1669,10 @@ def _acquire_pid_guard(lock_file: Path):
 
 
 def _release_pid_guard(lock_file: Path, fd):
-    try:
-        os.close(fd)
+    try: os.close(fd)
     finally:
-        try:
-            lock_file.unlink()
-        except FileNotFoundError:
-            pass
+        try: lock_file.unlink()
+        except FileNotFoundError: pass
 
 
 def _supervisor_entry(job_state_file: Path):
@@ -1868,8 +1687,8 @@ def _supervisor_entry(job_state_file: Path):
 
         while True:
             state = _load_job_state(job_state_file)
-            if state.get('status') in {'completed', 'cancelled'}:
-                return
+            if state.get('status') == 'completed': return
+            if state.get('status') == 'cancelled': return
 
             worker = spawn_detached(
                 [sys.executable, str(Path(__file__).resolve()), '--worker', str(job_state_file)],
@@ -1887,6 +1706,7 @@ def _supervisor_entry(job_state_file: Path):
                 if state.get('status') == 'completed':
                     return
                 if state.get('status') == 'cancelled':
+                    # 用户停止：结束 worker 后退出 supervisor
                     try:
                         if rc is None:
                             worker.terminate()
@@ -1901,14 +1721,13 @@ def _supervisor_entry(job_state_file: Path):
                 time.sleep(1)
 
             current_state = _load_job_state(job_state_file)
+            # Worker 因模型/API 错误主动把任务标记为 failed 时，Supervisor 必须立即停止，禁止自动拉起。
             if current_state.get('status') == 'failed' and current_state.get('model_error'):
                 logger.error('检测到模型错误导致的 failed 状态，Supervisor 停止自动重启。')
                 return
 
-            if rc == 0:
-                detail = 'Worker正常退出，但任务状态未标记完成。将自动检查并继续。'
-            else:
-                detail = f'Worker退出，状态码 {rc}。{("错误详情：" + str(current_state.get("error"))) if current_state.get("error") else "请查看日志。"}'
+            if rc == 0: detail = 'Worker正常退出，但任务状态未标记完成。将自动检查并继续。'
+            else: detail = f'Worker退出，状态码 {rc}。{("错误详情：" + str(current_state.get("error"))) if current_state.get("error") else "请查看日志。"}'
             delay = min(30, max(2, 2 ** min(restart_count - 1, 4)))
             _write_job_state(job_state_file, status='supervisor_restarting', supervisor_pid=os.getpid(),
                              worker_pid=None, supervisor_restart_count=restart_count,
@@ -1925,8 +1744,7 @@ def _supervisor_entry(job_state_file: Path):
             try:
                 if f.exists() and f.read_text(encoding='utf-8').strip() in {'', str(os.getpid())}:
                     f.unlink()
-            except Exception:
-                pass
+            except Exception: pass
         if guard_fd is not None:
             _release_pid_guard(supervisor_lock_file, guard_fd)
 
@@ -1937,9 +1755,8 @@ def start_or_resume_batch_job(df_input, target_col, uploaded_file, file_name, ba
     if _pid_alive(state.get('supervisor_pid')):
         return False, state
 
-    safe_stem = re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', job_state_file.stem)
     spec = {
-        'input_file': str(BASE_DIR / f"batch_input_{safe_stem}.xlsx"),
+        'input_file': str(BASE_DIR / f"batch_input_{re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', job_state_file.stem)}.xlsx"),
         'target_col': target_col,
         'file_name': file_name,
         'backup_file': str(backup_file),
@@ -1971,6 +1788,7 @@ def start_or_resume_batch_job(df_input, target_col, uploaded_file, file_name, ba
 
 
 def _supervisor_or_worker_alive(job_state_file: Path, state: dict = None) -> bool:
+    """只有真实进程还在，才算任务在跑（不看过期 status 文案）。"""
     state = state or _load_job_state(job_state_file)
     if _pid_alive(state.get("supervisor_pid")) or _pid_alive(state.get("worker_pid")):
         return True
@@ -1987,6 +1805,7 @@ def _supervisor_or_worker_alive(job_state_file: Path, state: dict = None) -> boo
 
 
 def _reconcile_stale_job_state(job_state_file: Path) -> dict:
+    """状态写着 running 但进程已死 → 解锁，允许再次点「开始/继续」。"""
     state = _load_job_state(job_state_file)
     active_statuses = {
         "running", "retrying", "waiting_retry", "saving",
@@ -1996,6 +1815,7 @@ def _reconcile_stale_job_state(job_state_file: Path) -> dict:
         return state
     if _supervisor_or_worker_alive(job_state_file, state):
         return state
+    # 刚启动 15 秒内先不判定为僵死
     if state.get("status") == "starting" and _state_age_seconds(state) < 15:
         return state
     _write_job_state(
@@ -2009,6 +1829,9 @@ def _reconcile_stale_job_state(job_state_file: Path) -> dict:
 
 
 def _auto_recover_if_needed(job_state_file: Path):
+    """默认不再自动拉起 supervisor（避免用户停不掉 / 按钮按不了）。
+    仅当环境变量 BATCH_AUTO_RECOVER=1 时恢复旧的自动重连行为。
+    """
     state = _reconcile_stale_job_state(job_state_file)
     if os.getenv("BATCH_AUTO_RECOVER", "").strip() not in {"1", "true", "TRUE", "yes"}:
         return state
@@ -2018,6 +1841,7 @@ def _auto_recover_if_needed(job_state_file: Path):
         return state
     if _supervisor_or_worker_alive(job_state_file, state):
         return state
+
     if state.get('status') == 'starting' and _state_age_seconds(state) < 15:
         return state
     spec_file = _service_file(job_state_file, '.spec.json')
@@ -2035,13 +1859,18 @@ def _auto_recover_if_needed(job_state_file: Path):
         _write_job_state(job_state_file, status='failed', error=detail)
         return _load_job_state(job_state_file)
 
+
 # ----------------------------------------------------------------------
 # 批量结果清理
 # ----------------------------------------------------------------------
 def _get_bad_result_mask(df: pd.DataFrame) -> pd.Series:
+    """识别批量结果中的失败/解析失败/明显计算错误记录。"""
     if df is None or df.empty:
         return pd.Series(dtype=bool)
+
     mask = pd.Series(False, index=df.index)
+
+    # 预测词类/说明字段中的明确失败标记
     for col in ("预测词类", "状态", "错误", "说明", "explanation"):
         if col in df.columns:
             text = df[col].fillna("").astype(str)
@@ -2049,6 +1878,8 @@ def _get_bad_result_mask(df: pd.DataFrame) -> pd.Series:
                 r"调用失败|解析失败|处理失败|计算错误|JSON\s*解析失败|请求失败|未知",
                 case=False, regex=True, na=False
             )
+
+    # 数值列明显异常：三类隶属度全部为 0 且属于失败/空响应记录
     score_cols = [c for c in ("动词", "名词", "名动词") if c in df.columns]
     if len(score_cols) == 3:
         nums = df[score_cols].apply(pd.to_numeric, errors="coerce")
@@ -2058,10 +1889,12 @@ def _get_bad_result_mask(df: pd.DataFrame) -> pd.Series:
         suspicious_raw = raw.str.contains(r"调用失败|解析失败|计算错误|429|401|403|404", case=False, regex=True, na=False)
         mask |= all_zero & suspicious_raw
         mask |= invalid_num
+
     return mask
 
 
 def remove_bad_batch_rows(backup_file: Path) -> Tuple[bool, int, str]:
+    """删除失败/解析失败/明显计算错误记录，并原子覆盖原结果文件。"""
     if not backup_file.exists() or backup_file.stat().st_size == 0:
         return True, 0, "当前没有可清理的批量结果。"
     lock_path = backup_file.with_suffix(backup_file.suffix + '.cleanup.lock')
@@ -2092,6 +1925,7 @@ def remove_bad_batch_rows(backup_file: Path) -> Tuple[bool, int, str]:
 
 
 def remove_selected_batch_rows(backup_file: Path, task_ids: List[str]) -> Tuple[bool, int, str]:
+    """按任务ID删除用户在结果预览中勾选的记录。"""
     task_ids = {str(x) for x in (task_ids or []) if str(x).strip()}
     if not task_ids:
         return True, 0, "未勾选任何记录。"
@@ -2125,7 +1959,7 @@ def remove_selected_batch_rows(backup_file: Path, task_ids: List[str]) -> Tuple[
 
 
 # ----------------------------------------------------------------------
-# 实时 UI 刷新组件
+# 实时UI刷新组件（将所有状态同步绑定在一个片段内，杜绝延迟和不同步问题）
 # ----------------------------------------------------------------------
 def render_live_monitor(job_state_file: Path, backup_file: Path, total_rows_default: int):
     latest_state = _auto_recover_if_needed(job_state_file)
@@ -2142,44 +1976,37 @@ def render_live_monitor(job_state_file: Path, backup_file: Path, total_rows_defa
             count = len(live_df)
         except Exception:
             pass
-
-    c1, c2, c3 = st.columns([1.5, 1.5, 1.2], vertical_alignment="center")
+            
+    # 1. 顶部统计 & 下载
+    c1, c2 = st.columns([3, 1])
     with c1:
-        st.metric("已存数据量（去重排序）", f"{count} 条")
+        st.metric("已存数据量 (完美去重排序)", f"{count} 条")
     with c2:
-        pct = (completed / total * 100) if total else 0.0
-        st.metric("当前处理进度", f"{completed} / {total} ({pct:.1f}%)")
-    with c3:
         if live_df is not None and count > 0:
             csv_data = live_df.to_csv(index=False, encoding='utf-8-sig')
             model_slug = re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', str(live_df.iloc[0].get('模型', 'model')) if '模型' in live_df.columns else 'model')
             st.download_button(
-                "⬇ 下载完整结果 (CSV)",
+                "下载完整结果(CSV)",
                 data=csv_data,
                 file_name=f"{st.session_state.project_code}_{model_slug}_results_{time.strftime('%Y%m%d')}.csv",
                 mime="text/csv",
-                type="primary",
                 use_container_width=True
             )
         else:
             st.button("下载结果 (无数据)", disabled=True, use_container_width=True)
 
+    # 2. 进度条
     st.progress(min(1.0, max(0.0, completed / total)) if total else 0.0)
 
+    # 3. 运行状态
     if status_str in {"starting", "running", "retrying", "waiting_retry", "saving", "waiting_save_retry", "supervisor_restarting"}:
-        spinner_text = {
-            "starting": "启动任务中…",
-            "retrying": "调用失败自动重试中…",
-            "waiting_retry": "等待重试…",
-            "saving": "安全排序并覆盖保存中…",
-            "supervisor_restarting": "断流重连中…"
-        }.get(status_str, "任务正常运行中…")
+        spinner_text = {"starting": "启动任务中…", "retrying": "调用失败自动重试中…", "waiting_retry": "等待重试…", "saving": "安全排序并覆盖保存中…", "supervisor_restarting": "断流重连中…"}.get(status_str, "任务正常运行中…")
         details = f"第 {min(int(latest_state.get('current_row', 0)) + 1, total)}/{total} 行 · 当前词语「{latest_state.get('current_word', '')}」"
         if latest_state.get("retry_count", 0):
             details += f" · 重试 {latest_state.get('retry_count')} 次"
-        status_html = f'<div class="running-status"><span class="running-spinner"></span><div style="flex:1"><div style="font-size:0.96rem;font-weight:700">{spinner_text}</div><div class="batch-detail">{details}</div>'
+        status_html = f'<div class="running-status"><span class="running-spinner"></span><div style="flex:1"><div style="font-size:1rem;font-weight:700">{spinner_text}</div><div class="batch-detail">{details}</div>'
         if error_str:
-            status_html += f'<div class="batch-detail" style="color: #EF4444;">提示：{error_str}</div>'
+            status_html += f'<div class="batch-detail" style="color: #ef4444;">提示：{error_str}</div>'
         status_html += '</div></div>'
         st.markdown(status_html, unsafe_allow_html=True)
     elif status_str == "completed":
@@ -2192,13 +2019,15 @@ def render_live_monitor(job_state_file: Path, backup_file: Path, total_rows_defa
         st.error(f"❌ 任务已停止：{error_str or '未记录到具体异常，请查看 process_log.log。'}")
         st.caption("本次失败不会写入占位数据。修复模型/API 后，可点击“开始处理 / 继续断点任务”从失败词项继续。")
     else:
-        st.info("尚未运行。点击上方「▶ 开始处理 / 继续断点任务」即可启动队列。")
+        st.info("尚未运行。点击上方“开始处理 / 继续任务”即可启动队列。")
 
-    st.markdown('<div class="section-title"><span class="icon-dot"></span> 实时结果预览（最新结果在最上方）</div>', unsafe_allow_html=True)
+    # 4. 实时数据表 (展示全部数据)
+    st.markdown("#### 实时结果预览 (全部数据，最新结果在最上方)")
     if live_df is not None and count > 0:
         if '序数' in live_df.columns:
             live_df['序数_num'] = pd.to_numeric(live_df['序数'], errors='coerce')
             live_df = live_df.sort_values('序数_num').drop(columns=['序数_num'])
+        # 全部结果倒序展示；增加“删除”勾选列，支持手动删除不满意记录。
         display_df = live_df.iloc[::-1].copy()
         if '任务ID' in display_df.columns:
             editor_df = display_df.copy()
@@ -2239,285 +2068,139 @@ def render_live_monitor(job_state_file: Path, backup_file: Path, total_rows_defa
 
 
 def main():
-    check_optional_auth()
-
-    # ===============================
-    # 左侧边栏：模型设置、实验配置与连接测试
-    # ===============================
-    with st.sidebar:
-        st.markdown("""
-        <div class="sidebar-brand">
-            <h2>📘 汉语隶属度平台</h2>
-            <p>LLM-Based POS Membership</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown('<div class="sidebar-section-label"><span class="dot"></span> 模型设置（LLM）</div>', unsafe_allow_html=True)
-        if not AVAILABLE_MODEL_OPTIONS:
-            st.error("找不到可用的 API Key！请配置环境变量或 Secrets。")
-            st.selectbox("选择大模型 (不可用)", list(MODEL_OPTIONS.keys()), disabled=True, label_visibility="collapsed")
-            selected_model_info = {"api_key": "", "provider": "deepseek", "model": "deepseek-chat", "env_var": "DEEPSEEK_API_KEY"}
-        else:
-            selected_model_display_name = st.selectbox(
-                "选择大模型",
-                list(AVAILABLE_MODEL_OPTIONS.keys()),
-                key="model_select",
-                label_visibility="collapsed"
-            )
-            selected_model_info = AVAILABLE_MODEL_OPTIONS[selected_model_display_name]
-
-            if selected_model_info.get("api_key"):
-                st.markdown(
-                    f'<div style="display:flex;align-items:center;gap:0.45rem;margin:0.35rem 0 0.6rem 0;flex-wrap:wrap;">'
-                    f'<span class="status-badge success">● 已就绪</span>'
-                    f'<span style="color:#64748B;font-size:0.78rem;">{selected_model_info["provider"].upper()} · {selected_model_info["model"]}</span>'
-                    f'</div>',
-                    unsafe_allow_html=True
-                )
-            else:
-                st.markdown(
-                    '<span class="status-badge warn">● 未配置 API Key</span>',
-                    unsafe_allow_html=True
-                )
-
-        if st.button("🔌 测试模型连接", type="secondary", use_container_width=True, disabled=not selected_model_info.get("api_key")):
-            with st.spinner("正在测试连接..."):
-                test_provider = selected_model_info["provider"]
-                test_max_tokens = 4096 if test_provider == "gemini" else 100
-                test_prompt = "请只输出 pong，不要输出 Markdown、代码块或其他文字。" if test_provider == "gemini" else "请回复'pong'"
-                ok, _, err_msg = call_llm_api_cached(
-                    test_provider,
-                    selected_model_info["model"],
-                    selected_model_info["api_key"],
-                    [{"role": "user", "content": test_prompt}],
-                    max_tokens=test_max_tokens
-                )
-            if ok:
-                st.success("模型连接正常！")
-            else:
-                st.error(f"连接失败: {err_msg}")
-
-        st.divider()
-        st.markdown('<div class="sidebar-section-label"><span class="dot"></span> 实验配置</div>', unsafe_allow_html=True)
-        st.session_state.project_code = st.text_input(
-            "实验批次码 (Project Code)",
-            value=st.session_state.get("project_code", "default_task"),
-            help="用于隔离不同量化分析任务"
-        )
-        if selected_model_info.get("provider") in {"openai", "gemini", "xai"}:
-            st.caption("数据按“批次 + 模型”独立保存，便于多模型横向对比。")
-
-        BACKUP_FILE, PROGRESS_FILE = get_project_files(
-            st.session_state.project_code,
-            selected_model_info.get("model", "default_model")
-        )
-
-        st.divider()
-        if not _get_app_password():
-            st.caption("💡 建议在 Secrets 中设置 `APP_PASSWORD` 以防止公网未授权调用。")
-        st.caption(f"Build: `{CODE_VERSION}`")
-
-    # ===============================
-    # 主工作区：紧凑头部 + 功能标签页
-    # ===============================
     st.markdown("""
     <div class="title-header-card">
-        <h1>基于大语言模型的汉语词类隶属度检测划类平台</h1>
-        <div class="subtitle">Chinese Membership Detection &amp; Classification Platform Based on Large Language Models</div>
+        <h1>汉语词类隶属度检测划类平台</h1>
+        <div class="subtitle">Chinese Membership Detection & Classification · Powered by LLMs</div>
         <div class="badges">
             <span class="badge">多模型支持</span>
             <span class="badge">隶属度分析</span>
-            <span class="badge">雷达图可视化</span>
-            <span class="badge">Excel 批量处理</span>
-            <span class="badge amber">兼类判定支持</span>
-            <span class="badge emerald">抗断流自动恢复</span>
+            <span class="badge">批量处理</span>
+            <span class="badge">兼类判定</span>
+            <span class="badge">抗断流自动恢复</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    tab1, tab2 = st.tabs(["🔍 单个词语详细分析", "📊 Excel 批量处理"])
-
-    # ------------------------------------------------------------------
-    # Tab 1: 单个词语详细分析
-    # ------------------------------------------------------------------
-    with tab1:
-        with st.form("single_word_form"):
-            col_in, col_btn = st.columns([4.2, 1], vertical_alignment="center")
-            with col_in:
-                word = st.text_input(
-                    "请输入要分析的汉语词语",
-                    value=st.session_state.get("demo_word", ""),
-                    placeholder="请输入要分析的汉语词语，例如：苹果、跑、美丽、决定...",
-                    max_chars=30,
-                    label_visibility="collapsed",
-                    key="word_input"
-                )
-            with col_btn:
-                analyze_clicked = st.form_submit_button(
-                    "开始分析",
-                    type="primary",
-                    use_container_width=True,
-                    disabled=not selected_model_info.get("api_key")
-                )
-
-            ex_cols = st.columns([1.2, 0.8, 0.8, 0.8, 0.8, 3.2], vertical_alignment="center")
-            ex_cols[0].caption("快速示例：")
-            for idx, sample in enumerate(["苹果", "跑", "美丽", "决定"]):
-                if ex_cols[idx + 1].form_submit_button(sample, use_container_width=True):
-                    st.session_state["demo_word"] = sample
-                    st.rerun()
-
-        if analyze_clicked:
-            clean_word = (word or "").strip()
-            if not clean_word:
-                st.warning("请先输入要分析的汉语词语。")
-            elif any(c in clean_word for c in ["\n", "\r", "{", "}"]):
-                st.warning("请输入合法的单个汉语词语。")
+    with st.container():
+        col1, col2, col3 = st.columns([4, 4, 3])
+        with col1:
+            st.markdown('<div class="section-title"><span class="icon-dot"></span> 模型设置（LLM）</div>', unsafe_allow_html=True)
+            if not AVAILABLE_MODEL_OPTIONS:
+                st.error("找不到可用的 API Key！请设置环境变量。")
+                st.selectbox("选择大模型 (不可用)", list(MODEL_OPTIONS.keys()), disabled=True)
+                selected_model_info = {"api_key": ""}
             else:
-                status_placeholder = st.empty()
-                status_placeholder.info(f"正在为词语「{clean_word}」启动分析...")
-                scores_all, raw_text, predicted_pos, explanation, is_dual_category = ask_model_for_pos_and_scores(
-                    clean_word,
-                    selected_model_info["provider"],
-                    selected_model_info["model"],
-                    selected_model_info["api_key"]
+                selected_model_display_name = st.selectbox("选择大模型", list(AVAILABLE_MODEL_OPTIONS.keys()), key="model_select")
+                selected_model_info = AVAILABLE_MODEL_OPTIONS[selected_model_display_name]
+                st.markdown(
+                    f'<div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap;">'
+                    f'<span class="status-badge success">● 已配置</span>'
+                    f'<span style="color: #64748b; font-size: 0.85rem;">提供商: {selected_model_info["provider"].upper()}</span>'
+                    f'<span style="color: #64748b; font-size: 0.85rem;">模型: {selected_model_info["model"]}</span>'
+                    f'</div>', unsafe_allow_html=True
                 )
-                status_placeholder.empty()
-
-                if scores_all:
-                    membership = calculate_membership(scores_all)
-                    final_membership = membership.get(predicted_pos, 0.0)
-                    jianlei_badge_color = "#F59E0B" if is_dual_category else "#2563EB"
-                    jianlei_text = "属于兼类词" if is_dual_category else "非兼类词"
-
-                    # 1. 顶部结果总结卡
-                    st.markdown(
-                        f'<div class="result-success-card">'
-                        f'<div style="font-size: 1.05rem; font-weight: 700; color: #065F46;">✅ 分析完成</div>'
-                        f'<div style="margin-top: 0.45rem; font-size: 0.98rem; color: #065F46; line-height: 1.8;">'
-                        f'词语「<strong>{clean_word}</strong>」最可能的词类是 '
-                        f'<span style="background: #10B981; color: white; padding: 0.18rem 0.65rem; border-radius: 6px; font-weight: 600;">{predicted_pos}</span>'
-                        f'，隶属度为 <strong>{final_membership:.4f}</strong> &nbsp;|&nbsp; '
-                        f'兼类属性：<span style="background: {jianlei_badge_color}; color: white; padding: 0.18rem 0.65rem; border-radius: 6px; font-weight: 600;">{jianlei_text}</span>'
-                        f'</div></div>',
-                        unsafe_allow_html=True
+        with col2:
+            st.markdown('<div class="section-title"><span class="icon-dot"></span> 实验配置</div>', unsafe_allow_html=True)
+            if selected_model_info.get("provider") in {"openai", "gemini", "xai"}:
+                st.caption("国外模型数据将按“批次 + 模型”独立保存，可分别跑出 Gemini / ChatGPT / Grok 数据后进行横向比较。")
+            st.session_state.project_code = st.text_input("实验批次码 (Project Code)", value=st.session_state.get("project_code", "default_task"), help="隔离不同量化分析任务")
+            BACKUP_FILE, PROGRESS_FILE = get_project_files(st.session_state.project_code, selected_model_info.get("model", "default_model"))
+        with col3:
+            st.markdown('<div class="section-title" style="justify-content: center;"><span class="icon-dot"></span> 连接测试</div>', unsafe_allow_html=True)
+            st.write("")
+            if st.button("测试模型链接", type="secondary", use_container_width=True, disabled=not selected_model_info["api_key"]):
+                with st.spinner("正在测试连接..."):
+                    # 仅 Gemini 使用更大的测试预算；其他模型保持原来的测试参数。
+                    test_provider = selected_model_info["provider"]
+                    test_max_tokens = 4096 if test_provider == "gemini" else 100
+                    test_prompt = "请只输出 pong，不要输出 Markdown、代码块或其他文字。" if test_provider == "gemini" else "请回复'pong'"
+                    ok, _, err_msg = call_llm_api_cached(
+                        test_provider,
+                        selected_model_info["model"],
+                        selected_model_info["api_key"],
+                        [{"role": "user", "content": test_prompt}],
+                        max_tokens=test_max_tokens
                     )
+                if ok: st.success("成功！")
+                else: st.error(f"失败: {err_msg}")
 
-                    # 2. 三类隶属度彩色 KPI 概览
-                    k1, k2, k3 = st.columns(3)
-                    with k1:
-                        v_score = membership.get("动词", 0.0)
-                        st.markdown(f'<div class="kpi-card verb"><div class="kpi-label">动词隶属度</div><div class="kpi-value">{v_score:.4f}</div></div>', unsafe_allow_html=True)
-                    with k2:
-                        n_score = membership.get("名词", 0.0)
-                        st.markdown(f'<div class="kpi-card noun"><div class="kpi-label">名词隶属度</div><div class="kpi-value">{n_score:.4f}</div></div>', unsafe_allow_html=True)
-                    with k3:
-                        nv_score = membership.get("名动词", 0.0)
-                        st.markdown(f'<div class="kpi-card nv"><div class="kpi-label">名动词隶属度</div><div class="kpi-value">{nv_score:.4f}</div></div>', unsafe_allow_html=True)
+    st.markdown("---")
+    tab1, tab2 = st.tabs(["单个词语详细分析", "Excel 批量处理"])
 
-                    # 3. 保留完整左右分栏可视化与明细
-                    col_results_1, col_results_2 = st.columns(2, gap="large")
-                    with col_results_1:
-                        st.markdown('<div class="section-title"><span class="icon-dot"></span> 词类隶属度排名</div>', unsafe_allow_html=True)
-                        top10 = get_top_10_positions(membership)
-                        for i, (pos, score) in enumerate(top10):
-                            rank_class = f"top-{i+1}" if i < 3 else ""
-                            st.markdown(
-                                f'<div class="rank-card {rank_class}">'
-                                f'<div style="display: flex; align-items: center; gap: 0.75rem;">'
-                                f'<div class="rank-num">{i+1}</div>'
-                                f'<span style="font-weight: 600; color: #1E293B;">{pos}</span>'
-                                f'</div>'
-                                f'<span style="font-weight: 700; color: #2563EB; font-size: 1.05rem;">{score:.4f}</span>'
-                                f'</div>',
-                                unsafe_allow_html=True
-                            )
+    with tab1:
+        st.markdown('<div class="section-title"><span class="icon-dot"></span> 词语输入</div>', unsafe_allow_html=True)
+        word = st.text_input("请输入要分析的汉语词语", placeholder="例如：苹果、跑、美丽...", key="word_input")
+        if st.button("开始分析", type="primary", disabled=not (selected_model_info["api_key"] and word)):
+            status_placeholder = st.empty()
+            status_placeholder.info(f"正在为词语「{word}」启动分析...")
+            scores_all, raw_text, predicted_pos, explanation, is_dual_category = ask_model_for_pos_and_scores(word, selected_model_info["provider"], selected_model_info["model"], selected_model_info["api_key"])
+            status_placeholder.empty()
+            if scores_all:
+                membership = calculate_membership(scores_all)
+                final_membership = membership.get(predicted_pos, 0)
+                jianlei_badge_color = "#f59e0b" if is_dual_category else "#3b82f6"
+                jianlei_text = "属于兼类词" if is_dual_category else "非兼类词"
+                
+                st.markdown(f'<div class="result-success-card"><div style="font-size: 1.1rem; font-weight: 600; color: #065f46;">分析完成</div><div style="margin-top: 0.5rem; font-size: 1rem; color: #065f46; line-height: 1.8;">词语「<strong>{word}</strong>」最可能的词类是 <span style="background: #10b981; color: white; padding: 0.2rem 0.6rem; border-radius: 6px; font-weight: 600;">{predicted_pos}</span>，隶属度为 <strong>{final_membership:.4f}</strong><br/>多类属性判定： <span style="background: {jianlei_badge_color}; color: white; padding: 0.2rem 0.6rem; border-radius: 6px; font-weight: 600;">{jianlei_text}</span></div></div>', unsafe_allow_html=True)
+                
+                col_results_1, col_results_2 = st.columns(2)
+                with col_results_1:
+                    st.markdown('<div class="section-title"><span class="icon-dot"></span> 词类隶属度排名</div>', unsafe_allow_html=True)
+                    top10 = get_top_10_positions(membership)
+                    for i, (pos, score) in enumerate(top10):
+                        rank_class = f"top-{i+1}" if i < 3 else ""
+                        st.markdown(f'<div class="rank-card {rank_class}"><div style="display: flex; align-items: center; gap: 0.75rem;"><div class="rank-num">{i+1}</div><span style="font-weight: 600; color: #1e3a5f;">{pos}</span></div><span style="font-weight: 700; color: #2d5a87; font-size: 1.1rem;">{score:.4f}</span></div>', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title"><span class="icon-dot"></span> 词类隶属度雷达图</div>', unsafe_allow_html=True)
+                    plot_radar_chart_streamlit(dict(top10), f"「{word}」隶属度分布")
+                with col_results_2:
+                    st.markdown('<div class="section-title"><span class="icon-dot"></span> 各词类详细得分</div>', unsafe_allow_html=True)
+                    pos_total_scores = {pos: sum(scores_all[pos].values()) for pos in scores_all.keys()}
+                    for pos in sorted(pos_total_scores.keys(), key=lambda p: pos_total_scores[p], reverse=True):
+                        total_score = pos_total_scores[pos]
+                        max_rule = max(scores_all[pos].items(), key=lambda x: x[1], default=("无", 0))
+                        with st.expander(f"**{pos}** (总分: {total_score}, 最高分规则: {max_rule[0]} - {max_rule[1]}分)"):
+                            rule_data = [{"规则代码": k, "规则描述": next((r["desc"] for r in RULE_SETS.get(pos, []) if r["name"] == k), ""), "得分": v} for k, v in scores_all[pos].items()]
+                            rule_df = pd.DataFrame(sorted(rule_data, key=lambda x: x["得分"], reverse=True))
+                            st.dataframe(rule_df.style.map(lambda x: "color: #ff4b4b; font-weight: bold" if isinstance(x, (int, float)) and x < 0 else "", subset=["得分"]), use_container_width=True, height=min(len(rule_df) * 30 + 50, 400))
+                    st.markdown('<div class="section-title"><span class="icon-dot"></span> 模型原始响应</div>', unsafe_allow_html=True)
+                    with st.expander("展开查看原始响应", expanded=False):
+                        st.code(raw_text, language="text")
 
-                        st.markdown('<div class="section-title"><span class="icon-dot"></span> 词类隶属度雷达图</div>', unsafe_allow_html=True)
-                        plot_radar_chart_streamlit(dict(top10), f"「{clean_word}」隶属度分布")
-
-                    with col_results_2:
-                        st.markdown('<div class="section-title"><span class="icon-dot"></span> 各词类详细得分</div>', unsafe_allow_html=True)
-                        pos_total_scores = {pos: sum(scores_all[pos].values()) for pos in scores_all.keys()}
-                        for pos in sorted(pos_total_scores.keys(), key=lambda p: pos_total_scores[p], reverse=True):
-                            total_score = pos_total_scores[pos]
-                            max_rule = max(scores_all[pos].items(), key=lambda x: x[1], default=("无", 0))
-                            with st.expander(f"**{pos}** (总分: {total_score}, 最高分规则: {max_rule[0]} - {max_rule[1]}分)"):
-                                rule_data = [
-                                    {
-                                        "规则代码": k,
-                                        "规则描述": next((r["desc"] for r in RULE_SETS.get(pos, []) if r["name"] == k), ""),
-                                        "得分": v
-                                    }
-                                    for k, v in scores_all[pos].items()
-                                ]
-                                rule_df = pd.DataFrame(sorted(rule_data, key=lambda x: x["得分"], reverse=True))
-                                st.dataframe(
-                                    rule_df.style.map(
-                                        lambda x: "color: #EF4444; font-weight: bold" if isinstance(x, (int, float)) and x < 0 else "",
-                                        subset=["得分"]
-                                    ),
-                                    use_container_width=True,
-                                    height=min(len(rule_df) * 35 + 45, 400)
-                                )
-
-                        if explanation:
-                            st.markdown('<div class="section-title"><span class="icon-dot"></span> 模型判定依据</div>', unsafe_allow_html=True)
-                            with st.expander("展开查看逐条规则分析依据", expanded=True):
-                                st.write(explanation)
-
-                        st.markdown('<div class="section-title"><span class="icon-dot"></span> 模型原始响应</div>', unsafe_allow_html=True)
-                        with st.expander("展开查看原始响应", expanded=False):
-                            st.code(raw_text, language="text")
-
-    # ------------------------------------------------------------------
-    # Tab 2: Excel 批量处理
-    # ------------------------------------------------------------------
     with tab2:
-        col_h1, col_h2 = st.columns([2.5, 1.5], vertical_alignment="center")
-        with col_h1:
-            st.markdown(
-                f'<div class="section-title" style="margin-top:0;"><span class="icon-dot"></span> 批量任务管理 (当前批次: <code>{st.session_state.project_code}</code>)</div>',
-                unsafe_allow_html=True
-            )
-        with col_h2:
-            confirm_clear = st.checkbox("确认清空当前批次（不可恢复）", key="confirm_clear_batch")
-            if st.button("🗑 清空本批次记录", use_container_width=True, type="secondary", disabled=not confirm_clear):
+        # 将静态按钮与实时刷新组件严格分离
+        st.markdown(f'<div class="section-title"><span class="icon-dot"></span> 批量任务管理 (当前批次: <code>{st.session_state.project_code}</code>)</div>', unsafe_allow_html=True)
+        st.caption(f"代码版本：{CODE_VERSION}（若日志无此字符串=仍在跑旧进程，请先 kill 再重启）")
+        col_c1, col_c2 = st.columns([3, 1])
+        with col_c2:
+            # 清空缓存被放在外侧，以防止和 fragment 内的自动重刷发生冲突
+            if st.button("清空本批次记录", use_container_width=True, type="secondary"):
                 if os.path.exists(BACKUP_FILE):
                     try:
                         os.remove(BACKUP_FILE)
                         st.success(f"已清空批次 {st.session_state.project_code} 记录")
                         time.sleep(0.5)
                         st.rerun()
-                    except Exception as e:
-                        st.error(f"清空失败: {e}")
+                    except Exception as e: st.error(f"清空失败: {e}")
 
-        with st.container(border=True):
-            st.markdown("#### 任务配置")
-            uploaded_file = st.file_uploader("选择待处理的 Excel 文件（建议 10MB 以内）", type=["xlsx", "xls"])
-
+        st.divider()
+        st.markdown("#### 任务配置")
+        uploaded_file = st.file_uploader("选择待处理的 Excel 文件", type=["xlsx", "xls"])
+        
         if uploaded_file:
             try:
-                if uploaded_file.size > 10 * 1024 * 1024:
-                    st.error("文件大小超过 10MB 限制，请拆分后上传。")
-                    st.stop()
-
                 df_input = pd.read_excel(uploaded_file)
                 target_col = next((col for col in df_input.columns if "词" in str(col) or "word" in str(col).lower()), None)
                 if target_col:
-                    st.markdown(
-                        f'<div class="info-highlight">'
-                        f'<div style="font-weight: 600; color: #1E40AF;">✅ 识别到目标列: <code>{target_col}</code> &nbsp;|&nbsp; 待分析总数: <strong>{len(df_input)}</strong> 条</div>'
-                        f'</div>',
-                        unsafe_allow_html=True
-                    )
-
+                    st.markdown(f'<div class="info-highlight"><div style="font-weight: 600; color: #1e40af;">识别到目标列: <code>{target_col}</code> | 待分析总数: <strong>{len(df_input)}</strong> 条</div></div>', unsafe_allow_html=True)
+                    
                     model_namespace = re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', selected_model_info.get("model", "default_model"))
-                    safe_proj = re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', st.session_state.project_code)
-                    job_state_file = BASE_DIR / f"batch_job_{safe_proj}__{model_namespace}.json"
+                    job_state_file = BASE_DIR / f"batch_job_{re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', st.session_state.project_code)}__{model_namespace}.json"
+                    # 先清理「状态写着 running 但进程已死」的僵死状态，避免开始按钮永远灰掉
                     current_state = _auto_recover_if_needed(job_state_file)
 
                     really_running = _supervisor_or_worker_alive(job_state_file, current_state)
+                    # 只有真实进程在跑时才禁用开始按钮；不再被过期 status 卡住
                     can_start = not really_running
                     can_stop = really_running or current_state.get("status") in {
                         "starting", "running", "retrying", "waiting_retry", "saving",
@@ -2555,7 +2238,7 @@ def main():
                             time.sleep(0.5)
                             st.rerun()
                     with btn_col3:
-                        if st.button("🔓 强制解锁", type="secondary", use_container_width=True, help="进程已死但按钮仍灰时点这个"):
+                        if st.button("强制解锁", type="secondary", use_container_width=True, help="进程已死但按钮仍灰时点这个"):
                             stop_batch_job(job_state_file)
                             _write_job_state(
                                 job_state_file,
@@ -2569,7 +2252,8 @@ def main():
                             st.rerun()
 
                     st.divider()
-
+                    
+                    # 使用 @st.fragment 将所有需刷新的指标统统打包，确保每次读取CSV时进度条和表格完美同步
                     if hasattr(st, "fragment"):
                         @st.fragment(run_every="2s")
                         def _live_batch_status_view():
@@ -2577,23 +2261,16 @@ def main():
                         _live_batch_status_view()
                     else:
                         render_live_monitor(job_state_file, BACKUP_FILE, len(df_input))
-                else:
+
+                else: 
                     st.error("未在表格中识别到包含 '词' 或 'word' 字段的目标列")
-            except Exception as e:
+            except Exception as e: 
                 st.error(f"读取Excel文件失败: {e}")
 
 if __name__ == "__main__":
-    if "--worker" in sys.argv:
-        _worker_entry(Path(sys.argv[sys.argv.index("--worker") + 1]))
-    elif "--supervisor" in sys.argv:
-        _supervisor_entry(Path(sys.argv[sys.argv.index("--supervisor") + 1]))
-    else:
-        main()
+    if "--worker" in sys.argv: _worker_entry(Path(sys.argv[sys.argv.index("--worker") + 1]))
+    elif "--supervisor" in sys.argv: _supervisor_entry(Path(sys.argv[sys.argv.index("--supervisor") + 1]))
+    else: main()
 
 if not SERVICE_MODE:
-    st.markdown(
-        '<div style="text-align: center; color: #94A3B8; font-size: 13px; line-height: 1.8; padding: 18px 0 6px 0;">'
-        '汉语词类隶属度检测划类平台 · © 2026 Ryan'
-        '</div>',
-        unsafe_allow_html=True
-    )
+    st.markdown('<div style="text-align: center; color: #999; font-size: 13px; line-height: 1.8; padding: 10px 0 5px 0;">汉语词类隶属度检测划类平台 · © 2026 Ryan<br><a href="mailto:shenrui26@gmail.com" style="color: #999; text-decoration: none;">✉ shenrui26@gmail.com</a></div>', unsafe_allow_html=True)
