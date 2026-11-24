@@ -1,3 +1,4 @@
+import base64
 import hmac
 import html as _html
 import json
@@ -505,6 +506,44 @@ def check_optional_auth():
 # 全局常量与动态文件路径生成
 # ===============================
 BASE_DIR = Path(__file__).parent
+
+def _find_asset(filename: str) -> Path:
+    for candidate in (BASE_DIR / "assets" / filename, BASE_DIR / filename):
+        if candidate.exists():
+            return candidate
+    return None
+
+def _inject_background_images():
+    css_parts = []
+    banner_path = _find_asset("banner.jpg")
+    if banner_path:
+        b64_banner = base64.b64encode(banner_path.read_bytes()).decode("ascii")
+        css_parts.append(f"""
+        .lab-masthead {{
+            background-image:
+                linear-gradient(90deg, rgba(13, 34, 64, 0.72) 0%, rgba(13, 34, 64, 0.25) 65%, rgba(13, 34, 64, 0.08) 100%),
+                url("data:image/jpeg;base64,{b64_banner}") !important;
+            background-size: cover !important;
+            background-position: center !important;
+        }}
+        """)
+
+    bg_path = _find_asset("bg_library.jpg")
+    if bg_path:
+        b64_bg = base64.b64encode(bg_path.read_bytes()).decode("ascii")
+        css_parts.append(f"""
+        .stApp {{
+            background-image:
+                linear-gradient(rgba(246, 247, 249, 0.85), rgba(246, 247, 249, 0.88)),
+                url("data:image/jpeg;base64,{b64_bg}") !important;
+            background-size: cover !important;
+            background-position: center !important;
+            background-attachment: fixed !important;
+        }}
+        """)
+
+    if css_parts:
+        st.markdown("<style>" + "\n".join(css_parts) + "</style>", unsafe_allow_html=True)
 
 def get_project_files(project_code: str, model_key: str = "") -> Tuple[Path, Path]:
     safe_code = re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', project_code) or "default_task"
