@@ -232,6 +232,14 @@ footer {
 }
 
 /* ---------- 区块标题 ---------- */
+.stTabs [data-baseweb="tab-panel"] {
+  background: rgba(255, 255, 255, 0.90);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1.25rem 1.4rem;
+  box-shadow: var(--shadow);
+}
 .section-title {
   font-size: .96rem !important;
   font-weight: 700 !important;
@@ -301,25 +309,35 @@ footer {
 
 .stTabs [data-baseweb="tab-list"] {
   gap: 6px;
-  background: transparent;
-  border-bottom: 1px solid var(--line-dark);
-  padding: 0;
-  margin-bottom: 1.2rem;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 5px;
+  margin-bottom: 1.15rem;
+  width: fit-content;
+  box-shadow: 0 2px 10px rgba(13, 34, 64, 0.06);
 }
 .stTabs [data-baseweb="tab"] {
-  height: 2.45rem;
-  border-radius: 8px 8px 0 0 !important;
-  padding: 0 1.4rem !important;
+  height: 2.35rem;
+  border-radius: 8px !important;
+  padding: 0 1.35rem !important;
   font-weight: 600 !important;
   font-size: .9rem !important;
-  color: var(--muted) !important;
+  color: var(--ink-soft) !important;
   background: transparent !important;
-  border-bottom: 2px solid transparent !important;
+  border-bottom: none !important;
+  transition: all .15s ease !important;
+}
+.stTabs [data-baseweb="tab"]:hover {
+  color: var(--sorbonne-blue) !important;
+  background: var(--sorbonne-pale) !important;
 }
 .stTabs [aria-selected="true"] {
-  color: var(--sorbonne-blue) !important;
-  border-bottom: 2px solid var(--sorbonne-blue) !important;
-  background: var(--white) !important;
+  color: #ffffff !important;
+  background: linear-gradient(135deg, var(--sorbonne-blue) 0%, var(--sorbonne-mid) 100%) !important;
+  border-bottom: none !important;
+  box-shadow: 0 2px 8px rgba(22, 58, 112, 0.24) !important;
 }
 
 /* ---------- 表单容器 ---------- */
@@ -2185,4 +2203,13 @@ if __name__ == "__main__":
         main()
 
 if not SERVICE_MODE:
-    st.markdown('<div style="text-align: center; color: #7b858a; font-size: 13px; padding: 18px 0 6px 0;">汉语词类隶属度检测划类平台 · © 2026 Ryan</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div style="text-align: center; padding: 18px 0 8px 0;">'
+        '<div style="display: inline-block; background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(6px); '
+        'border: 1px solid #e2e6ec; border-radius: 10px; padding: 8px 22px; color: #334155; '
+        'font-size: 13px; line-height: 1.75; box-shadow: 0 2px 8px rgba(13, 34, 64, 0.05);">'
+        '汉语词类隶属度检测划类平台 · © 2026 Ryan<br>'
+        '<a href="mailto:shenrui26@gmail.com" style="color: #163a70; text-decoration: none; font-weight: 500;">✉ shenrui26@gmail.com</a>'
+        '</div></div>',
+        unsafe_allow_html=True
+    )
