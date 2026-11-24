@@ -83,23 +83,22 @@ custom_css = r"""
 @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;700&display=swap');
 
 :root {
-  --paper: #f7f6f2;
-  --paper-deep: #efeee8;
+  --bg: #f5f7fb;
   --white: #ffffff;
-  --ink: #202b33;
-  --ink-soft: #52616a;
-  --muted: #7b858a;
-  --line: #deded7;
-  --line-dark: #c8c9c1;
-  --red: #852b3b;
-  --red-dark: #67202e;
-  --red-pale: #f5e9e9;
-  --blue: #385b69;
-  --blue-pale: #eaf0f1;
-  --green: #477565;
-  --green-pale: #eaf2ee;
-  --gold: #b08b4e;
-  --shadow: 0 8px 28px rgba(35, 43, 48, .055);
+  --ink: #0f172a;
+  --ink-soft: #475569;
+  --muted: #64748b;
+  --line: #e2e8f0;
+  --line-dark: #cbd5e1;
+  --primary: #2563eb;
+  --primary-dark: #1d4ed8;
+  --primary-pale: #eff6ff;
+  --teal: #0d9488;
+  --teal-pale: #f0fdfa;
+  --indigo: #4f46e5;
+  --amber: #d97706;
+  --amber-pale: #fffbeb;
+  --shadow: 0 4px 20px rgba(15, 23, 42, 0.045);
 }
 
 html, body, [class*="css"] {
@@ -117,135 +116,120 @@ footer {
   visibility: hidden !important;
 }
 [data-testid="stSidebar"] { display: none !important; }
-.stApp { background: var(--paper); }
+.stApp { background: var(--bg); }
 .block-container {
-  max-width: 1390px !important;
-  padding: 1.25rem 2.25rem 2.8rem !important;
+  max-width: 1280px !important;
+  padding: 1.4rem 2rem 2.8rem !important;
 }
 
-/* ---------- 页首：研究机构主页，而非产品宣传横幅 ---------- */
+/* ---------- 页首：圆润通透的现代科研卡片 ---------- */
 .lab-masthead {
-  position: relative;
-  overflow: hidden;
-  background: var(--white);
+  background: linear-gradient(135deg, #ffffff 0%, #f8faff 100%);
   border: 1px solid var(--line);
-  border-top: 4px solid var(--red);
-  padding: 28px 36px 30px;
-  margin: 0 0 22px;
+  border-radius: 16px;
+  padding: 24px 32px;
+  margin: 0 0 20px;
   box-shadow: var(--shadow);
 }
-.lab-masthead::after {
-  content: "N / V / NV";
-  position: absolute;
-  right: 30px;
-  bottom: 2px;
-  color: rgba(133, 43, 59, .055);
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: clamp(3.6rem, 8vw, 7.4rem);
-  font-weight: 700;
-  letter-spacing: -.08em;
-  white-space: nowrap;
-  pointer-events: none;
-}
 .lab-topline {
-  position: relative;
-  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  padding-bottom: 18px;
+  gap: 16px;
+  padding-bottom: 14px;
   border-bottom: 1px solid var(--line);
 }
 .lab-brand {
-  color: var(--red);
-  font-size: .72rem;
-  font-weight: 750;
-  letter-spacing: .19em;
+  color: var(--primary);
+  font-size: .75rem;
+  font-weight: 700;
+  letter-spacing: .12em;
   text-transform: uppercase;
 }
 .lab-edition {
   color: var(--muted);
-  font-family: Georgia, "Times New Roman", serif;
   font-size: .78rem;
-  letter-spacing: .06em;
+  background: var(--primary-pale);
+  color: var(--primary);
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-weight: 600;
 }
 .lab-hero {
-  position: relative;
-  z-index: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 210px;
+  grid-template-columns: minmax(0, 1fr) 230px;
   gap: 24px;
-  align-items: end;
-  padding-top: 20px;
+  align-items: center;
+  padding-top: 16px;
 }
 .lab-title {
-  font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", Georgia, serif !important;
-  font-size: clamp(1.55rem, 2.5vw, 2.08rem) !important;
+  font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif !important;
+  font-size: clamp(1.5rem, 2.3vw, 1.95rem) !important;
   font-weight: 700 !important;
   color: var(--ink) !important;
   margin: 0 !important;
-  line-height: 1.3 !important;
-  letter-spacing: .03em;
+  line-height: 1.35 !important;
+  letter-spacing: .02em;
 }
 .lab-subtitle {
   color: var(--ink-soft);
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: .9rem;
-  margin-top: 8px;
+  font-size: .88rem;
+  margin-top: 6px;
   line-height: 1.5;
 }
 .lab-meta-box {
-  border-left: 1px solid var(--line);
-  padding-left: 18px;
-  text-align: left;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 16px;
 }
 .lab-meta-item {
-  font-size: .78rem;
+  font-size: .8rem;
   color: var(--ink-soft);
   line-height: 1.75;
 }
 .lab-meta-item strong {
   color: var(--ink);
-  font-family: Georgia, "Times New Roman", serif;
 }
 
 @media (max-width: 820px) {
   .lab-hero { grid-template-columns: 1fr; }
-  .lab-meta-box { border-left: none; border-top: 1px solid var(--line); padding-left: 0; padding-top: 12px; }
 }
 
-/* ---------- 配置栏三栏卡片 ---------- */
+/* ---------- 配置栏三栏圆角卡片 ---------- */
 [data-testid="stColumn"]:has(.lab-cfg-head) {
   background: var(--white);
   border: 1px solid var(--line);
-  padding: 18px 22px 18px !important;
-  box-shadow: 0 2px 10px rgba(32, 43, 51, .03);
+  border-radius: 14px;
+  padding: 18px 20px !important;
+  box-shadow: 0 2px 12px rgba(15, 23, 42, .035);
 }
 .lab-cfg-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--line);
   padding-bottom: 8px;
   margin-bottom: 14px;
 }
 .lab-cfg-title {
-  font-size: .92rem;
+  font-size: .94rem;
   font-weight: 700;
   color: var(--ink);
-  letter-spacing: .02em;
 }
 .lab-cfg-tag {
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: .74rem;
-  color: var(--muted);
-  letter-spacing: .08em;
+  font-size: .7rem;
+  color: var(--primary);
+  background: var(--primary-pale);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+  letter-spacing: .05em;
 }
 
 /* ---------- 区块标题 ---------- */
 .section-title {
-  font-size: .95rem !important;
+  font-size: .96rem !important;
   font-weight: 700 !important;
   color: var(--ink) !important;
   margin: 1rem 0 .8rem 0 !important;
@@ -256,9 +240,10 @@ footer {
   gap: 8px;
 }
 .section-title .accent-bar {
-  width: 3px;
-  height: 14px;
-  background: var(--red);
+  width: 4px;
+  height: 15px;
+  border-radius: 999px;
+  background: var(--primary);
   display: inline-block;
   flex-shrink: 0;
 }
@@ -266,95 +251,96 @@ footer {
 /* ---------- 按钮 ---------- */
 .stButton > button[kind="primary"],
 .stFormSubmitButton > button[kind="primary"] {
-  background: var(--red) !important;
-  border: 1px solid var(--red) !important;
-  border-radius: 4px !important;
+  background: var(--primary) !important;
+  border: none !important;
+  border-radius: 10px !important;
   padding: .58rem 1.4rem !important;
   font-weight: 600 !important;
   font-size: .9rem !important;
   color: var(--white) !important;
-  letter-spacing: .04em;
-  transition: background .15s ease !important;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, .22) !important;
+  transition: all .15s ease !important;
 }
 .stButton > button[kind="primary"]:hover,
 .stFormSubmitButton > button[kind="primary"]:hover {
-  background: var(--red-dark) !important;
-  border-color: var(--red-dark) !important;
+  background: var(--primary-dark) !important;
 }
 .stButton > button[kind="secondary"],
 .stFormSubmitButton > button[kind="secondary"] {
   background: var(--white) !important;
   border: 1px solid var(--line-dark) !important;
-  border-radius: 4px !important;
+  border-radius: 10px !important;
   padding: .48rem 1.1rem !important;
   font-weight: 500 !important;
   color: var(--ink) !important;
 }
 .stButton > button[kind="secondary"]:hover,
 .stFormSubmitButton > button[kind="secondary"]:hover {
-  border-color: var(--red) !important;
-  color: var(--red) !important;
-  background: var(--red-pale) !important;
+  border-color: var(--primary) !important;
+  color: var(--primary) !important;
+  background: var(--primary-pale) !important;
 }
 
 /* ---------- 输入框与标签页 ---------- */
 .stTextInput > div > div > input,
 .stTextArea > div > div > textarea,
 .stSelectbox > div > div > div {
-  border-radius: 4px !important;
+  border-radius: 10px !important;
   border: 1px solid var(--line-dark) !important;
   background: var(--white) !important;
 }
 .stTextInput > div > div > input:focus,
 .stTextArea > div > div > textarea:focus {
-  border-color: var(--red) !important;
-  box-shadow: 0 0 0 2px rgba(133, 43, 59, .12) !important;
+  border-color: var(--primary) !important;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, .12) !important;
 }
 
 .stTabs [data-baseweb="tab-list"] {
-  gap: 0;
-  background: transparent;
-  border-bottom: 1px solid var(--line-dark);
-  padding: 0;
-  margin-bottom: 1.25rem;
+  gap: 6px;
+  background: #e9eef5;
+  border-radius: 12px;
+  padding: 4px;
+  margin-bottom: 1.2rem;
+  width: fit-content;
 }
 .stTabs [data-baseweb="tab"] {
-  height: 2.55rem;
-  border-radius: 0 !important;
-  padding: 0 1.5rem !important;
+  height: 2.3rem;
+  border-radius: 9px !important;
+  padding: 0 1.35rem !important;
   font-weight: 600 !important;
-  font-size: .9rem !important;
-  color: var(--muted) !important;
+  font-size: .88rem !important;
+  color: var(--ink-soft) !important;
   background: transparent !important;
-  border-bottom: 2px solid transparent !important;
 }
 .stTabs [aria-selected="true"] {
-  color: var(--red) !important;
-  border-bottom: 2px solid var(--red) !important;
-  background: transparent !important;
+  color: var(--primary) !important;
+  background: var(--white) !important;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, .08) !important;
 }
 
 /* ---------- 表单容器 ---------- */
 div[data-testid="stForm"] {
   background: var(--white);
   border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 1.2rem 1.35rem;
-  box-shadow: 0 2px 10px rgba(32, 43, 51, .03);
+  border-radius: 14px;
+  padding: 1.15rem 1.3rem;
+  box-shadow: var(--shadow);
 }
 
 /* ---------- 结果与状态卡片 ---------- */
 .result-success-card {
-  background: var(--green-pale);
-  border: 1px solid #c4ddd4;
-  border-left: 4px solid var(--green);
-  padding: 16px 22px;
-  margin: 1.1rem 0;
+  background: var(--teal-pale);
+  border: 1px solid #99f6e4;
+  border-left: 4px solid var(--teal);
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin: 1rem 0;
 }
 .info-highlight {
-  background: var(--blue-pale);
-  border: 1px solid #c9d8dc;
-  border-left: 3px solid var(--blue);
+  background: var(--primary-pale);
+  border: 1px solid #bfdbfe;
+  border-left: 4px solid var(--primary);
+  border-radius: 10px;
   padding: .85rem 1.1rem;
   margin: .65rem 0;
 }
@@ -362,8 +348,10 @@ div[data-testid="stForm"] {
 .metric-card {
   background: var(--white);
   border: 1px solid var(--line);
+  border-radius: 12px;
   padding: 15px 18px;
   text-align: center;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, .03);
 }
 .metric-card .m-label {
   font-size: .78rem;
@@ -372,15 +360,14 @@ div[data-testid="stForm"] {
   font-weight: 600;
 }
 .metric-card .m-val {
-  font-family: Georgia, "Noto Serif SC", serif;
-  font-size: 1.48rem;
+  font-size: 1.45rem;
   font-weight: 700;
   color: var(--ink);
   line-height: 1.2;
 }
 .metric-card .m-val.num {
-  color: var(--red);
-  font-family: Georgia, "Times New Roman", serif;
+  color: var(--primary);
+  font-family: 'SF Mono', Consolas, monospace;
 }
 
 /* ---------- 排名卡 ---------- */
@@ -391,22 +378,23 @@ div[data-testid="stForm"] {
   margin-bottom: 8px;
   background: var(--white);
   border: 1px solid var(--line);
+  border-radius: 12px;
 }
 .rank-card .rank-num {
-  width: 24px;
-  height: 24px;
-  background: var(--paper-deep);
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: #f1f5f9;
   color: var(--ink-soft);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-family: Georgia, serif;
   font-size: 12px;
   font-weight: 700;
   flex-shrink: 0;
 }
 .rank-card.top-1 .rank-num {
-  background: var(--red);
+  background: var(--primary);
   color: var(--white);
 }
 .rank-card .rank-bar {
@@ -415,27 +403,29 @@ div[data-testid="stForm"] {
   right: 15px;
   bottom: 6px;
   height: 3px;
-  background: var(--paper-deep);
+  border-radius: 999px;
+  background: #f1f5f9;
   overflow: hidden;
 }
 .rank-card .rank-bar i {
   display: block;
   height: 100%;
-  background: var(--blue);
+  border-radius: 999px;
+  background: var(--teal);
 }
 .rank-card.top-1 .rank-bar i {
-  background: var(--red);
+  background: var(--primary);
 }
 
 .status-badge {
   display: inline-block;
-  padding: .18rem .6rem;
+  padding: .2rem .65rem;
   font-size: .76rem;
   font-weight: 600;
-  border-radius: 3px;
+  border-radius: 999px;
 }
-.status-badge.success { background: var(--green-pale); color: var(--green); border: 1px solid #c4ddd4; }
-.status-badge.warn { background: var(--red-pale); color: var(--red); border: 1px solid #e4c5c5; }
+.status-badge.success { background: #dcfce7; color: #166534; }
+.status-badge.warn { background: #fef3c7; color: #92400e; }
 
 .running-status {
   display: flex;
@@ -443,9 +433,9 @@ div[data-testid="stForm"] {
   gap: .75rem;
   padding: .85rem 1.1rem;
   margin: .5rem 0 1rem 0;
-  background: var(--blue-pale);
-  border: 1px solid #c9d8dc;
-  border-left: 4px solid var(--blue);
+  border-radius: 12px;
+  background: var(--primary-pale);
+  border: 1px solid #bfdbfe;
   color: var(--ink);
   font-weight: 600;
 }
@@ -454,8 +444,8 @@ div[data-testid="stForm"] {
   width: 16px;
   height: 16px;
   min-width: 16px;
-  border: 2.5px solid rgba(56, 91, 105, .22);
-  border-top-color: var(--blue);
+  border: 2.5px solid rgba(37, 99, 235, .22);
+  border-top-color: var(--primary);
   border-radius: 50%;
   animation: batch-spin .75s linear infinite;
   flex: 0 0 auto;
@@ -1258,16 +1248,16 @@ def plot_radar_chart_streamlit(scores_norm: Dict[str, float], title: str):
     values = list(scores_norm.values()) + [list(scores_norm.values())[0]]
     fig = go.Figure(data=[go.Scatterpolar(
         r=values, theta=categories, fill="toself",
-        line=dict(color="#852b3b", width=2.2),
-        fillcolor="rgba(133, 43, 59, 0.14)",
-        marker=dict(size=6, color="#852b3b"),
+        line=dict(color="#2563eb", width=2.4),
+        fillcolor="rgba(37, 99, 235, 0.16)",
+        marker=dict(size=6, color="#2563eb"),
         hovertemplate='<b>%{theta}</b><br>隶属度: %{r:.4f}<extra></extra>')])
     fig.update_layout(
         polar=dict(
-            bgcolor="#faf9f6",
+            bgcolor="#f8fafc",
             radialaxis=dict(visible=True, range=[min(min(values), -0.1), max(max(values), 1.0)],
-                            gridcolor="#deded7", linecolor="#c8c9c1", tickfont=dict(size=10, color="#7b858a"), tickangle=90),
-            angularaxis=dict(gridcolor="#deded7", linecolor="#c8c9c1", tickfont=dict(size=12, color="#202b33"))),
+                            gridcolor="#e2e8f0", linecolor="#cbd5e1", tickfont=dict(size=10, color="#7b858a"), tickangle=90),
+            angularaxis=dict(gridcolor="#e2e8f0", linecolor="#cbd5e1", tickfont=dict(size=12, color="#202b33"))),
         showlegend=False,
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, 'PingFang SC', 'Microsoft YaHei', sans-serif", color="#202b33"),
@@ -1813,7 +1803,7 @@ def main():
                 if scores_all:
                     membership = calculate_membership(scores_all)
                     final_membership = membership.get(predicted_pos, 0)
-                    jianlei_badge_color = "#b08b4e" if is_dual_category else "#385b69"
+                    jianlei_badge_color = "#d97706" if is_dual_category else "#2563eb"
                     jianlei_text = "属于兼类词" if is_dual_category else "非兼类词"
                     dual_short = "是" if is_dual_category else "否"
 
@@ -1821,10 +1811,10 @@ def main():
                     _p = _html.escape(str(predicted_pos))
                     _j = _html.escape(str(jianlei_text))
                     st.markdown(f'''<div class="result-success-card">
-                      <div style="color:#477565;font-weight:700;font-size:0.92rem;margin-bottom:6px;">分析完成</div>
+                      <div style="color:#0d9488;font-weight:700;font-size:0.92rem;margin-bottom:6px;">分析完成</div>
                       <div style="font-size:0.9rem;color:#202b33;line-height:1.85;">
-                        词语「<b>{_w}</b>」最可能的词类是 <span style="background:#477565;color:#fff;padding:2px 10px;border-radius:3px;font-weight:600;font-size:0.84rem;">{_p}</span>，隶属度为 <b style="font-family:Georgia,serif;color:#852b3b;">{final_membership:.4f}</b><br>
-                        多类属性判定：<span style="background:{jianlei_badge_color};color:#fff;padding:2px 10px;border-radius:3px;font-weight:600;font-size:0.84rem;">{_j}</span>
+                        词语「<b>{_w}</b>」最可能的词类是 <span style="background:#0d9488;color:#fff;padding:2px 10px;border-radius:6px;font-weight:600;font-size:0.84rem;">{_p}</span>，隶属度为 <b style="font-family:Georgia,serif;color:#2563eb;">{final_membership:.4f}</b><br>
+                        多类属性判定：<span style="background:{jianlei_badge_color};color:#fff;padding:2px 10px;border-radius:6px;font-weight:600;font-size:0.84rem;">{_j}</span>
                       </div>
                     </div>''', unsafe_allow_html=True)
 
@@ -1843,7 +1833,7 @@ def main():
                         for i, (pos, score) in enumerate(top10):
                             rank_class = "top-1" if i == 0 else ""
                             bar_w = max(2, min(100, float(score) * 100))
-                            score_color = "#852b3b" if i == 0 else "#385b69"
+                            score_color = "#2563eb" if i == 0 else "#0d9488"
                             _pos_esc = _html.escape(str(pos))
                             st.markdown(
                                 '<div class="rank-card ' + rank_class + '">'
@@ -1869,7 +1859,7 @@ def main():
                                 rule_data = [{"规则代码": k, "规则描述": next((r["desc"] for r in RULE_SETS.get(pos, []) if r["name"] == k), ""), "得分": v} for k, v in scores_all[pos].items()]
                                 rule_df = pd.DataFrame(sorted(rule_data, key=lambda x: x["得分"], reverse=True))
                                 st.dataframe(
-                                    rule_df.style.map(lambda x: "color: #852b3b; font-weight: bold" if isinstance(x, (int, float)) and x < 0 else "", subset=["得分"]),
+                                    rule_df.style.map(lambda x: "color: #ef4444; font-weight: bold" if isinstance(x, (int, float)) and x < 0 else "", subset=["得分"]),
                                     use_container_width=True,
                                     height=min(len(rule_df) * 32 + 45, 400)
                                 )
@@ -1910,7 +1900,7 @@ def main():
                 df_input = pd.read_excel(uploaded_file)
                 target_col = next((col for col in df_input.columns if "词" in str(col) or "word" in str(col).lower()), None)
                 if target_col:
-                    st.markdown(f'<div class="info-highlight"><div style="font-weight: 600; color: #385b69;">识别到目标列: <code>{target_col}</code> | 待分析总数: <strong>{len(df_input)}</strong> 条</div></div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="info-highlight"><div style="font-weight: 600; color: #1e40af;">识别到目标列: <code>{target_col}</code> | 待分析总数: <strong>{len(df_input)}</strong> 条</div></div>', unsafe_allow_html=True)
 
                     model_namespace = re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', selected_model_info.get("model", "default_model"))
                     safe_proj = re.sub(r'[^a-zA-Z0-9_\-\u4e00-\u9fa5]', '_', st.session_state.project_code)
